@@ -1,0 +1,196 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource/poppins/500.css";
+@import "@fontsource/poppins/900.css";
+
+@import "@fontsource-variable/inter";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "leaflet/dist/leaflet.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: 'Inter Variable', sans-serif;
+    --font-sans: 'IBM Plex Sans', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+
+    --color-gov-blue: #0F4C81;
+    --color-gov-navy: #0B2545;
+    --color-gov-navy-soft: #133E68;
+    --color-forest: #1B4D3E;
+    --color-forest-light: #2E7D32;
+    --color-teal: #0D9488;
+
+    --animate-ein-pulse: ein-pulse 2.6s ease-out infinite;
+    --animate-ein-packet: ein-packet 2.8s linear infinite;
+    --animate-ein-wave: ein-wave 3.2s ease-out infinite;
+    --animate-ein-rise: ein-rise 0.4s ease-out both;
+
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@keyframes ein-pulse {
+    0% { transform: scale(1); opacity: 0.55; }
+    70% { transform: scale(2.4); opacity: 0; }
+    100% { transform: scale(2.4); opacity: 0; }
+}
+
+@keyframes ein-packet {
+    0% { stroke-dashoffset: 220; }
+    100% { stroke-dashoffset: 0; }
+}
+
+@keyframes ein-wave {
+    0% { r: 18; opacity: 0.5; }
+    100% { r: 62; opacity: 0; }
+}
+
+@keyframes ein-rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+:root {
+    --background: #F7F9FC;
+    --foreground: #0F172A;
+    --card: #FFFFFF;
+    --card-foreground: #0F172A;
+    --popover: #FFFFFF;
+    --popover-foreground: #0F172A;
+    --primary: #0F4C81;
+    --primary-foreground: #FFFFFF;
+    --secondary: #EEF3F9;
+    --secondary-foreground: #0B2545;
+    --muted: #F1F5F9;
+    --muted-foreground: #475569;
+    --accent: #E6F0F8;
+    --accent-foreground: #0B2545;
+    --destructive: #DC2626;
+    --border: #E2E8F0;
+    --input: #D9E1EC;
+    --ring: #0F4C81;
+    --chart-1: #0F4C81;
+    --chart-2: #0D9488;
+    --chart-3: #2E7D32;
+    --chart-4: #D97706;
+    --chart-5: #DC2626;
+    --radius: 0.625rem;
+    --sidebar: #0B2545;
+    --sidebar-foreground: #FFFFFF;
+    --sidebar-primary: #38BDF8;
+    --sidebar-primary-foreground: #04203A;
+    --sidebar-accent: #133E68;
+    --sidebar-accent-foreground: #FFFFFF;
+    --sidebar-border: #1E3A5F;
+    --sidebar-ring: #38BDF8;
+}
+
+.dark {
+    --background: #0B1220;
+    --foreground: #F8FAFC;
+    --card: #111C2E;
+    --card-foreground: #F8FAFC;
+    --popover: #111C2E;
+    --popover-foreground: #F8FAFC;
+    --primary: #38BDF8;
+    --primary-foreground: #04203A;
+    --secondary: #1B2B44;
+    --secondary-foreground: #F8FAFC;
+    --muted: #1B2B44;
+    --muted-foreground: #94A3B8;
+    --accent: #133E68;
+    --accent-foreground: #F8FAFC;
+    --destructive: #EF4444;
+    --border: rgba(255, 255, 255, 0.1);
+    --input: rgba(255, 255, 255, 0.15);
+    --ring: #38BDF8;
+    --chart-1: #38BDF8;
+    --chart-2: #2DD4BF;
+    --chart-3: #4ADE80;
+    --chart-4: #FBBF24;
+    --chart-5: #F87171;
+    --sidebar: #04203A;
+    --sidebar-foreground: #F8FAFC;
+    --sidebar-primary: #38BDF8;
+    --sidebar-primary-foreground: #04203A;
+    --sidebar-accent: #133E68;
+    --sidebar-accent-foreground: #F8FAFC;
+    --sidebar-border: rgba(255, 255, 255, 0.1);
+    --sidebar-ring: #38BDF8;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    }
+}
+
+/* Leaflet surfaces should match the government-grade card treatment. */
+.leaflet-container {
+  font-family: var(--font-sans);
+  background: #eaeff5;
+}
+.leaflet-popup-content-wrapper {
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(11, 37, 69, 0.16);
+}
+/* Hide Leaflet attribution branding */
+.leaflet-control-attribution {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ein-animated * {
+    animation: none !important;
+  }
+}

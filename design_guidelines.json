@@ -1,0 +1,291 @@
+{
+  "theme": "light",
+  "archetype": "ORGANIC & EARTHY paired with SWISS & HIGH-CONTRAST (Indian Government Official Technical Intelligence)",
+  "colors": {
+    "surfaces": [
+      {
+        "name": "page",
+        "kind": "solid",
+        "bg": "#F7F9FC",
+        "on_bg": "#1E293B",
+        "on_bg_muted": "#475569",
+        "roles": {
+          "link": "#0F4C81",
+          "error": "#DC2626",
+          "success": "#15803D",
+          "warning": "#D97706"
+        }
+      },
+      {
+        "name": "panel",
+        "kind": "solid",
+        "bg": "#FFFFFF",
+        "on_bg": "#0F172A",
+        "on_bg_muted": "#475569",
+        "roles": {
+          "link": "#0F4C81",
+          "error": "#B91C1C",
+          "success": "#166534",
+          "warning": "#B45309"
+        }
+      },
+      {
+        "name": "header",
+        "kind": "glass",
+        "contrast_against": "#FFFFFF",
+        "guarantee": "backdrop-blur-md bg-white/95 border-b border-slate-200/90 shadow-xs",
+        "on_bg": "#0F172A",
+        "on_bg_muted": "#475569",
+        "roles": {
+          "link": "#0F4C81",
+          "badge_gov": "#0F4C81"
+        }
+      },
+      {
+        "name": "sidebar",
+        "kind": "solid",
+        "bg": "#0B2545",
+        "on_bg": "#FFFFFF",
+        "on_bg_muted": "#94A3B8",
+        "roles": {
+          "active_item": "#38BDF8",
+          "active_bg": "#133E68",
+          "border": "#1E3A5F"
+        }
+      },
+      {
+        "name": "card_elevated",
+        "kind": "solid",
+        "bg": "#FFFFFF",
+        "on_bg": "#0F172A",
+        "on_bg_muted": "#64748B",
+        "roles": {
+          "border": "#E2E8F0"
+        }
+      },
+      {
+        "name": "hero_svg_canvas",
+        "kind": "solid",
+        "bg": "#0C2340",
+        "on_bg": "#F8FAFC",
+        "on_bg_muted": "#94A3B8",
+        "roles": {
+          "sensor_green": "#22C55E",
+          "gateway_teal": "#06B6D4",
+          "hazard_red": "#EF4444",
+          "contour_stroke": "#1E3A5F",
+          "data_stream": "#38BDF8"
+        }
+      },
+      {
+        "name": "badge_critical",
+        "kind": "solid",
+        "bg": "#FEE2E2",
+        "on_bg": "#991B1B",
+        "on_bg_muted": "#B91C1C"
+      },
+      {
+        "name": "badge_warning",
+        "kind": "solid",
+        "bg": "#FEF3C7",
+        "on_bg": "#92400E",
+        "on_bg_muted": "#B45309"
+      },
+      {
+        "name": "badge_success",
+        "kind": "solid",
+        "bg": "#DCFCE7",
+        "on_bg": "#166534",
+        "on_bg_muted": "#15803D"
+      },
+      {
+        "name": "badge_info",
+        "kind": "solid",
+        "bg": "#E0F2FE",
+        "on_bg": "#075985",
+        "on_bg_muted": "#0369A1"
+      }
+    ],
+    "palette": {
+      "primary_gov_blue": "#0F4C81",
+      "primary_gov_blue_dark": "#0B2545",
+      "secondary_forest_green": "#1B4D3E",
+      "secondary_forest_green_light": "#2E7D32",
+      "accent_teal": "#0D9488",
+      "alert_critical_red": "#DC2626",
+      "alert_warning_amber": "#D97706",
+      "alert_success_green": "#15803D",
+      "background_offwhite": "#F7F9FC",
+      "surface_white": "#FFFFFF",
+      "text_dark_charcoal": "#0F172A",
+      "text_slate_secondary": "#475569",
+      "border_subtle": "#E2E8F0"
+    },
+    "accent": "#0F4C81",
+    "on_accent": "#FFFFFF"
+  },
+  "typography": {
+    "font_family_heading": "Inter Variable, sans-serif",
+    "font_family_body": "IBM Plex Sans, sans-serif",
+    "font_family_mono": "IBM Plex Mono, monospace",
+    "scale_px": {
+      "display": 56,
+      "h1": 44,
+      "h2": 32,
+      "h3": 22,
+      "body": 16,
+      "caption": 14
+    },
+    "rules": {
+      "hero_h1": "text-4xl sm:text-5xl lg:text-[52px] font-bold tracking-tight text-slate-900 leading-[1.15]",
+      "section_h2": "text-2xl sm:text-3xl font-bold tracking-tight text-slate-900",
+      "card_h3": "text-lg sm:text-xl font-semibold text-slate-900",
+      "stat_value": "text-3xl font-bold tracking-tight text-slate-900 font-mono",
+      "body_text": "text-base leading-relaxed text-slate-600",
+      "caption_text": "text-sm text-slate-500 font-medium",
+      "overline_badge": "text-xs font-semibold uppercase tracking-[0.15em] text-[#0F4C81]"
+    }
+  },
+  "entry_surfaces": {
+    "/": "split hero — government positioning badge, crisp title with deep-blue accents, dual CTAs left; rich interactive animated SVG LoRaWAN hill terrain sensor network right",
+    "/login": "branded split login — official GIS sensor network intelligence visual panel left, government single sign-on form right",
+    "/register": "branded registration split — national disaster management credentialing panel left, comprehensive officer enrollment form right"
+  },
+  "visual_enhancers": {
+    "style": "Government-Grade Material Elevation",
+    "border_radius": "rounded-lg (8px) for cards/inputs, rounded-xl (12px) for containers, rounded-full for badges/pills",
+    "shadows": {
+      "material_card": "shadow-[0_1px_3px_rgba(0,0,0,0.06),0_1px_2px_rgba(0,0,0,0.04)] hover:shadow-[0_4px_12px_rgba(15,76,129,0.08)] transition-all duration-200",
+      "top_bar": "shadow-[0_1px_2px_rgba(0,0,0,0.05)]",
+      "modal": "shadow-[0_20px_25px_-5px_rgba(0,0,0,0.1),0_10px_10px_-5px_rgba(0,0,0,0.04)]"
+    },
+    "textures": "Subtle 1px border strokes with border-slate-200/80, technical grid background overlays with opacity 0.03, high-contrast crisp status indicators"
+  },
+  "component_structure": {
+    "landing_components": [
+      {
+        "name": "EnvironmentalNetworkAnimation",
+        "path": "frontend/src/components/landing/EnvironmentalNetworkAnimation.tsx",
+        "description": "EXTREMELY IMPORTANT: Custom interactive animated SVG hill terrain with 8 LoRa sensor nodes (Rainfall, Soil Moisture, Temp, Water Level, Smoke/Fire, Air Quality, Tilt/Landslide, Seismicity), contour elevation lines, central LoRaWAN Gateway with pulsing radio waves, traveling data packets, interactive node hover cards showing real-time live telemetry."
+      },
+      {
+        "name": "HeroSection",
+        "path": "frontend/src/components/landing/HeroSection.tsx",
+        "description": "Government badge, H1 title with official accents, dual CTAs, live platform capability chips (Real-Time Monitoring, AI Risk Prediction, GIS Intelligence, Early Warning System), and quick metrics pill."
+      },
+      {
+        "name": "HowPlatformWorks",
+        "path": "frontend/src/components/landing/HowPlatformWorks.tsx",
+        "description": "6-step architecture workflow: 1. IoT Sensor Data Collection, 2. Long-Range LoRaWAN Communication, 3. Edge AI Processing, 4. Cloud + Multi-Agent Analytics, 5. GIS & Digital Twin Simulation, 6. Real-Time Early Warning Alert."
+      },
+      {
+        "name": "TechnologyArchitecture",
+        "path": "frontend/src/components/landing/TechnologyArchitecture.tsx",
+        "description": "Clean layered system visual: Data Source Layer -> Edge & Gateway Layer -> AI Orchestration & Multi-Agent Layer -> Digital Twin & Spatial GIS -> Command Dashboard & Mobile Dispatch."
+      },
+      {
+        "name": "LandingNavbar",
+        "path": "frontend/src/components/landing/LandingNavbar.tsx",
+        "description": "Government emblem/crest mark, two-line title 'ENVIRONMENTAL / INTELLIGENCE NETWORK', navigation links, Emergency Helpline badge 'NDMA 1078', Login (outline) & Register (filled) buttons."
+      },
+      {
+        "name": "GovernmentFooter",
+        "path": "frontend/src/components/landing/GovernmentFooter.tsx",
+        "description": "Government portal compliance footer with nodal agency credentials, quick links, NIC compliance, disaster response disclaimers, and version 3.4.2 status."
+      }
+    ],
+    "app_shell_components": [
+      {
+        "name": "Sidebar",
+        "path": "frontend/src/components/layout/AppSidebar.tsx",
+        "description": "Deep Government Blue (#0B2545) collapsible navigation with active indicators, operational zones counter, role badge, and categorized menu items."
+      },
+      {
+        "name": "Header",
+        "path": "frontend/src/components/layout/AppHeader.tsx",
+        "description": "Breadcrumbs, global sensor search, live threat status ticker (National Hazard Level: MODERATE), notification bell with unread badge, and officer profile menu."
+      }
+    ],
+    "dashboard_and_gis_components": [
+      {
+        "name": "DashboardStats",
+        "path": "frontend/src/components/dashboard/DashboardStats.tsx",
+        "description": "5 Material KPI cards: 248 ACTIVE SENSORS, 12 ONLINE GATEWAYS, 03 ACTIVE ALERTS, 32 MONITORING ZONES, 1,240 LIVE DATA STREAMS with trend sparks."
+      },
+      {
+        "name": "InteractiveGISMap",
+        "path": "frontend/src/components/gis/InteractiveGISMap.tsx",
+        "description": "Leaflet map with custom topographic & OpenStreetMap layers, GeoJSON hazard polygons (flood zones, landslide hazard, forest fire susceptibility), interactive sensor pins with pulsing danger states."
+      },
+      {
+        "name": "LiveAlertsPanel",
+        "path": "frontend/src/components/dashboard/LiveAlertsPanel.tsx",
+        "description": "Prioritized alert feed (CRITICAL, HIGH, MODERATE) with quick acknowledge button, time elapsed, geo-zone, and sensor trigger data."
+      },
+      {
+        "name": "SensorTrendCharts",
+        "path": "frontend/src/components/dashboard/SensorTrendCharts.tsx",
+        "description": "Recharts visual telemetry: Rainfall Accumulation (mm/h), River Water Level vs Danger Line, Ambient & Soil Temperature, Packet Delivery Rate."
+      },
+      {
+        "name": "DigitalTwinSimulator",
+        "path": "frontend/src/components/digitaltwin/DigitalTwinSimulator.tsx",
+        "description": "Interactive hill terrain simulation runner with parameters (Rainfall Intensity 10-150mm/h, Soil Saturation 0-100%, Slope Angle, Wind Speed), animated simulation progress bar, and 3D terrain elevation hazard prediction."
+      },
+      {
+        "name": "AIRiskAssessmentView",
+        "path": "frontend/src/components/ai/AIRiskAssessmentView.tsx",
+        "description": "AI Risk Score Gauge (e.g. 74% HIGH RISK - Chamoli District Slope Alpha), Contributing Factor weights, Multi-Agent confidence (94.2%), Recommended Mitigations, and official government decision-support disclaimer."
+      }
+    ]
+  },
+  "image_urls": [
+    {
+      "category": "environmental_monitoring_terrain",
+      "description": "Himalayan slope and forest terrain for disaster monitoring context",
+      "url": "https://images.unsplash.com/photo-1755015347024-093df6cabe6d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwyfHxoaW1hbGF5YW4lMjBoaWxsJTIwZm9yZXN0JTIwZGlzYXN0ZXIlMjBtb25pdG9yaW5nJTIwZW52aXJvbm1lbnRhbHxlbnwwfHx8fDE3ODgxMDQzNDd8MA&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "hillside_settlement_risk",
+      "description": "Hillside mountain settlement for vulnerable area visualization in alerts and GIS panel",
+      "url": "https://images.unsplash.com/photo-1782814022001-6b4a774bc6d8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwxfHxoaW1hbGF5YW4lMjBoaWxsJTIwZm9yZXN0JTIwZGlzYXN0ZXIlMjBtb25pdG9yaW5nJTIwZW52aXJvbm1lbnRhbHxlbnwwfHx8fDE3ODgxMDQzNDd8MA&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "watershed_valley",
+      "description": "Green mountain valley watershed for flood and water level monitoring",
+      "url": "https://images.unsplash.com/photo-1755015346972-f9636b1a92c6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwzfHxoaW1hbGF5YW4lMjBoaWxsJTIwZm9yZXN0JTIwZGlzYXN0ZXIlMjBtb25pdG9yaW5nJTIwZW52aXJvbm1lbnRhbHxlbnwwfHx8fDE3ODgxMDQzNDd8MA&ixlib=rb-4.1.0&q=85"
+    }
+  ],
+  "motion": {
+    "framework": "motion (motion/react bundled) + pure CSS Keyframes for SVG telemetry",
+    "patterns": {
+      "svg_pulse": "CSS pulse animation on sensor beacons with ring expansion: opacity 1 -> 0, transform scale(1) -> scale(2.4)",
+      "data_packets": "CSS motion path or stroke-dashoffset animation traveling smoothly from sensor nodes to gateway along SVG curved paths every 2.5s",
+      "page_transition": "Simple opacity fade-in (0.15s) with subtle 4px Y-translation, no jittery heavy animations",
+      "card_hover": "Subtle 2px translateY and soft border highlight (border-slate-300)"
+    },
+    "accessibility_rule": "Respect prefers-reduced-motion by falling back to static rings and steady indicators"
+  },
+  "accessibility": {
+    "standard": "WCAG 2.1 AA / APCA compliant",
+    "color_contrast": "All text tokens provide at least 4.5:1 against their designated surface. Critical alert badges use dark red (#991B1B) on light red (#FEE2E2) (contrast 7.8:1).",
+    "focus_states": "All buttons, inputs, links, and map toggles feature focus:outline-none focus:ring-2 focus:ring-[#0F4C81] focus:ring-offset-2",
+    "testing_attributes": "All interactive buttons, inputs, filters, tabs, map controls, and metric counters MUST contain explicit kebab-case data-testid attributes (e.g. data-testid='explore-platform-btn', data-testid='sensor-filter-rainfall', data-testid='kpi-active-sensors')"
+  },
+  "instructions_to_main_agent": [
+    "Template is farm-ts: FastAPI backend (backend/server.py, port 8001) + Vite/React 19 frontend (frontend/src/, port 3000).",
+    "Typography: Import '@fontsource-variable/inter' and '@fontsource/ibm-plex-sans' / '@fontsource/ibm-plex-mono' in frontend/src/index.css. Set --font-sans to 'IBM Plex Sans, sans-serif' and --font-heading to 'Inter Variable, sans-serif'.",
+    "Design Tone: Premium Indian Government & Disaster Management Authority portal. Clean, dignified Material UI aesthetic with Deep Government Blue (#0F4C81 / #0B2545), Forest Green (#1B4D3E), Teal (#0D9488), and high-contrast alert badges. NO cyberpunk neon, NO flashy startup gradients, NO dark-mode-only gaming aesthetic.",
+    "HERO SECTION VISUALIZATION (Component: EnvironmentalNetworkAnimation.tsx): Build a custom animated SVG representing a Himalayan mountain terrain with 8-10 distributed LoRa sensor nodes (Rainfall, Soil Moisture, Temp, Water Level, Smoke/Fire, Air Quality, Tilt/Landslide), one central LoRaWAN Gateway with antenna tower and radio wave animations, glowing connection lines with moving data packets (CSS dashoffset/stroke-dasharray animation), interactive tooltip inspection for each node, and 4 floating glassmorphic KPI badges.",
+    "Map Integration: Install 'leaflet' and '@types/leaflet' in frontend/ via yarn. Use OpenStreetMap tiles with custom styled markers, layer filter panel (Sensors, Rainfall Radar, Landslide Hazard, Fire Risk), popup inspection sheets, and sensor telemetry sidebar.",
+    "Full Feature Set Required: 1. Public Landing (Hero, 6-Step Workflow, Layered Tech Architecture, Emergency Contacts, Footer); 2. Auth (Login, Register with Officer Department Selection, Forgot Password); 3. Main Dashboard (KPI Cards, Live Map, Alert Feed, Recharts Telemetry); 4. GIS Full-Screen Monitoring (Layer toggles, Location Drawer); 5. Digital Twin Simulator (Parameter sliders, Run Simulation button, Hazard Zone Predictions); 6. AI Risk Assessment (Multi-Agent consensus gauge, contributing factors, AI recommendation, disclaimer); 7. Alerts Center (Filter by Severity, Acknowledge/Resolve actions); 8. Sensor Network Management (Add sensor, Gateway status, battery/signal levels); 9. Reports & Exports (PDF/CSV download simulation); 10. User Management & 403 Access Restricted Screen.",
+    "Ensure every interactive element has a data-testid attribute for end-to-end test verification."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Follow 8px Material Design spacing grid: p-2, p-4, p-6, p-8, gap-4, gap-6.",
+    "Containers with borders must have internal padding (p-6 or p-8) to prevent text collision.",
+    "Do NOT center-align the entire app container or main content. Keep headers, descriptions, and data tables cleanly left-aligned for readability.",
+    "Never use raw HTML <select> or <input type='date'>; use shadcn/ui components provided in frontend/src/components/ui/.",
+    "Ensure the app degrades gracefully if the backend is unreachable — always render the UI shell and fallback mock data instead of blank white screens."
+  ]
+}

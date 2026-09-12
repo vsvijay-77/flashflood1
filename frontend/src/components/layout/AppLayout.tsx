@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, AlertTriangle, BarChart3, Bell, Boxes, ChevronLeft, FileText, Gauge, LayoutDashboard,
-  LogOut, Map, Menu, Search, Settings, ShieldCheck, User as UserIcon, Users, Radio,
+  LogOut, Map, Menu, Search, Settings, ShieldAlert, ShieldCheck, User as UserIcon, Users, Radio,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +25,7 @@ const MAIN_NAV: NavItem[] = [
   { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
   { label: "GIS Monitoring", to: "/gis", icon: Map, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
   { label: "Digital Twin", to: "/digital-twin", icon: Boxes, allow: ["admin", "gov_officer"] },
-  { label: "Environmental Data", to: "/environmental", icon: Activity, allow: ["admin", "gov_officer", "field_officer"] },
+  { label: "SOS Alerts", to: "/sos-alerts", icon: ShieldAlert, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
   { label: "AI Risk Assessment", to: "/risk", icon: Gauge, allow: ["admin", "gov_officer"] },
   { label: "Alerts", to: "/alerts", icon: AlertTriangle, allow: ["admin", "gov_officer", "field_officer"] },
   { label: "Analytics", to: "/analytics", icon: BarChart3, allow: ["admin", "gov_officer"] },

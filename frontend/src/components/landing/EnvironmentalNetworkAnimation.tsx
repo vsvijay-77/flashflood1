@@ -77,13 +77,7 @@ const NODES: NodeSpec[] = [
     id: "n7", masterId: "m2", label: "ENV-IND-007", type: "Seismic Tilt", x: 500, y: 200, 
     readings: [{ label: "Tilt", value: "0.2°" }, { label: "Stability", value: "High" }],
     status: "healthy", battery: 12, signal: -92, icon: Mountain 
-  },
-  { 
-    id: "n14", masterId: "m3", label: "ENV-IND-014", type: "Landslide Risk", x: 620, y: 440, 
-    readings: [{ label: "Tilt", value: "18.4°" }, { label: "Acceleration", value: "HIGH" }],
-    status: "critical", battery: 88, solar: true, signal: -64, icon: Mountain,
-    alertType: "LANDSLIDE RISK DETECTED", riskLevel: "CRITICAL"
-  },
+  }
 ];
 
 const STATUS_COLORS = {
@@ -252,9 +246,6 @@ export default function EnvironmentalNetworkAnimation() {
                 <g 
                   key={node.id} 
                 >
-                  {node.status === "critical" && (
-                    <circle cx={node.x} cy={node.y} r="20" fill="none" stroke="#EF4444" strokeWidth="1.5" className="animate-ping" />
-                  )}
                   <circle cx={node.x} cy={node.y} r="14" fill="#0B2545" stroke={color} strokeWidth="1.5" />
                   <foreignObject x={node.x - 9} y={node.y - 9} width="18" height="18">
                     <div className="flex h-full w-full items-center justify-center text-white" style={{ color }}>

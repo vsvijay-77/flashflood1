@@ -1,4 +1,9 @@
 import path from "node:path";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -59,6 +64,14 @@ export default defineConfig({
     host: true,
     port: 3000,
     allowedHosts: true,
+    // Dependencies live behind a symlink; allow their resolved asset directory hierarchy.
+    fs: {
+      allow: [
+        __dirname,
+        realpathSync(path.join(__dirname, "node_modules")),
+        path.dirname(realpathSync(path.join(__dirname, "node_modules"))),
+      ],
+    },
     // No hmr.clientPort override: Vite infers the WS target from window.location, which
     // is correct on both localhost:3000 (smoke) and the https/:443 preview proxy.
     hmr: !hotReloadDisabled,

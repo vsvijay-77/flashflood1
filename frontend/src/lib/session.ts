@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 import type { User } from "@/lib/types";
 
-import { supabase } from "./supabase";
 
 export const SESSION_KEY = ["auth", "me"] as const;
 
@@ -12,24 +11,7 @@ export function useSession() {
     queryKey: SESSION_KEY,
     queryFn: async () => {
       try {
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        if (sessionError || !session) return null;
-        
-        const { data: profile, error: profileError } = await supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
-          
-        if (profileError || !profile) return { id: session.user.id, role: "admin", first_name: "Official", last_name: "User" } as User;
-        
-        return {
-          id: session.user.id,
-          email: session.user.email,
-          ...profile,
-          status: "active",
-          verified: true
-        } as User;
+        return await apiGet<User>("/auth/me");
       } catch (err) {
         return null;
       }
@@ -66,7 +48,7 @@ export function useSessionActions() {
     /** Always route sign-out through here — it clears the server session AND the cache. */
     endSession: async () => {
       try {
-        await supabase.auth.signOut();
+        await apiPost("/auth/logout");
       } finally {
         qc.clear();
         // Drop the entry outright rather than caching an anonymous null that later

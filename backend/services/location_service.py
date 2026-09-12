@@ -36,7 +36,7 @@ def bbox_from_radius(lat: float, lng: float, radius_km: float = 2.0) -> Dict[str
     }
 
 
-def bbox_from_polygon(coordinates: List[List[float]], pad_pct: float = 0.05) -> Dict[str, float]:
+def bbox_from_polygon(coordinates: List[List[float]], pad_pct: float = 0.10) -> Dict[str, float]:
     """Computes bounding box from a polygon coordinate list [[lat, lng], ...]."""
     if not coordinates:
         raise ValueError("Polygon coordinates cannot be empty")
@@ -47,17 +47,38 @@ def bbox_from_polygon(coordinates: List[List[float]], pad_pct: float = 0.05) -> 
     min_lat, max_lat = min(lats), max(lats)
     min_lng, max_lng = min(lngs), max(lngs)
 
-    lat_pad = (max_lat - min_lat) * pad_pct
-    lng_pad = (max_lng - min_lng) * pad_pct
+    lat_span = max_lat - min_lat
+    lng_span = max_lng - min_lng
+
+    # Guarantee a minimum bbox span (~3.5 km) so rivers, tributaries, and road networks
+    # connected to the area are always captured even if the polygon is small.
+    min_span = 0.032
+    if lat_span < min_span:
+        pad_lat = (min_span - lat_span) / 2.0
+        min_lat -= pad_lat
+        max_lat += pad_lat
+    else:
+        lat_pad = lat_span * pad_pct
+        min_lat -= lat_pad
+        max_lat += lat_pad
+
+    if lng_span < min_span:
+        pad_lng = (min_span - lng_span) / 2.0
+        min_lng -= pad_lng
+        max_lng += pad_lng
+    else:
+        lng_pad = lng_span * pad_pct
+        min_lng -= lng_pad
+        max_lng += lng_pad
 
     center_lat = sum(lats) / len(lats)
     center_lng = sum(lngs) / len(lngs)
 
     return {
-        "north": round(max_lat + lat_pad, 6),
-        "south": round(min_lat - lat_pad, 6),
-        "east": round(max_lng + lng_pad, 6),
-        "west": round(min_lng - lng_pad, 6),
+        "north": round(max_lat, 6),
+        "south": round(min_lat, 6),
+        "east": round(max_lng, 6),
+        "west": round(min_lng, 6),
         "center_lat": round(center_lat, 6),
         "center_lng": round(center_lng, 6),
         "polygon_points": len(coordinates),

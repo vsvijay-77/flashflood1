@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CheckCircle2, ShieldCheck, TriangleAlert } from "lucide-react";
+import { CheckCircle2, ShieldCheck, TriangleAlert, Lock } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -76,62 +76,85 @@ function AuthFrame({ children, visual }: { children: React.ReactNode; visual: Re
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { beginSession } = useSessionActions();
-  const [email, setEmail] = useState("test@gmail.com");
-  const [password, setPassword] = useState("12345678");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
+  const [oauthLoading, setOauthLoading] = useState<string | null>(null);
   const [errors, setErrors] = useState<{ email?: string; password?: string; form?: string }>({});
+
+  const authId = searchParams.get("authorization_id");
+  const rawReturnTo = searchParams.get("returnTo") || searchParams.get("redirect");
+  const returnTo = authId
+    ? `/oauth/consent?authorization_id=${encodeURIComponent(authId)}`
+    : rawReturnTo || "/dashboard";
+
+  // Check and exchange active Supabase OAuth session on redirect or state change
+  useEffect(() => {
+    let mounted = true;
+
+    const checkExistingSession = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.access_token && mounted) {
+        try {
+          const user = await apiPost<User>("/auth/supabase-session", {
+            access_token: data.session.access_token,
+          });
+          await beginSession(user);
+          toast.success(`Welcome back, ${user.first_name}!`);
+          navigate(returnTo, { replace: true });
+        } catch (err) {
+          // Token may have expired or not synced yet, keep login available
+        }
+      }
+    };
+
+    checkExistingSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session?.access_token && mounted) {
+        try {
+          const user = await apiPost<User>("/auth/supabase-session", {
+            access_token: session.access_token,
+          });
+          await beginSession(user);
+          toast.success(`Welcome, ${user.first_name}!`);
+          navigate(returnTo, { replace: true });
+        } catch (err: any) {
+          const detail = err?.body?.detail ?? err?.message ?? "OAuth sign-in failed.";
+          setErrors({ form: typeof detail === "string" ? detail : "OAuth sign-in failed." });
+        }
+      }
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, [returnTo, navigate, beginSession]);
 
   const login = useMutation({
     mutationFn: async () => {
-      const cleanEmail = email.trim();
-      const cleanPassword = password.trim();
-
-      // 1. Attempt Supabase Auth
+      // Parallel login to Supabase auth client for OAuth/Consent parity
       try {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password: cleanPassword,
+        await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
         });
-        if (!error && data?.user) {
-          const meta = data.user.user_metadata || {};
-          return {
-            id: data.user.id,
-            email: data.user.email,
-            first_name: meta.first_name || "Vijay",
-            last_name: meta.last_name || "Official",
-            role: meta.role || "admin",
-            status: "active",
-            verified: true,
-          } as User;
-        }
-      } catch (authErr) {
-        console.warn("Supabase auth notice:", authErr);
+      } catch {
+        // Fallback gracefully to backend auth
       }
 
-      // 2. Demo bypass fallback for pre-configured test accounts
-      const lowerEmail = cleanEmail.toLowerCase();
-      if (
-        (lowerEmail === "test@gmail.com" && (cleanPassword === "12345678" || cleanPassword.length >= 6)) ||
-        (lowerEmail.includes("@") && cleanPassword.length >= 6)
-      ) {
-        return {
-          id: "demo-officer-01",
-          email: cleanEmail,
-          first_name: "Official",
-          last_name: "Admin",
-          role: "admin",
-          status: "active",
-          verified: true,
-        } as User;
-      }
-
-      throw new Error("Invalid email or password. Please verify your credentials.");
+      return apiPost<User>("/auth/login", {
+        email: email.trim(),
+        password,
+      });
     },
     onSuccess: async (user) => {
       await beginSession(user);
       toast.success(`Welcome back, ${user.first_name}`);
-      navigate("/dashboard", { replace: true });
+      navigate(returnTo, { replace: true });
     },
     onError: (err: any) => {
       const detail = err?.body?.detail ?? err?.message ?? "Unable to sign in.";
@@ -148,6 +171,30 @@ export function LoginPage() {
     if (Object.keys(next).length === 0) login.mutate();
   };
 
+  const handleOAuthSignIn = async (provider: "google" | "github" | "azure") => {
+    setOauthLoading(provider);
+    try {
+      const redirectTo = `${window.location.origin}/login?returnTo=${encodeURIComponent(returnTo)}`;
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: provider as any,
+        options: {
+          redirectTo,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      });
+      if (error) {
+        toast.error(error.message || `Failed to sign in with ${provider}`);
+      }
+    } catch (err: any) {
+      toast.error(err?.message || `OAuth sign-in error with ${provider}`);
+    } finally {
+      setOauthLoading(null);
+    }
+  };
+
   const handleFillDemo = (demoEmail = "test@gmail.com", demoPass = "12345678") => {
     setEmail(demoEmail);
     setPassword(demoPass);
@@ -157,7 +204,7 @@ export function LoginPage() {
 
   return (
     <AuthFrame visual={<AuthVisual heading="Environmental intelligence, one operational picture" sub="Live LoRaWAN telemetry, GIS hazard mapping and AI risk scoring for authorized government officials." />}>
-      <Card className="border-slate-200/80 p-8" data-testid="login-card">
+      <Card className="border-slate-200/80 p-8 shadow-sm" data-testid="login-card">
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Welcome Back</h1>
         <p className="mt-1.5 text-sm text-slate-600">Sign in to access the Environmental Intelligence Platform.</p>
 
@@ -180,7 +227,7 @@ export function LoginPage() {
             {errors.password ? <p className="mt-1 text-xs text-red-700" data-testid="login-password-error">{errors.password}</p> : null}
           </div>
           <div className="flex items-center justify-between">
-            <label className="flex items-center gap-2 text-sm text-slate-600">
+            <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
               <Checkbox checked={remember} onCheckedChange={(v) => setRemember(Boolean(v))} data-testid="login-remember-checkbox" />
               Remember me
             </label>
@@ -188,20 +235,74 @@ export function LoginPage() {
               Forgot Password?
             </Link>
           </div>
-          <Button type="submit" size="lg" className="w-full" disabled={login.isPending} data-testid="login-submit-btn">
-            {login.isPending ? "Signing in…" : "SIGN IN"}
+          <Button type="submit" size="lg" className="w-full bg-[#0F4C81] hover:bg-[#0d3f6c]" disabled={login.isPending} data-testid="login-submit-btn">
+            {login.isPending ? "Signing in…" : "SIGN IN WITH CREDENTIALS"}
           </Button>
         </form>
 
         <div className="my-6 flex items-center gap-3">
           <span className="h-px flex-1 bg-slate-200" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">OR</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">OR SIGN IN WITH OAUTH</span>
           <span className="h-px flex-1 bg-slate-200" />
         </div>
 
-        <Button variant="outline" size="lg" className="w-full" onClick={() => toast.info("Official Account SSO is provisioned by NIC and is not enabled in this environment.")} data-testid="login-sso-btn">
-          Continue with Official Account
-        </Button>
+        {/* OAuth Buttons */}
+        <div className="space-y-2.5">
+          <Button
+            variant="outline"
+            size="lg"
+            className="w-full flex items-center justify-center gap-2.5 border-slate-300 hover:bg-slate-50 text-slate-700"
+            onClick={() => handleOAuthSignIn("google")}
+            disabled={oauthLoading !== null}
+            data-testid="login-oauth-google-btn"
+          >
+            <svg className="size-4" viewBox="0 0 24 24">
+              <path
+                fill="#EA4335"
+                d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.2 8.9 5 12 5z"
+              />
+              <path
+                fill="#4285F4"
+                d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.1-2 .4-2.7L1.6 6.4C.6 8.3 0 10.1 0 12s.6 3.7 1.6 5.6l3.7-2.9z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.2-6.7-5.3L1.6 15.9C3.5 19.7 7.4 23 12 23z"
+              />
+            </svg>
+            <span>{oauthLoading === "google" ? "Connecting to Google..." : "Continue with Google"}</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="lg"
+            className="w-full flex items-center justify-center gap-2.5 border-slate-300 hover:bg-slate-50 text-slate-700"
+            onClick={() => handleOAuthSignIn("github")}
+            disabled={oauthLoading !== null}
+            data-testid="login-oauth-github-btn"
+          >
+            <svg className="size-4 fill-current text-slate-800" viewBox="0 0 24 24">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+            </svg>
+            <span>{oauthLoading === "github" ? "Connecting to GitHub..." : "Continue with GitHub"}</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="lg"
+            className="w-full flex items-center justify-center gap-2 border-slate-300 hover:bg-slate-50 text-slate-700"
+            onClick={() => handleOAuthSignIn("azure")}
+            disabled={oauthLoading !== null}
+            data-testid="login-sso-btn"
+          >
+            <Lock className="size-4 text-sky-700" />
+            <span>{oauthLoading === "azure" ? "Connecting to SSO..." : "Continue with Official SSO"}</span>
+          </Button>
+        </div>
 
         <p className="mt-6 text-center text-sm text-slate-600">
           Don't have an account?{" "}

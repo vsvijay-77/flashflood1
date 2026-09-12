@@ -178,14 +178,14 @@ class TelemetrySeries(BaseModel):
 class Alert(BaseModel):
     id: str = Field(default_factory=_uid)
     code: str
-    zone_id: str = ""
+    zone_id: Optional[str] = ""
     location: str
     hazard_type: str
     risk_level: str  # critical | high | medium | low
     title: str
-    detail: str = ""
+    detail: Optional[str] = ""
     status: str = "open"  # open | acknowledged | assigned | resolved
-    assigned_to: str = ""
+    assigned_to: Optional[str] = ""
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -200,7 +200,7 @@ class AlertCreate(BaseModel):
 
 
 class AlertAction(BaseModel):
-    action: Literal["acknowledge", "assign", "resolve"]
+    action: Literal["acknowledge", "assign", "resolve", "reopen"]
     assigned_to: str = ""
 
 

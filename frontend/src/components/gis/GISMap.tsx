@@ -85,6 +85,10 @@ export interface GISMapProps {
   rainfallIntensity?: number;
   /** When true, the map is locked to the selected/focused area only — no India-wide view, no other areas rendered, no draw/search tools */
   singleAreaMode?: boolean;
+  /** Direct coordinates [lat, lng] to fly to and drop a high-visibility emergency marker */
+  focusCoordinates?: [number, number] | null;
+  focusTitle?: string;
+  focusSubtitle?: string;
 }
 
 /**
@@ -108,6 +112,9 @@ export default function GISMap({
   onToggleRain,
   rainfallIntensity = 75,
   singleAreaMode = false,
+  focusCoordinates = null,
+  focusTitle,
+  focusSubtitle,
 }: GISMapProps) {
   const holder = useRef<HTMLDivElement | null>(null);
   const map = useRef<L.Map | null>(null);
@@ -685,6 +692,69 @@ export default function GISMap({
       zoomToAreaLand(selectedArea);
     }
   }, [selectedArea]);
+
+  // Handle external focusCoordinates (e.g. from clicking an SOS alert)
+  useEffect(() => {
+    if (!focusCoordinates || !map.current) return;
+    const [lat, lng] = focusCoordinates;
+    if (isNaN(lat) || isNaN(lng)) return;
+
+    if (searchLayer.current) {
+      searchLayer.current.clearLayers();
+    }
+
+    const targetLatLng: [number, number] = [lat, lng];
+    map.current.flyTo(targetLatLng, 16, { duration: 1.2 });
+
+    if (searchLayer.current) {
+      const sosIcon = L.divIcon({
+        className: "",
+        html: `
+          <div style="position:relative;width:40px;height:40px;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-100%);">
+            <div style="position:absolute;width:44px;height:44px;background:rgba(239,68,68,0.35);border-radius:50%;animation:ping 1.5s cubic-bezier(0,0,0.2,1) infinite;"></div>
+            <div style="width:34px;height:34px;background:#DC2626;border:3px solid #FFFFFF;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 4px 14px rgba(220,38,38,0.6);display:flex;align-items:center;justify-content:center;position:relative;z-index:2;">
+              <span style="transform:rotate(45deg);font-size:14px;font-weight:900;color:#FFFFFF;line-height:1;">🚨</span>
+            </div>
+            <div style="position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);width:18px;height:5px;background:rgba(0,0,0,0.35);border-radius:50%;filter:blur(1px);"></div>
+          </div>
+        `,
+        iconSize: [0, 0],
+      });
+
+      const marker = L.marker(targetLatLng, { icon: sosIcon }).addTo(searchLayer.current);
+      const title = focusTitle || "SOS Emergency Distress";
+      const subtitle = focusSubtitle || "Citizen Mobile Distress Location";
+
+      const popupHtml = `
+        <div style="font-family:'IBM Plex Sans',sans-serif;min-width:240px;padding:4px 2px;">
+          <div style="display:inline-block;background:#FEE2E2;color:#991B1B;font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
+            🚨 Mobile SOS Alert
+          </div>
+          <div style="font-size:13px;font-weight:800;color:#0F172A;line-height:1.3;">${title}</div>
+          <div style="font-size:11px;color:#64748B;margin-top:2px;">${subtitle}</div>
+          <div style="margin-top:6px;padding:4px 8px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;font-family:monospace;font-size:11px;font-weight:600;color:#DC2626;">
+            📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}
+          </div>
+          <div style="margin-top:8px;display:flex;flex-direction:column;gap:5px;">
+            <button id="sos-marker-measure-btn" style="width:100%;background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;border-radius:5px;padding:5px 8px;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;">
+              ✏️ Measure Area Around SOS Point
+            </button>
+          </div>
+        </div>
+      `;
+
+      marker.bindPopup(popupHtml).openPopup();
+
+      marker.on("popupopen", () => {
+        const btn = document.getElementById("sos-marker-measure-btn");
+        if (btn) {
+          btn.onclick = () => {
+            startDrawingAt(L.latLng(lat, lng));
+          };
+        }
+      });
+    }
+  }, [focusCoordinates, focusTitle, focusSubtitle]);
 
   // ─── Helper: clear all drawing layers ───────────────────────────────────────
   const clearDraw = () => {

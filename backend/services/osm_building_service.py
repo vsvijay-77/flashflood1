@@ -147,6 +147,17 @@ class OSMBuildingService:
             geometry = {"type": "Polygon", "coordinates": polygons[0]} if len(polygons) == 1 else {"type": "MultiPolygon", "coordinates": polygons}
             include(geometry, dict(relation.get("tags") or {}), "relation", relation_id)
 
+        if len(features) == 0:
+            try:
+                from services.ms_building_service import ms_building_service
+                ms_res = await ms_building_service.get_buildings_for_bbox(
+                    south, west, north, east, polygon=polygon
+                )
+                if ms_res and ms_res.get("features"):
+                    return ms_res, load_status
+            except Exception:
+                pass
+
         return {
             "type": "FeatureCollection",
             "features": features,

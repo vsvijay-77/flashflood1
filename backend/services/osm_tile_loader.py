@@ -17,14 +17,17 @@ CACHE_ROOT = Path(__file__).parent.parent / "cache" / "osm_tiles"
 CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 CACHE_TTL_SECONDS = 24 * 60 * 60
 MAX_CONCURRENCY = 6
-REQUEST_TIMEOUT_SECONDS = 15.0
+# Keep a new-area request responsive. Endpoint failover is still used, but a
+# dead Overpass mirror must not hold the Digital Twin risk panel for minutes.
+REQUEST_TIMEOUT_SECONDS = 20.0
 MAX_ATTEMPTS = 2
 
 ENDPOINTS = (
+    # Fast, worldwide Overpass mirrors with reliable global coverage
+    "https://overpass.openstreetmap.fr/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    "https://overpass.osm.ch/api/interpreter",
-    "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 )
 
 
@@ -55,6 +58,7 @@ class OSMTileLoader:
     def __init__(self) -> None:
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         self._unhealthy_until: dict[str, float] = {}
+        self._inflight: dict[str, asyncio.Future] = {}
 
     @staticmethod
     def tiles_for_bbox(north: float, south: float, east: float, west: float) -> list[Tile]:
@@ -62,7 +66,10 @@ class OSMTileLoader:
         # A normal selected area (up to roughly 6 km across) fits safely in one
         # bounded query. Splitting it into four requests was slower and made
         # the viewer wait unnecessarily. Larger AOIs still use small tiles.
-        target_span = 0.06 if max(lat_span, lng_span) <= 0.20 else 0.025
+        # Keep ordinary drawn/saved areas to a small number of requests. The
+        # previous 0.20° cutoff split a perfectly valid 15–20 km area into
+        # 88 tiles, making a new-area selection appear stuck in the viewer.
+        target_span = 0.10 if max(lat_span, lng_span) <= 0.50 else 0.025
         rows = max(1, math.ceil(lat_span / target_span))
         cols = max(1, math.ceil(lng_span / target_span))
         lat_step = lat_span / rows
@@ -114,14 +121,39 @@ class OSMTileLoader:
         if cached is not None:
             return cached, True
 
+        key = f"{dataset}:{tile.key}"
+        if key in self._inflight:
+            # Another coroutine is already fetching this exact tile — await its result
+            return await self._inflight[key]
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._inflight[key] = future
+
+        try:
+            res = await self._fetch_tile_from_endpoints(dataset, tile, query)
+            if not future.done():
+                future.set_result(res)
+            return res
+        except BaseException as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        finally:
+            self._inflight.pop(key, None)
+
+    async def _fetch_tile_from_endpoints(self, dataset: str, tile: Tile, query: str) -> tuple[list[dict[str, Any]], bool]:
+        headers = {"User-Agent": "FlashFloodDigitalTwin/1.0 (contact: admin@ein.gov.in)"}
         errors: list[str] = []
+
         for attempt in range(MAX_ATTEMPTS):
             if attempt:
                 await asyncio.sleep(2 ** (attempt - 1))
-            for endpoint in self._endpoint_order(attempt):
+            endpoints = list(self._endpoint_order(attempt))
+            for idx, endpoint in enumerate(endpoints):
                 try:
                     async with self._semaphore:
-                        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+                        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, headers=headers) as client:
                             response = await client.post(endpoint, data={"data": query})
                     if response.status_code in (429, 502, 503, 504):
                         self._unhealthy_until[endpoint] = time.monotonic() + 60
@@ -132,6 +164,7 @@ class OSMTileLoader:
                     elements = payload.get("elements")
                     if not isinstance(elements, list):
                         raise ValueError("response did not contain an elements list")
+                    # Authoritative OSM response received: cache and return immediately
                     self._write_cache(dataset, tile, elements)
                     return elements, False
                 except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
@@ -198,9 +231,10 @@ class OSMTileLoader:
                 outcome = on_progress(update)
                 if asyncio.iscoroutine(outcome):
                     await outcome
-        # Return partial results rather than raising — a missing tile is better
-        # than no map at all for emergency planning. Failures are reported in the
-        # stats dict so the API layer can surface a soft warning to the frontend.
+        # Never cache or report an incomplete network as a successful empty map.
+
+        if failures:
+            raise OSMTileLoadError([failure["error"] for failure in failures])
 
         unique: dict[tuple[str, int], dict[str, Any]] = {}
         for elements in results:

@@ -24,15 +24,11 @@ async def lifespan(app: FastAPI):
     # Pre-warm GEE tile cache in a background daemon thread on startup.
     # Daemon thread ensures Uvicorn reload / shutdown is never blocked.
     def _warm_gee_target():
-        if os.environ.get("ENABLE_GEE_PREWARM", "false").lower() != "true":
-            return
         try:
-            from routers.gee import _LAYER_BUILDERS, _ensure_gee
-            from concurrent.futures import ThreadPoolExecutor
+            from routers.gee import _get_elevation_tiles, _ensure_gee
             _ensure_gee()
-            with ThreadPoolExecutor(max_workers=min(len(_LAYER_BUILDERS), 4)) as executor:
-                list(executor.map(lambda fn: fn(), _LAYER_BUILDERS.values()))
-            logger.info("GEE tile cache pre-warmed for all layers in parallel.")
+            _get_elevation_tiles()
+            logger.info("GEE STM 30 / elevation tile cache pre-warmed successfully.")
         except Exception as exc:
             logger.warning(f"GEE cache pre-warm failed (non-fatal): {exc}")
 
@@ -85,6 +81,8 @@ from routers.satellite import router as satellite_router  # noqa: E402
 from routers.gee import router as gee_router  # noqa: E402
 from routers.digital_twin import router as digital_twin_router  # noqa: E402
 from routers.routing_and_rivers import router as routing_and_rivers_router  # noqa: E402
+from routers.buildings import router as buildings_router  # noqa: E402
+from routers.chat import router as chat_router  # noqa: E402
 
 api_router.include_router(auth_router)
 api_router.include_router(network_router)
@@ -95,6 +93,9 @@ api_router.include_router(satellite_router)
 api_router.include_router(gee_router)
 api_router.include_router(digital_twin_router)
 api_router.include_router(routing_and_rivers_router)
+api_router.include_router(buildings_router)
+api_router.include_router(chat_router)
+
 
 # Include the router in the main app
 app.include_router(api_router)

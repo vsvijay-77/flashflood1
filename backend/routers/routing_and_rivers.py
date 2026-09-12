@@ -1,5 +1,6 @@
 """Routing & Rivers API Router: Real OSM road and river extraction, GNN spatial graph, risk inference, and evacuation routing."""
 import asyncio
+import networkx as nx
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Body
 
@@ -9,7 +10,7 @@ from services.location_service import bbox_from_radius, bbox_from_polygon, geoco
 from services.osm_road_service import OSMRoadService
 from services.osm_river_service import OSMRiverService
 from services.osm_building_service import OSMBuildingService
-from services.osm_tile_loader import OSMTileLoader
+from services.osm_tile_loader import OSMTileLoader, OSMTileLoadError
 from services.graph_builder import UnifiedGraphBuilder
 from services.routing_service import EvacuationRoutingService
 
@@ -93,6 +94,24 @@ def _derive_bbox(req: LocationRequest) -> Dict[str, float]:
 
 # ─── API Endpoints ───────────────────────────────────────────────────────────
 
+class WaterBounds(BaseModel):
+    south: float = Field(ge=-90, le=90)
+    north: float = Field(ge=-90, le=90)
+    west: float = Field(ge=-180, le=180)
+    east: float = Field(ge=-180, le=180)
+
+
+@router.post("/water-bodies")
+async def water_bodies(payload: WaterBounds):
+    from services.water_surface_service import load_water_elements
+    if not (0 < payload.north - payload.south <= 1 and 0 < payload.east - payload.west <= 1):
+        raise HTTPException(status_code=422, detail="Select an area smaller than one degree per side.")
+    try:
+        return await load_water_elements(payload.south, payload.west, payload.north, payload.east)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/extract-networks")
 async def extract_networks(payload: LocationRequest = Body(...)):
     """
@@ -121,12 +140,25 @@ async def extract_networks(payload: LocationRequest = Body(...)):
     east = bbox["east"]
     west = bbox["west"]
 
-    # All datasets use the same bounded tile queue. Partial failures are
-    # tolerated: roads and rivers that did load are returned with a warning.
-    (road_G, road_geojson), (river_G, river_geojson) = await asyncio.gather(
+    road_res, river_res = await asyncio.gather(
         road_service.get_road_network(north, south, east, west, polygon=payload.polygon),
         river_service.get_river_network(north, south, east, west, polygon=payload.polygon),
+        return_exceptions=True,
     )
+
+    if isinstance(road_res, Exception):
+        print(f"[routing_and_rivers] Road extraction warning: {road_res}")
+        road_G = nx.DiGraph()
+        road_geojson = {"type": "FeatureCollection", "features": [], "metadata": {"total_nodes": 0, "total_edges": 0}}
+    else:
+        road_G, road_geojson = road_res
+
+    if isinstance(river_res, Exception):
+        print(f"[routing_and_rivers] River extraction warning: {river_res}")
+        river_G = nx.DiGraph()
+        river_geojson = {"type": "FeatureCollection", "features": [], "metadata": {"total_nodes": 0, "total_edges": 0}}
+    else:
+        river_G, river_geojson = river_res
 
     center_lat = bbox.get("center_lat", (north + south) / 2.0)
     center_lng = bbox.get("center_lng", (east + west) / 2.0)
@@ -224,10 +256,18 @@ async def predict_flood_risk(payload: LocationRequest = Body(...)):
     bbox = _derive_bbox(payload)
     north, south, east, west = bbox["north"], bbox["south"], bbox["east"], bbox["west"]
 
-    (road_G, _), (river_G, _) = await asyncio.gather(
-        road_service.get_road_network(north, south, east, west, polygon=payload.polygon),
-        river_service.get_river_network(north, south, east, west, polygon=payload.polygon),
-    )
+    # Risk scoring is supplementary to the map. A temporary Overpass rate
+    # limit must not make an already loaded road/river scene look broken.
+    try:
+        (road_G, _), (river_G, _) = await asyncio.wait_for(
+            asyncio.gather(
+                road_service.get_road_network(north, south, east, west, polygon=payload.polygon),
+                river_service.get_river_network(north, south, east, west, polygon=payload.polygon),
+            ),
+            timeout=12.0,
+        )
+    except (OSMTileLoadError, asyncio.TimeoutError):
+        road_G, river_G = nx.DiGraph(), nx.DiGraph()
 
 
     center_lat = bbox.get("center_lat", (north + south) / 2.0)

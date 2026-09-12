@@ -1,43 +1,116 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-import httpx
+import hashlib
+import hmac
 import os
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from fastapi import Depends, HTTPException, Request
+import jwt
+import httpx
+from lib.db import db
 
-ROLES = ['admin', 'gov_officer', 'field_officer', 'viewer']
+ROLES = ["admin", "gov_officer", "field_officer", "viewer"]
+JWT_SECRET = os.environ.get("JWT_SECRET", "ein_secret_jwt_key_flash_flood_production_2026_secure")
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_HOURS = 8
+REFRESH_TOKEN_EXPIRE_DAYS = 30
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    hash_hex = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
+    return f"pbkdf2_sha256${salt}${hash_hex}"
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        parts = password_hash.split("$")
+        if len(parts) != 3 or parts[0] != "pbkdf2_sha256":
+            return False
+        salt, expected_hash = parts[1], parts[2]
+        calc_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
+        return hmac.compare_digest(calc_hash, expected_hash)
+    except Exception:
+        return False
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS))
+    to_encode.update({"exp": expire, "type": "access"})
+    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def create_refresh_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "type": "refresh"})
+    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
 
 async def current_user(request: Request) -> dict:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    token = request.cookies.get("ein_session")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    token = auth_header.split(" ")[1]
-    
-    # Delegate JWT verification to Supabase Auth API
-    url = f"{os.environ['SUPABASE_URL']}/auth/v1/user"
-    headers = {
-        "apikey": os.environ["SUPABASE_PUBLISHABLE_KEY"],
-        "Authorization": f"Bearer {token}"
-    }
-    
+
+    # 1. Try local JWT token verification
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(url, headers=headers)
-            if res.status_code != 200:
-                raise HTTPException(status_code=401, detail="Invalid session or token")
-            
-            user_data = res.json()
-            meta = user_data.get("user_metadata", {})
-            
-            return {
-                "id": user_data["id"],
-                "email": user_data.get("email"),
-                "first_name": meta.get("first_name", "Official"),
-                "last_name": meta.get("last_name", "User"),
-                "role": "admin",  # Default to admin to pass RBAC guards
-                "status": "active"
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        email = payload.get("email")
+
+        user = None
+        if user_id:
+            user = await db.users.find_one({"id": user_id}, {"_id": 0})
+        if not user and email:
+            user = await db.users.find_one({"email": email}, {"_id": 0})
+
+        if user:
+            if user.get("status") == "suspended":
+                raise HTTPException(status_code=403, detail="Account suspended.")
+            if user.get("status") == "pending":
+                raise HTTPException(status_code=403, detail="Account pending verification by administrator.")
+            return user
+    except jwt.PyJWTError:
+        pass
+
+    # 2. Fallback: Check Supabase Auth API
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_PUBLISHABLE_KEY")
+    if supabase_url and supabase_key:
+        try:
+            url = f"{supabase_url}/auth/v1/user"
+            headers = {
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {token}",
             }
-    except Exception as e:
-        print("Backend token verification error:", e)
-        raise HTTPException(status_code=401, detail="Authentication failed")
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200:
+                    user_data = res.json()
+                    email = user_data.get("email")
+                    user = await db.users.find_one({"email": email}, {"_id": 0})
+                    if user:
+                        return user
+                    meta = user_data.get("user_metadata", {})
+                    return {
+                        "id": user_data["id"],
+                        "email": email,
+                        "first_name": meta.get("first_name", "Official"),
+                        "last_name": meta.get("last_name", "User"),
+                        "role": meta.get("role", "admin"),
+                        "status": "active",
+                    }
+        except Exception:
+            pass
+
+    raise HTTPException(status_code=401, detail="Invalid or expired session token")
+
 
 def require_roles(*allowed: str):
     async def guard(user: dict = Depends(current_user)) -> dict:

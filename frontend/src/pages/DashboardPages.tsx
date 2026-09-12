@@ -5,14 +5,16 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, Navigate } from "react-router-dom";
 import { toast } from "sonner";
 import { CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar, BarChart } from "recharts";
-import { Map as MapIcon, Radio, Waves, Trash2, ZoomIn, Globe, ArrowRight, MousePointerClick, Sparkles, Box, CloudRain } from "lucide-react";
+import { Map as MapIcon, Radio, Waves, Trash2, ZoomIn, Globe, ArrowRight, MousePointerClick, Sparkles, Box, CloudRain, ShieldAlert, Phone, MapPin, User, Clock, CheckCircle, RefreshCw } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import GISMap, { DEFAULT_LAYERS, type GISLayerState } from "@/components/gis/GISMap";
 import { EmptyState, LoadingRows, LoadingSymbol, PageHeader, RiskIndicator, SectionCard, StatCard, StatusPill } from "@/components/Primitives";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPatch } from "@/lib/api";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { MobileSosRequest } from "@/components/dashboard/BatteryAndAlerts";
 import { HAZARD_LABELS, SENSOR_LABELS, type Alert, type NetworkStats, type Sensor, type Zone } from "@/lib/types";
 
 // New Dashboard Components
@@ -35,6 +37,80 @@ function useNetwork() {
   return { zones, sensors, stats, alerts };
 }
 
+export function EnvironmentalMonitoringSection() {
+  const { sensors, zones } = useNetwork();
+  const [zoneId, setZoneId] = useState<string>("");
+  const list = useMemo(
+    () => (sensors.data ?? []).filter((s) => !zoneId || s.zone_id === zoneId),
+    [sensors.data, zoneId],
+  );
+
+  return (
+    <div className="space-y-4" data-testid="dashboard-environmental-section">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h3 className="text-lg font-bold text-slate-900">Environmental Sensor Monitoring</h3>
+          <p className="text-xs text-slate-500">Live LoRa uplink telemetry readings from all deployed field nodes.</p>
+        </div>
+        <div className="flex flex-wrap gap-2" data-testid="environmental-zone-filters">
+          <button
+            onClick={() => setZoneId("")}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold cursor-pointer transition-colors ${
+              zoneId === "" ? "border-[#0F4C81] bg-[#0F4C81] text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            All Zones
+          </button>
+          {(zones.data ?? []).map((z) => (
+            <button
+              key={z.id}
+              onClick={() => setZoneId(z.id)}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold cursor-pointer transition-colors ${
+                zoneId === z.id ? "border-[#0F4C81] bg-[#0F4C81] text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              {z.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <SectionCard testId="dashboard-environmental-readings-card" title="Live Field Telemetry" description={`${list.length} sensor nodes reporting in real time`}>
+        {sensors.isLoading ? (
+          <LoadingRows rows={5} />
+        ) : list.length === 0 ? (
+          <EmptyState testId="environmental-empty" title="No sensor readings" description="No nodes are registered for this zone yet." />
+        ) : (
+          <Table data-testid="dashboard-environmental-readings-table">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Node Code</TableHead>
+                <TableHead>Sensor Type</TableHead>
+                <TableHead>Monitored Zone</TableHead>
+                <TableHead>Telemetry Reading</TableHead>
+                <TableHead>Battery Level</TableHead>
+                <TableHead>Connection Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {list.map((s) => (
+                <TableRow key={s.id} data-testid={`sensor-row-${s.code}`}>
+                  <TableCell className="font-mono text-xs font-semibold">{s.code}</TableCell>
+                  <TableCell>{SENSOR_LABELS[s.sensor_type] ?? s.sensor_type}</TableCell>
+                  <TableCell className="text-xs text-slate-500">{s.zone_name}</TableCell>
+                  <TableCell className="font-mono font-semibold">{s.last_value} {s.unit}</TableCell>
+                  <TableCell className="font-mono text-xs">{s.battery}%</TableCell>
+                  <TableCell><StatusPill status={s.status} testId={`sensor-status-${s.code}`} /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
 export function DashboardPage() {
   return (
     <div className="flex flex-col gap-8 bg-slate-50 min-h-screen pb-12" data-testid="dashboard-page">
@@ -52,6 +128,8 @@ export function DashboardPage() {
         <hr className="border-slate-200" />
         <BatteryAndAlerts />
 
+        <hr className="border-slate-200" />
+        <EnvironmentalMonitoringSection />
       </div>
     </div>
   );
@@ -375,6 +453,13 @@ function MonitoredAreaDetailsContent({
 
 export function GISMonitoringPage() {
   const mapTopRef = useRef<HTMLDivElement | null>(null);
+  const location = useLocation();
+  const locationState = location.state as {
+    focusCoordinates?: [number, number];
+    focusTitle?: string;
+    focusSubtitle?: string;
+  } | null;
+
   const [layers, setLayers] = useState<GISLayerState>(() => {
     const saved = localStorage.getItem("gis_layers_state");
     if (saved) {
@@ -606,6 +691,9 @@ export function GISMonitoringPage() {
               customAreas={customAreas}
               selectedArea={selectedArea}
               focusedArea={focusedArea}
+              focusCoordinates={locationState?.focusCoordinates}
+              focusTitle={locationState?.focusTitle}
+              focusSubtitle={locationState?.focusSubtitle}
               onSelectArea={(area) => {
                 setSelectedArea(area);
                 setFocusedArea(area);
@@ -718,65 +806,385 @@ export function GISMonitoringPage() {
   );
 }
 
-export function EnvironmentalMonitoringPage() {
-  const { sensors, zones } = useNetwork();
-  const [zoneId, setZoneId] = useState<string>("");
-  const list = useMemo(
-    () => (sensors.data ?? []).filter((s) => !zoneId || s.zone_id === zoneId),
-    [sensors.data, zoneId],
-  );
+export function SosAlertsPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [typeFilter, setTypeFilter] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
+  const params = new URLSearchParams();
+  if (statusFilter) params.set("status", statusFilter);
+  if (typeFilter) params.set("emergency_type", typeFilter);
+  const qs = params.toString();
+
+  const { data: rawAlerts = [], isLoading, isRefetching, refetch } = useQuery<MobileSosRequest[]>({
+    queryKey: ["sos_alerts", qs],
+    queryFn: () => apiGet<MobileSosRequest[]>(`/alerts/sos${qs ? `?${qs}` : ""}`),
+    refetchInterval: 8000,
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      apiPatch(`/alerts/sos/${id}/status`, { status }),
+    onSuccess: (_, variables) => {
+      toast.success(`SOS request status updated to ${variables.status}`);
+      queryClient.invalidateQueries({ queryKey: ["sos_alerts"] });
+    },
+    onError: (err: any) => {
+      toast.error(err?.message || "Failed to update SOS status");
+    },
+  });
+
+  const handleMoveToMap = (sos: MobileSosRequest) => {
+    // Default coordinates to India center or known regional center if lat/lng are missing
+    const lat = sos.latitude != null ? Number(sos.latitude) : 10.66;
+    const lng = sos.longitude != null ? Number(sos.longitude) : 77.00;
+    const title = `${sos.emergency_type || "EMERGENCY"} — ${sos.full_name || "Citizen"}`;
+    const subtitle = sos.location_name ? `Location: ${sos.location_name} · Phone: ${sos.phone_number || "N/A"}` : `Phone: ${sos.phone_number || "N/A"}`;
+
+    toast.info(`Centering map on ${sos.full_name || "citizen"}'s distress location…`);
+    navigate("/gis", {
+      state: {
+        focusCoordinates: [lat, lng],
+        focusTitle: title,
+        focusSubtitle: subtitle,
+      },
+    });
+  };
+
+  const filteredAlerts = useMemo(() => {
+    if (!searchQuery.trim()) return rawAlerts;
+    const q = searchQuery.toLowerCase();
+    return rawAlerts.filter((item) =>
+      (item.full_name || "").toLowerCase().includes(q) ||
+      (item.phone_number || "").includes(q) ||
+      (item.location_name || "").toLowerCase().includes(q) ||
+      (item.description || "").toLowerCase().includes(q) ||
+      (item.emergency_type || "").toLowerCase().includes(q)
+    );
+  }, [rawAlerts, searchQuery]);
+
+  const activeCount = rawAlerts.filter((s) => (s.status || "").toUpperCase() !== "RESOLVED").length;
+  const criticalTypes = new Set(rawAlerts.map((s) => s.emergency_type).filter(Boolean) as string[]);
 
   return (
-    <div data-testid="environmental-monitoring-page">
-      <PageHeader title="Environmental Monitoring" description="Latest LoRa uplink readings from every deployed sensor node." />
-      <div className="mb-4 flex flex-wrap gap-2" data-testid="environmental-zone-filters">
-        <button
-          onClick={() => setZoneId("")}
-          className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${zoneId === "" ? "border-[#0F4C81] bg-[#0F4C81] text-white" : "border-slate-200 bg-white text-slate-600"}`}
-          data-testid="environmental-filter-all"
-        >
-          All Zones
-        </button>
-        {(zones.data ?? []).map((z) => (
-          <button
-            key={z.id}
-            onClick={() => setZoneId(z.id)}
-            className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${zoneId === z.id ? "border-[#0F4C81] bg-[#0F4C81] text-white" : "border-slate-200 bg-white text-slate-600"}`}
-            data-testid={`environmental-filter-${z.id}`}
+    <div data-testid="sos-alerts-page" className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center text-red-600 shadow-xs">
+              <ShieldAlert className="size-6 animate-pulse" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-black tracking-tight text-slate-900 flex items-center gap-2.5">
+                Mobile SOS Emergency Alerts
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black bg-red-600 text-white">
+                  {activeCount} Active
+                </span>
+              </h1>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Real-time emergency distress requests received from citizen mobile devices via Supabase (<code className="font-mono text-[11px] text-slate-700 bg-slate-100 px-1 py-0.5 rounded">mob_sos_requests</code>). Click on any alert to view on GIS Map.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            className="text-xs font-semibold gap-1.5 border-slate-300"
           >
-            {z.name}
-          </button>
-        ))}
+            <RefreshCw className={`size-3.5 ${isRefetching ? "animate-spin" : ""}`} />
+            Refresh Telemetry
+          </Button>
+        </div>
       </div>
 
-      <SectionCard testId="environmental-readings-card" title="Sensor readings" description={`${list.length} nodes reporting`}>
-        {sensors.isLoading ? (
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <Card className="p-4 border-red-200/80 bg-red-50/40">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-red-700">Active Distress Calls</div>
+          <div className="text-3xl font-black text-red-700 mt-1">{activeCount}</div>
+          <p className="text-[11px] text-red-600/80 mt-1">Requiring immediate emergency response</p>
+        </Card>
+        <Card className="p-4 border-amber-200/80 bg-amber-50/40">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Acknowledged / In Progress</div>
+          <div className="text-3xl font-black text-amber-700 mt-1">
+            {rawAlerts.filter((s) => ["ACKNOWLEDGED", "IN_PROGRESS"].includes((s.status || "").toUpperCase())).length}
+          </div>
+          <p className="text-[11px] text-amber-600/80 mt-1">Field units dispatched</p>
+        </Card>
+        <Card className="p-4 border-emerald-200/80 bg-emerald-50/40">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">Resolved Requests</div>
+          <div className="text-3xl font-black text-emerald-700 mt-1">
+            {rawAlerts.filter((s) => (s.status || "").toUpperCase() === "RESOLVED").length}
+          </div>
+          <p className="text-[11px] text-emerald-600/80 mt-1">Citizens safely assisted</p>
+        </Card>
+        <Card className="p-4 border-slate-200 bg-white">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Total Recorded</div>
+          <div className="text-3xl font-black text-slate-900 mt-1">{rawAlerts.length}</div>
+          <p className="text-[11px] text-slate-500 mt-1">Total recorded in database</p>
+        </Card>
+      </div>
+
+      {/* Filter Bar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-1">Status:</span>
+          {["", "RECEIVED", "ACKNOWLEDGED", "RESOLVED"].map((st) => (
+            <button
+              key={st}
+              onClick={() => setStatusFilter(st)}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold cursor-pointer transition-colors ${
+                statusFilter === st
+                  ? "border-red-600 bg-red-600 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              {st === "" ? "All Statuses" : st}
+            </button>
+          ))}
+
+          {criticalTypes.size > 1 && (
+            <>
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-3 mr-1">Type:</span>
+              <button
+                onClick={() => setTypeFilter("")}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold cursor-pointer transition-colors ${
+                  typeFilter === ""
+                    ? "border-[#0F4C81] bg-[#0F4C81] text-white"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                All Types
+              </button>
+              {Array.from(criticalTypes).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTypeFilter(t)}
+                  className={`rounded-full border px-3 py-1 text-xs font-semibold cursor-pointer transition-colors ${
+                    typeFilter === t
+                      ? "border-[#0F4C81] bg-[#0F4C81] text-white"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+
+        <div className="relative w-full md:w-64">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search citizen name, phone, place…"
+            className="w-full h-8 pl-3 pr-8 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-red-500"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Main Table Card */}
+      <SectionCard
+        testId="sos-alerts-table-card"
+        title="Live Mobile Distress Log"
+        description={`${filteredAlerts.length} emergency requests currently displayed · Click on location or 'View on Map' to center GIS Map`}
+      >
+        {isLoading ? (
           <LoadingRows rows={5} />
-        ) : list.length === 0 ? (
-          <EmptyState testId="environmental-empty" title="No sensor readings" description="No nodes are registered for this zone yet." />
+        ) : filteredAlerts.length === 0 ? (
+          <EmptyState
+            testId="sos-empty"
+            title="No SOS Requests Found"
+            description="No emergency distress requests match the selected filters."
+          />
         ) : (
-          <Table data-testid="environmental-readings-table">
+          <Table data-testid="sos-alerts-table">
             <TableHeader>
               <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Zone</TableHead>
-                <TableHead>Reading</TableHead>
-                <TableHead>Battery</TableHead>
+                <TableHead className="w-[140px]">Emergency Type</TableHead>
+                <TableHead>Caller Details</TableHead>
+                <TableHead>Location & Coordinates</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Timestamp</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {list.map((s) => (
-                <TableRow key={s.id} data-testid={`sensor-row-${s.code}`}>
-                  <TableCell className="font-mono text-xs font-semibold">{s.code}</TableCell>
-                  <TableCell>{SENSOR_LABELS[s.sensor_type] ?? s.sensor_type}</TableCell>
-                  <TableCell className="text-xs text-slate-500">{s.zone_name}</TableCell>
-                  <TableCell className="font-mono font-semibold">{s.last_value} {s.unit}</TableCell>
-                  <TableCell className="font-mono text-xs">{s.battery}%</TableCell>
-                  <TableCell><StatusPill status={s.status} testId={`sensor-status-${s.code}`} /></TableCell>
-                </TableRow>
-              ))}
+              {filteredAlerts.map((sos) => {
+                const statusUpper = (sos.status || "RECEIVED").toUpperCase();
+                const isResolved = statusUpper === "RESOLVED";
+                const isAck = statusUpper === "ACKNOWLEDGED" || statusUpper === "IN_PROGRESS";
+
+                return (
+                  <TableRow
+                    key={sos.id}
+                    data-testid={`sos-row-${sos.id}`}
+                    className={`transition-colors ${
+                      isResolved ? "opacity-60 bg-slate-50/50" : "hover:bg-red-50/40 cursor-pointer"
+                    }`}
+                  >
+                    <TableCell onClick={() => handleMoveToMap(sos)}>
+                      <span
+                        className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-black uppercase tracking-wider ${
+                          isResolved
+                            ? "bg-slate-200 text-slate-700"
+                            : isAck
+                            ? "bg-amber-100 text-amber-800 border border-amber-200"
+                            : "bg-red-100 text-red-700 border border-red-200 animate-pulse"
+                        }`}
+                      >
+                        {sos.emergency_type || "EMERGENCY"}
+                      </span>
+                    </TableCell>
+
+                    <TableCell onClick={() => handleMoveToMap(sos)}>
+                      <div className="font-semibold text-slate-900 text-xs flex items-center gap-1.5">
+                        <User className="size-3 text-slate-400" />
+                        {sos.full_name || "Anonymous Caller"}
+                      </div>
+                      {sos.phone_number && (
+                        <a
+                          href={`tel:${sos.phone_number}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex items-center gap-1 text-[11px] text-blue-600 hover:underline font-mono mt-0.5"
+                        >
+                          <Phone className="size-3" />
+                          {sos.phone_number}
+                        </a>
+                      )}
+                    </TableCell>
+
+                    <TableCell>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveToMap(sos)}
+                        className="flex items-start gap-1 text-xs text-left group hover:text-[#0F4C81] cursor-pointer"
+                        title="Click to locate on GIS Map"
+                      >
+                        <MapPin className="size-3.5 text-red-500 shrink-0 mt-0.5 group-hover:scale-110 transition-transform" />
+                        <div>
+                          <div className="font-bold text-slate-900 group-hover:text-[#0F4C81] group-hover:underline">
+                            {sos.location_name || (sos.latitude ? `${sos.latitude.toFixed(4)}, ${sos.longitude?.toFixed(4)}` : "Location provided")}
+                          </div>
+                          {sos.latitude && sos.longitude ? (
+                            <span className="text-[10px] text-sky-600 font-mono block">
+                              ({sos.latitude.toFixed(5)}, {sos.longitude.toFixed(5)})
+                              {sos.location_accuracy_m && ` ±${Math.round(sos.location_accuracy_m)}m`}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 font-mono block">
+                              Click to view on GIS Map
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    </TableCell>
+
+                    <TableCell onClick={() => handleMoveToMap(sos)}>
+                      {sos.description ? (
+                        <p className="text-xs text-slate-600 italic max-w-xs line-clamp-2">
+                          "{sos.description}"
+                        </p>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </TableCell>
+
+                    <TableCell className="text-xs text-slate-500 whitespace-nowrap" onClick={() => handleMoveToMap(sos)}>
+                      <div className="flex items-center gap-1">
+                        <Clock className="size-3 text-slate-400" />
+                        {sos.created_at ? new Date(sos.created_at).toLocaleString() : "—"}
+                      </div>
+                    </TableCell>
+
+                    <TableCell onClick={() => handleMoveToMap(sos)}>
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                          isResolved
+                            ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                            : isAck
+                            ? "bg-blue-100 text-blue-800 border border-blue-200"
+                            : "bg-rose-100 text-rose-800 border border-rose-200 font-black"
+                        }`}
+                      >
+                        {statusUpper}
+                      </span>
+                    </TableCell>
+
+                    <TableCell className="text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs border-sky-300 text-sky-800 hover:bg-sky-50 gap-1"
+                          onClick={() => handleMoveToMap(sos)}
+                          title="Move to GIS Map"
+                        >
+                          <MapIcon className="size-3 text-sky-600" />
+                          View on Map
+                        </Button>
+
+                        {!isResolved && (
+                          <>
+                            {statusUpper !== "ACKNOWLEDGED" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs border-amber-300 text-amber-800 hover:bg-amber-50"
+                                disabled={updateStatusMutation.isPending}
+                                onClick={() =>
+                                  updateStatusMutation.mutate({ id: sos.id, status: "ACKNOWLEDGED" })
+                                }
+                              >
+                                Ack
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                              disabled={updateStatusMutation.isPending}
+                              onClick={() =>
+                                updateStatusMutation.mutate({ id: sos.id, status: "RESOLVED" })
+                              }
+                            >
+                              Resolve
+                            </Button>
+                          </>
+                        )}
+                        {isResolved && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs text-slate-500 hover:text-slate-800"
+                            disabled={updateStatusMutation.isPending}
+                            onClick={() =>
+                              updateStatusMutation.mutate({ id: sos.id, status: "RECEIVED" })
+                            }
+                          >
+                            Reopen
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -784,6 +1192,9 @@ export function EnvironmentalMonitoringPage() {
     </div>
   );
 }
+
+// Backward compatibility export
+export const EnvironmentalMonitoringPage = SosAlertsPage;
 
 export function AnalyticsPage() {
   const { zones, sensors } = useNetwork();

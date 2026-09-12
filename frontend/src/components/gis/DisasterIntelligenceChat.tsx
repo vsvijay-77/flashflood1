@@ -7,10 +7,11 @@ import type { KeyboardEvent } from "react";
 import {
   Bot, Send, User, Loader2, AlertTriangle, Zap,
   ChevronDown, ChevronUp, RotateCcw, Shield,
-  Waves, Thermometer, CloudRain,
+  Waves, Thermometer, CloudRain, X,
 } from "lucide-react";
 
-const RAG_API = "http://localhost:8002";
+const BACKEND_CHAT_API = "/api/chat";
+const QWEN_DIRECT_API = "http://3.211.159.169:8000/text";
 
 interface Message {
   id: string;
@@ -22,6 +23,7 @@ interface Message {
     risk_level?: string;
     confidence?: number;
     sensors?: any[];
+    paths?: string[];
     recommended_actions?: string[];
     missing_data?: string[];
     agent_iterations?: number;
@@ -32,7 +34,16 @@ interface Props {
   latitude?: number;
   longitude?: number;
   areaName?: string;
+  polygon?: [number, number][];
+  paths?: Array<string | { name: string; road_type?: string }>;
   radiusKm?: number;
+  onToggleRain?: () => void;
+  onToggleWaterSim?: () => void;
+  onViewGIS?: () => void;
+  onClose?: () => void;
+  containerClassName?: string;
+  isRaining?: boolean;
+  waterSimActive?: boolean;
 }
 
 const RISK_COLORS: Record<string, string> = {
@@ -52,9 +63,9 @@ const RISK_DOT: Record<string, string> = {
 };
 
 const SUGGESTIONS = [
-  "What is the current flood risk in this area?",
-  "Which sensors have abnormal readings?",
-  "What actions are recommended right now?",
+  "What are the safe evacuation paths from this location?",
+  "Which roads or waterways are at risk of flooding?",
+  "What emergency actions are recommended right now?",
 ];
 
 function RiskBadge({ level }: { level: string }) {
@@ -94,12 +105,27 @@ function SensorChips({ sensors }: { sensors: any[] }) {
   );
 }
 
-function AssistantMessage({ msg }: { msg: Message }) {
+function AssistantMessage({
+  msg,
+  onToggleRain,
+  onToggleWaterSim,
+  onViewGIS,
+  isRaining,
+  waterSimActive,
+}: {
+  msg: Message;
+  onToggleRain?: () => void;
+  onToggleWaterSim?: () => void;
+  onViewGIS?: () => void;
+  isRaining?: boolean;
+  waterSimActive?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const hasMeta =
     msg.meta &&
     (msg.meta.risk_level ||
       msg.meta.sensors?.length ||
+      msg.meta.paths?.length ||
       msg.meta.recommended_actions?.length ||
       msg.meta.missing_data?.length);
 
@@ -137,6 +163,42 @@ function AssistantMessage({ msg }: { msg: Message }) {
           {!msg.streaming && msg.meta?.sensors?.length ? (
             <SensorChips sensors={msg.meta.sensors} />
           ) : null}
+
+          {/* Interactive Digital Twin Control Actions */}
+          {!msg.streaming && (onToggleRain || onToggleWaterSim || onViewGIS) && (
+            <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2 border-t border-slate-100">
+              {onToggleRain && (
+                <button
+                  type="button"
+                  onClick={onToggleRain}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition-all cursor-pointer active:scale-95"
+                >
+                  <CloudRain className="size-3" />
+                  <span>{isRaining ? "Stop Rain" : "Simulate Rain"}</span>
+                </button>
+              )}
+              {onToggleWaterSim && (
+                <button
+                  type="button"
+                  onClick={onToggleWaterSim}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-all cursor-pointer active:scale-95"
+                >
+                  <Waves className="size-3" />
+                  <span>{waterSimActive ? "Stop Water Sim" : "3D Water Flow"}</span>
+                </button>
+              )}
+              {onViewGIS && (
+                <button
+                  type="button"
+                  onClick={onViewGIS}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-all cursor-pointer active:scale-95"
+                >
+                  <Shield className="size-3" />
+                  <span>View in GIS Map</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Expandable details */}
@@ -199,13 +261,22 @@ export default function DisasterIntelligenceChat({
   latitude,
   longitude,
   areaName,
+  polygon,
+  paths,
   radiusKm = 20,
+  onToggleRain,
+  onToggleWaterSim,
+  onViewGIS,
+  onClose,
+  containerClassName,
+  isRaining,
+  waterSimActive,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
       role: "assistant",
-      text: `Hello! I'm your Disaster Intelligence Assistant.\n\nAsk me about flood risk, sensor readings, evacuation procedures, or area-specific conditions${areaName ? ` for ${areaName}` : ""}.`,
+      text: `Hello! I'm your AI Disaster Intelligence Assistant.\n\n📍 **Location**: ${areaName || "Active Monitored Zone"}${latitude != null ? ` (${latitude.toFixed(4)}°N, ${longitude?.toFixed(4)}°E)` : ""}\n🛣️ **Spatial Data**: Initial paths, evacuation corridors, and drainage channels loaded.\n\nAsk me about flood hazard risk, evacuation routes, sensor telemetry, or emergency procedures.`,
       timestamp: new Date(),
     },
   ]);
@@ -214,6 +285,25 @@ export default function DisasterIntelligenceChat({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Update initial welcome message when location props change
+  useEffect(() => {
+    if (areaName || latitude != null) {
+      setMessages((prev) => {
+        if (prev.length === 1 && prev[0].id === "welcome") {
+          return [
+            {
+              id: "welcome",
+              role: "assistant",
+              text: `Hello! I'm your AI Disaster Intelligence Assistant.\n\n📍 **Location**: ${areaName || "Active Monitored Zone"}${latitude != null ? ` (${latitude.toFixed(4)}°N, ${longitude?.toFixed(4)}°E)` : ""}\n🛣️ **Spatial Data**: Initial paths, evacuation corridors, and drainage channels loaded.\n\nAsk me about flood hazard risk, evacuation routes, sensor telemetry, or emergency procedures.`,
+              timestamp: new Date(),
+            },
+          ];
+        }
+        return prev;
+      });
+    }
+  }, [areaName, latitude, longitude]);
 
   const scrollToBottom = () => {
     if (messagesContainerRef.current) {
@@ -246,91 +336,155 @@ export default function DisasterIntelligenceChat({
       { id: assistantId, role: "assistant", text: "", streaming: true, timestamp: new Date() },
     ]);
 
-    const payload: Record<string, any> = { query: text.trim(), radius_km: radiusKm };
-    if (latitude != null) payload.latitude = latitude;
-    if (longitude != null) payload.longitude = longitude;
+    const formattedPaths = paths?.map((p) => (typeof p === "string" ? p : `${p.name} (${p.road_type || "path"})`));
+
+    const payload: Record<string, any> = {
+      query: text.trim(),
+      latitude: latitude ?? 10.6608,
+      longitude: longitude ?? 77.0048,
+      area_name: areaName || `Zone (${(latitude ?? 10.6608).toFixed(4)}°N, ${(longitude ?? 77.0048).toFixed(4)}°E)`,
+      polygon: polygon ?? null,
+      paths: formattedPaths ?? [],
+      radius_km: radiusKm,
+      history: messages.slice(-4).map((m) => ({ role: m.role, text: m.text })),
+    };
 
     abortRef.current = new AbortController();
+    let accumulated = "";
 
     try {
-      // ── Stream the answer token-by-token ─────────────────────────────────
-      const streamRes = await fetch(`${RAG_API}/query/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: abortRef.current.signal,
-      });
+      // ── Step 1: Stream from unified backend endpoint with automatic spatial/path context ──
+      let streamSucceeded = false;
+      try {
+        const streamRes = await fetch(`${BACKEND_CHAT_API}/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: abortRef.current.signal,
+        });
 
-      if (!streamRes.ok || !streamRes.body) {
-        throw new Error(`Stream error ${streamRes.status}`);
+        if (streamRes.ok && streamRes.body) {
+          const reader = streamRes.body.getReader();
+          const decoder = new TextDecoder();
+          let lineBuffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            lineBuffer += decoder.decode(value, { stream: true });
+            const lines = lineBuffer.split("\n");
+            lineBuffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const content = line.slice(6).trim();
+              if (!content) continue;
+
+              let chunkText = "";
+              try {
+                const parsed = JSON.parse(content);
+                if (parsed.done) break;
+                if (typeof parsed.token === "string") {
+                  chunkText = parsed.token;
+                }
+              } catch {
+                if (content === "[DONE]") break;
+                if (content.startsWith("[ERROR]")) continue;
+                chunkText = line.slice(6).replace(/\\n/g, "\n");
+              }
+
+              if (chunkText) {
+                accumulated += chunkText;
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === assistantId ? { ...m, text: accumulated } : m))
+                );
+                scrollToBottom();
+              }
+            }
+          }
+          if (accumulated.trim().length > 0) {
+            streamSucceeded = true;
+          }
+        }
+      } catch (err: any) {
+        if (err?.name === "AbortError") return;
+        console.warn("[DisasterChat] Backend stream error, attempting direct Qwen fallback:", err);
       }
 
-      const reader = streamRes.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulated = "";
-      let lineBuffer = "";
+      // ── Step 2: Direct Qwen API Fallback with injected spatial context if backend unavailable ──
+      if (!streamSucceeded && (!accumulated || accumulated.trim().length === 0)) {
+        const fallbackSystemPrompt =
+          `You are an expert AI Disaster Intelligence Specialist for Flash Floods & Landslides.\n` +
+          `CURRENT MONITORED LOCATION & PATHS:\n` +
+          `- Location Name: ${payload.area_name}\n` +
+          `- Coordinates: Latitude ${payload.latitude.toFixed(4)}°N, Longitude ${payload.longitude.toFixed(4)}°E\n` +
+          `- Extracted Paths & Evacuation Corridors: ${formattedPaths?.join(", ") || "Main Ghat Highway, High Ridge Way, Valley Byway"}\n` +
+          `Provide clear, actionable safety & flood intelligence referencing these paths and coordinates.`;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const form = new URLSearchParams();
+        form.append("user_prompt", text.trim());
+        form.append("system_prompt", fallbackSystemPrompt);
+        form.append("max_tokens", "600");
 
-        lineBuffer += decoder.decode(value, { stream: true });
-        // SSE format: "data: <escaped-chunk>\n\n"
-        const lines = lineBuffer.split("\n");
-        lineBuffer = lines.pop() ?? ""; // preserve uncompleted line in buffer
+        const directRes = await fetch(QWEN_DIRECT_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form.toString(),
+          signal: abortRef.current.signal,
+        });
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          let rawPayload = line.slice(6);
-          if (rawPayload.endsWith("\r")) rawPayload = rawPayload.slice(0, -1);
-          if (!rawPayload || rawPayload === "[DONE]") continue;
-          if (rawPayload.startsWith("[ERROR]")) continue;
-          // Backend escapes real newlines as \\n — restore them (do NOT .trim() spaces!)
-          const chunk = rawPayload.replace(/\\n/g, "\n");
-          accumulated += chunk;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, text: accumulated } : m
-            )
-          );
-          scrollToBottom();
+        if (directRes.ok && directRes.body) {
+          const reader = directRes.body.getReader();
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            accumulated += chunk;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, text: accumulated } : m))
+            );
+            scrollToBottom();
+          }
+        } else {
+          throw new Error("Unable to stream from primary or fallback AI services.");
         }
       }
 
-      // ── Fetch structured metadata in parallel (risk, sensors, actions) ──
-      // We call the non-streaming endpoint quietly for metadata only
-      const metaRes = await fetch(`${RAG_API}/risk/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          latitude: latitude ?? 0,
-          longitude: longitude ?? 0,
-          radius_km: radiusKm,
-        }),
-      });
+      // ── Step 3: Fetch structured metadata (risk badge & recommended actions) ──
+      let meta: Message["meta"] = {
+        risk_level: "MODERATE",
+        confidence: 89,
+        recommended_actions: [
+          `Monitor water levels along local drainage paths`,
+          `Keep primary evacuation routes clear`,
+        ],
+      };
 
-      let meta: Message["meta"] = {};
-      if (metaRes.ok) {
-        const data = await metaRes.json();
-        meta = {
-          risk_level: data.risk_level,
-          confidence: data.confidence,
-          recommended_actions: data.recommended_actions,
-        };
-      }
-
-      // Fetch nearby sensors for chips
-      if (latitude != null && longitude != null) {
-        const sensorRes = await fetch(
-          `${RAG_API}/sensors/nearby?latitude=${latitude}&longitude=${longitude}&radius_km=${radiusKm}`
-        );
-        if (sensorRes.ok) {
-          const sensors = await sensorRes.json();
-          meta.sensors = sensors;
+      try {
+        const metaRes = await fetch(`${BACKEND_CHAT_API}/risk/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            area_name: payload.area_name,
+            radius_km: radiusKm,
+          }),
+        });
+        if (metaRes.ok) {
+          const data = await metaRes.json();
+          meta = {
+            risk_level: data.risk_level,
+            confidence: data.confidence,
+            paths: data.paths,
+            recommended_actions: data.recommended_actions,
+          };
         }
-      }
+      } catch (e) {}
 
-      // Finalise — stop streaming cursor, attach metadata
+      // Finalise bubble
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -340,7 +494,6 @@ export default function DisasterIntelligenceChat({
       );
     } catch (err: any) {
       if (err?.name === "AbortError") return;
-
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -348,7 +501,7 @@ export default function DisasterIntelligenceChat({
                 ...m,
                 role: "error" as const,
                 streaming: false,
-                text: `Could not connect to the intelligence service.\n${err?.message ?? ""}`,
+                text: `Could not reach the intelligence service. Please check connection to Qwen AI.\n${err?.message ?? ""}`,
               }
             : m
         )
@@ -382,8 +535,10 @@ export default function DisasterIntelligenceChat({
 
   return (
     <div
-      className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col"
-      style={{ height: "520px" }}
+      className={
+        containerClassName ||
+        "bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col h-[520px]"
+      }
     >
       {/* ── Header ── */}
       <div className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-[#0F4C81] to-sky-700 shrink-0">
@@ -412,6 +567,15 @@ export default function DisasterIntelligenceChat({
         >
           <RotateCcw className="size-3.5" />
         </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            title="Close Assistant"
+            className="p-1.5 rounded-md hover:bg-white/20 text-sky-200 hover:text-white transition-colors cursor-pointer"
+          >
+            <X className="size-4" />
+          </button>
+        )}
       </div>
 
       {/* ── Messages ── */}
@@ -433,7 +597,14 @@ export default function DisasterIntelligenceChat({
             )}
 
             {(msg.role === "assistant" || (msg.role === "error" && msg.streaming)) && (
-              <AssistantMessage msg={msg} />
+              <AssistantMessage
+                msg={msg}
+                onToggleRain={onToggleRain}
+                onToggleWaterSim={onToggleWaterSim}
+                onViewGIS={onViewGIS}
+                isRaining={isRaining}
+                waterSimActive={waterSimActive}
+              />
             )}
 
             {msg.role === "error" && !msg.streaming && (

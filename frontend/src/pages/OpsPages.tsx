@@ -67,18 +67,22 @@ export function DigitalTwinPage() {
     }
     return [];
   });
-  const [selectedAreaId, setSelectedAreaId] = useState<string>(location.state?.area?.id || "");
-  const [activeArea, setActiveArea] = useState<CustomArea | null>(location.state?.area || null);
+  const [selectedAreaId, setSelectedAreaId] = useState<string>(
+    location.state?.area?.id || (customAreas[0]?.id ?? "")
+  );
+  const [activeArea, setActiveArea] = useState<CustomArea | null>(
+    location.state?.area || (customAreas[0] ?? null)
+  );
   const [twinViewMode, setTwinViewMode] = useState<"3d" | "gis">("3d");
 
   const [lat, setLat] = useState<number>(
-    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : 0)
+    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : (customAreas[0]?.lat ? Number(customAreas[0].lat) : 10.6608))
   );
   const [lng, setLng] = useState<number>(
-    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : 0)
+    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : (customAreas[0]?.lng ? Number(customAreas[0].lng) : 77.0048))
   );
   const [areaTitle, setAreaTitle] = useState<string>(
-    location.state?.area?.name || location.state?.name || ""
+    location.state?.area?.name || location.state?.name || customAreas[0]?.name || "Pollachi Basin"
   );
 
   // Fetch monitored areas from Supabase
@@ -105,6 +109,16 @@ export function DigitalTwinPage() {
             areaSqMeters: 0,
           }));
           setCustomAreas(loaded);
+          setActiveArea((current) => {
+            if (!current && loaded.length > 0) {
+              setSelectedAreaId(loaded[0].id);
+              setLat(Number(loaded[0].lat));
+              setLng(Number(loaded[0].lng));
+              setAreaTitle(loaded[0].name);
+              return loaded[0];
+            }
+            return current;
+          });
           try {
             localStorage.setItem("cached_custom_areas", JSON.stringify(loaded));
           } catch (e) {
@@ -165,6 +179,7 @@ export function DigitalTwinPage() {
       }),
     onSuccess: (res) => {
       setResult(res);
+      setIsRainActive(true);
       toast.success(`${SCENARIO_LABELS[res.scenario] ?? res.scenario} completed — severity ${res.severity}`);
     },
     onError: (err) => toast.error(apiErrorMessage(err, "Simulation could not be executed.")),
@@ -302,7 +317,7 @@ export function DigitalTwinPage() {
                 </button>
               </div>
 
-              {(isRainActive || run.isPending || !!result) && (
+              {(isRainActive || run.isPending) && (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400 text-xs font-bold animate-pulse">
                   <CloudRain className="size-3.5" />
                   <span>Rain Simulation Active</span>
@@ -370,21 +385,23 @@ export function DigitalTwinPage() {
           </div>
 
           {twinViewMode === "3d" ? (
-            <CesiumDigitalTwinViewer
-              key={`3d-${lat.toFixed(4)}-${lng.toFixed(4)}-${areaTitle}`}
-              latitude={lat}
-              longitude={lng}
-              areaName={areaTitle}
-              polygon={activeArea?.polygon}
-              height="620px"
-              onViewInGIS={() => setTwinViewMode("gis")}
-              isRaining={isRainActive || run.isPending || !!result}
-              rainfallIntensity={rainfall}
-              windSpeed={wind}
-              onToggleRain={(val) => setIsRainActive(val)}
-            />
+            <div className="w-full transition-all duration-500 ease-out animate-in fade-in zoom-in-[0.99]">
+              <CesiumDigitalTwinViewer
+                key="cesium-digital-twin"
+                latitude={lat}
+                longitude={lng}
+                areaName={areaTitle}
+                polygon={activeArea?.polygon}
+                height="620px"
+                onViewInGIS={() => setTwinViewMode("gis")}
+                isRaining={isRainActive || run.isPending}
+                rainfallIntensity={rainfall}
+                windSpeed={wind}
+                onToggleRain={(val) => setIsRainActive(val)}
+              />
+            </div>
           ) : (
-            <div className="h-[620px] rounded-xl overflow-hidden border border-slate-300 shadow-md">
+            <div className="h-[620px] rounded-xl overflow-hidden border border-slate-300 shadow-md transition-all duration-500 ease-out animate-in fade-in">
               <GISMap
                 key={`gis-${lat.toFixed(4)}-${lng.toFixed(4)}-${areaTitle}`}
                 customAreas={customAreas}
@@ -427,7 +444,11 @@ export function DigitalTwinPage() {
         latitude={activeArea ? lat : undefined}
         longitude={activeArea ? lng : undefined}
         areaName={areaTitle || undefined}
+        polygon={activeArea?.polygon}
         radiusKm={20}
+        onToggleRain={() => setIsRainActive((p) => !p)}
+        onViewGIS={() => setTwinViewMode("gis")}
+        isRaining={isRainActive}
       />
 
       {/* ─── Simulation Controls & Twin Projection Grid ─── */}

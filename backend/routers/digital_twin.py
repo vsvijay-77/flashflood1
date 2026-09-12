@@ -292,12 +292,48 @@ def get_aoi(lat: float, lng: float, radius_km: float):
     }
 
 @router.get("/buildings")
-async def get_buildings(lat: float, lng: float, radius_km: float = 1.0, conf: float = 0.70):
-    return {
-        "type": "FeatureCollection",
-        "features": [],
-        "metadata": {"source": "none", "count": 0},
-    }
+async def get_buildings(
+    lat: Optional[float] = Query(None),
+    lng: Optional[float] = Query(None),
+    radius_km: float = 1.0,
+    conf: float = 0.70,
+    minLat: Optional[float] = Query(None),
+    minLon: Optional[float] = Query(None),
+    maxLat: Optional[float] = Query(None),
+    maxLon: Optional[float] = Query(None),
+    north: Optional[float] = Query(None),
+    south: Optional[float] = Query(None),
+    east: Optional[float] = Query(None),
+    west: Optional[float] = Query(None),
+    water_level_m: float = 0.0,
+):
+    from services.ms_building_service import ms_building_service
+    n = north if north is not None else maxLat
+    s = south if south is not None else minLat
+    e = east if east is not None else maxLon
+    w = west if west is not None else minLon
+
+    if None in (n, s, e, w):
+        if lat is not None and lng is not None:
+            d_lat = radius_km / 111.0
+            d_lng = radius_km / (111.0 * math.cos(math.radians(lat)))
+            n, s = lat + d_lat, lat - d_lat
+            e, w = lng + d_lng, lng - d_lng
+        else:
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "metadata": {"source": "none", "count": 0},
+            }
+
+    return await ms_building_service.get_buildings_for_bbox(
+        min_lat=float(s),
+        min_lon=float(w),
+        max_lat=float(n),
+        max_lon=float(e),
+        water_level_m=water_level_m,
+    )
+
 
 class UserActivityItem(BaseModel):
     id: str

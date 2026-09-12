@@ -18,7 +18,7 @@ interface Drop {
   length: number;
   thickness: number;
   alpha: number;
-  normalizedU: number; // 0 to 1 across active column width
+  normalizedU: number;
 }
 
 interface Ripple {
@@ -27,21 +27,6 @@ interface Ripple {
   radius: number;
   maxRadius: number;
   alpha: number;
-}
-
-function getDensePerimeter(coords: [number, number][], samplesPerSegment = 8): [number, number][] {
-  if (!coords || coords.length < 3) return [];
-  const dense: [number, number][] = [];
-  const n = coords.length;
-  for (let i = 0; i < n; i++) {
-    const [lat1, lng1] = coords[i];
-    const [lat2, lng2] = coords[(i + 1) % n];
-    for (let s = 0; s < samplesPerSegment; s++) {
-      const t = s / samplesPerSegment;
-      dense.push([lat1 + (lat2 - lat1) * t, lng1 + (lng2 - lng1) * t]);
-    }
-  }
-  return dense;
 }
 
 function isPointInPoly(lat: number, lng: number, poly: [number, number][]): boolean {
@@ -72,19 +57,27 @@ export default function CesiumSelectedAreaRainOverlay({
   const animFrameIdRef = useRef<number | null>(null);
   const dropsRef = useRef<Drop[]>([]);
   const ripplesRef = useRef<Ripple[]>([]);
+  const projectedPtsRef = useRef<{ x: number; y: number }[]>([]);
+  const boundsRef = useRef<{ minX: number; maxX: number; minY: number; maxY: number }>({
+    minX: 0,
+    maxX: 1000,
+    minY: 0,
+    maxY: 800,
+  });
+  const lastProjectTimeRef = useRef<number>(0);
 
-  // Initialize drops starting from the TOP of the screen
+  // Initialize drops - optimized lightweight pool (120 to 220 drops is plenty for high density)
   useEffect(() => {
-    const totalDrops = Math.max(220, Math.min(650, Math.round(intensityMm * 5.5)));
+    const totalDrops = Math.max(100, Math.min(240, Math.round(intensityMm * 2.2)));
     const drops: Drop[] = [];
     for (let i = 0; i < totalDrops; i++) {
       drops.push({
         x: Math.random(),
-        y: -40 + Math.random() * 1200, // Staggered vertically from top of screen
-        speed: 16 + Math.random() * 18, // Fast, natural rainfall speed
-        length: 22 + Math.random() * 26, // Long, visible streaks
-        thickness: 1.6 + Math.random() * 1.4,
-        alpha: 0.65 + Math.random() * 0.35,
+        y: -30 + Math.random() * 1000,
+        speed: 18 + Math.random() * 16,
+        length: 22 + Math.random() * 22,
+        thickness: 1.4 + Math.random() * 1.0,
+        alpha: 0.55 + Math.random() * 0.35,
         normalizedU: Math.random(),
       });
     }
@@ -106,11 +99,11 @@ export default function CesiumSelectedAreaRainOverlay({
       return;
     }
 
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
     // Wind drift offset in horizontal pixels per frame
-    const windX = (windSpeedKmh / 20.0) * 3.8;
+    const windX = (windSpeedKmh / 20.0) * 3.2;
 
     const render = () => {
       animFrameIdRef.current = requestAnimationFrame(render);
@@ -120,13 +113,10 @@ export default function CesiumSelectedAreaRainOverlay({
       const h = rect.height;
       if (w <= 0 || h <= 0) return;
 
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const targetW = Math.round(w * dpr);
-      const targetH = Math.round(h * dpr);
-      if (canvas.width !== targetW || canvas.height !== targetH) {
-        canvas.width = targetW;
-        canvas.height = targetH;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Use standard 1x pixel ratio for rain overlay to save massive GPU fillrate
+      if (canvas.width !== Math.round(w) || canvas.height !== Math.round(h)) {
+        canvas.width = Math.round(w);
+        canvas.height = Math.round(h);
       }
 
       ctx.clearRect(0, 0, w, h);
@@ -135,73 +125,54 @@ export default function CesiumSelectedAreaRainOverlay({
       const hasViewer = viewer && !viewer.isDestroyed() && viewer.scene;
       const scene = hasViewer ? viewer.scene : null;
 
-      const toWindowCoords = Cesium?.SceneTransforms?.worldToWindowCoordinates ||
-        Cesium?.SceneTransforms?.wgs84ToWindowCoordinates;
-
-      // Determine if viewer is in Flat View or camera is standing inside the monitored area
+      // Throttled boundary projection: reproject at most every 60ms or when camera moves
+      const now = performance.now();
       let standingInsideArea = isFlatView;
-      if (!standingInsideArea && hasViewer && polygonCoords && polygonCoords.length >= 3) {
-        try {
-          const camPos = viewer.camera?.positionCartographic;
-          if (camPos) {
-            const camLat = Cesium.Math.toDegrees(camPos.latitude);
-            const camLng = Cesium.Math.toDegrees(camPos.longitude);
-            if (isPointInPoly(camLat, camLng, polygonCoords)) {
-              standingInsideArea = true;
+
+      if (now - lastProjectTimeRef.current > 60 && hasViewer && polygonCoords && polygonCoords.length >= 3) {
+        lastProjectTimeRef.current = now;
+
+        const toWindowCoords =
+          Cesium?.SceneTransforms?.worldToWindowCoordinates ||
+          Cesium?.SceneTransforms?.wgs84ToWindowCoordinates;
+
+        if (toWindowCoords) {
+          const pts: { x: number; y: number }[] = [];
+          for (let i = 0; i < polygonCoords.length; i++) {
+            const [lat, lng] = polygonCoords[i];
+            try {
+              const cart3 = Cesium.Cartesian3.fromDegrees(Number(lng), Number(lat), groundHeight);
+              const win = toWindowCoords.call(Cesium.SceneTransforms, scene, cart3);
+              if (win && !isNaN(win.x) && !isNaN(win.y)) {
+                pts.push({ x: win.x, y: win.y });
+              }
+            } catch (e) {}
+          }
+
+          if (pts.length >= 3) {
+            projectedPtsRef.current = pts;
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (let i = 0; i < pts.length; i++) {
+              if (pts[i].x < minX) minX = pts[i].x;
+              if (pts[i].x > maxX) maxX = pts[i].x;
+              if (pts[i].y < minY) minY = pts[i].y;
+              if (pts[i].y > maxY) maxY = pts[i].y;
             }
+            boundsRef.current = {
+              minX: Math.max(-50, minX - 30),
+              maxX: Math.min(w + 50, maxX + 30),
+              minY: Math.max(0, minY),
+              maxY: Math.min(h, maxY),
+            };
           }
-        } catch (e) {}
-      }
-
-      // ─── 1. COMPUTE BOUNDARIES & PROJECT POINTS ───────────────────────────
-      const pts: { x: number; y: number }[] = [];
-      let minX = 0;
-      let maxX = w;
-      let minY = 0;
-      let maxY = h;
-
-      if (!standingInsideArea && hasViewer && toWindowCoords && polygonCoords && polygonCoords.length >= 3) {
-        const dense = getDensePerimeter(polygonCoords, 8);
-        try {
-          for (let i = 0; i < dense.length; i++) {
-            const [lat, lng] = dense[i];
-            const cart3 = Cesium.Cartesian3.fromDegrees(Number(lng), Number(lat), groundHeight);
-            const win = toWindowCoords.call(Cesium.SceneTransforms, scene, cart3);
-            if (
-              win &&
-              typeof win.x === "number" &&
-              typeof win.y === "number" &&
-              !isNaN(win.x) &&
-              !isNaN(win.y)
-            ) {
-              pts.push({ x: win.x, y: win.y });
-            }
-          }
-        } catch (e) {}
-
-        if (pts.length >= 3) {
-          minX = Infinity;
-          maxX = -Infinity;
-          minY = Infinity;
-          maxY = -Infinity;
-
-          for (let i = 0; i < pts.length; i++) {
-            const p = pts[i];
-            if (p.x < minX) minX = p.x;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
-          }
-
-          // Expand rain column horizontally to cover entire precipitation shaft
-          minX = Math.max(-60, minX - 40);
-          maxX = Math.min(w + 60, maxX + 40);
         }
       }
 
+      const pts = projectedPtsRef.current;
+      const { minX, maxX, minY, maxY } = boundsRef.current;
       const spanX = Math.max(40, maxX - minX);
 
-      // ─── 2. GROUND SPLASHES & ATMOSPHERIC WASH (Clipping inside layer) ──────
+      // ─── 1. ATMOSPHERIC TINT & PRECIPITATION CONE (NO shadowBlur, ultra-fast) ──
       if (pts.length >= 3 && !standingInsideArea) {
         ctx.save();
         ctx.beginPath();
@@ -210,118 +181,76 @@ export default function CesiumSelectedAreaRainOverlay({
           ctx.lineTo(pts[i].x, pts[i].y);
         }
         ctx.closePath();
-        ctx.clip();
 
-        // Atmospheric precipitation tint strictly on the monitored ground layer
-        ctx.fillStyle = "rgba(14, 116, 144, 0.18)";
+        // Atmospheric precipitation tint on the ground boundary
+        ctx.fillStyle = "rgba(14, 116, 144, 0.12)";
         ctx.fill();
 
-        // Glowing boundary line clearly outlining the precise selected cut
-        ctx.lineWidth = 2.2;
-        ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
-        ctx.shadowColor = "rgba(14, 165, 233, 0.6)";
-        ctx.shadowBlur = 8;
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.65)";
         ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        // Ground splash ripples inside the layer
-        const ripples = ripplesRef.current;
-        for (let i = ripples.length - 1; i >= 0; i--) {
-          const r = ripples[i];
-          r.radius += 0.7;
-          r.alpha -= 0.035;
-
-          if (r.alpha <= 0 || r.radius >= r.maxRadius) {
-            ripples.splice(i, 1);
-            continue;
-          }
-
-          ctx.beginPath();
-          ctx.ellipse(r.x, r.y, r.radius * 1.8, r.radius * 0.7, 0, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(186, 230, 253, ${r.alpha})`;
-          ctx.lineWidth = 1.4;
-          ctx.stroke();
-        }
 
         ctx.restore();
-      } else if (standingInsideArea) {
-        // In Flat View: atmospheric mist across the ground horizon
-        const horizonY = h * 0.45;
-        const groundGrad = ctx.createLinearGradient(0, horizonY, 0, h);
-        groundGrad.addColorStop(0, "rgba(14, 116, 144, 0.0)");
-        groundGrad.addColorStop(1, "rgba(14, 116, 144, 0.20)");
-        ctx.fillStyle = groundGrad;
-        ctx.fillRect(0, horizonY, w, h - horizonY);
+      }
 
-        // Ground splash ripples in Flat View
-        const ripples = ripplesRef.current;
+      // ─── 2. GROUND SPLASH RIPPLES (Batched in 1 path) ──────────────────────
+      const ripples = ripplesRef.current;
+      if (ripples.length > 0) {
+        ctx.beginPath();
         for (let i = ripples.length - 1; i >= 0; i--) {
           const r = ripples[i];
           r.radius += 0.8;
-          r.alpha -= 0.035;
-
+          r.alpha -= 0.04;
           if (r.alpha <= 0 || r.radius >= r.maxRadius) {
             ripples.splice(i, 1);
             continue;
           }
-
-          ctx.beginPath();
-          ctx.ellipse(r.x, r.y, r.radius * 2.0, r.radius * 0.6, 0, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(186, 230, 253, ${r.alpha * 0.9})`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
+          ctx.moveTo(r.x + r.radius * 1.8, r.y);
+          ctx.ellipse(r.x, r.y, r.radius * 1.8, r.radius * 0.6, 0, 0, Math.PI * 2);
         }
+        ctx.strokeStyle = "rgba(186, 230, 253, 0.4)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
       }
 
-      // ─── 3. FALLING RAIN STREAKS (Cascading FROM THE TOP OF THE SCREEN) ────
+      // ─── 3. FALLING RAIN STREAKS (Batched into a SINGLE draw call!) ─────────
       const drops = dropsRef.current;
-      const groundImpactY = standingInsideArea ? h : (pts.length >= 3 ? maxY + 30 : h);
+      const groundImpactY = standingInsideArea ? h : (pts.length >= 3 ? maxY + 20 : h);
 
+      ctx.beginPath();
       for (let i = 0; i < drops.length; i++) {
         const d = drops[i];
-
         d.y += d.speed;
 
-        // When drop impacts the ground plane: spawn splash ripple and reset to TOP OF SCREEN
-        if (d.y >= groundImpactY || d.y >= h + 30) {
-          if (ripplesRef.current.length < 60 && Math.random() < 0.4) {
+        if (d.y >= groundImpactY || d.y >= h + 20) {
+          if (ripples.length < 35 && Math.random() < 0.3) {
             const splashX = minX + d.normalizedU * spanX;
-            const splashY = standingInsideArea
-              ? h * 0.55 + Math.random() * (h * 0.42)
-              : Math.max(minY, Math.min(maxY, d.y - 10));
-
-            ripplesRef.current.push({
+            const splashY = standingInsideArea ? h * 0.6 + Math.random() * (h * 0.35) : Math.max(minY, Math.min(maxY, d.y - 10));
+            ripples.push({
               x: splashX,
               y: splashY,
-              radius: 1.5,
-              maxRadius: 8 + Math.random() * 12,
-              alpha: 0.85,
+              radius: 1.2,
+              maxRadius: 7 + Math.random() * 8,
+              alpha: 0.7,
             });
           }
-          // Reset drop cleanly ABOVE THE TOP OF THE SCREEN
-          d.y = -35 - Math.random() * 60;
+          d.y = -30 - Math.random() * 50;
           d.normalizedU = Math.random();
         }
 
-        const dropX = minX + d.normalizedU * spanX + (d.y / h) * windX;
+        const dropX = minX + d.normalizedU * spanX + (d.y / Math.max(1, h)) * windX;
         const dropY = d.y;
-
-        const endX = dropX + windX * 0.8;
+        const endX = dropX + windX * 0.6;
         const endY = dropY + d.length;
 
-        const grad = ctx.createLinearGradient(dropX, dropY, endX, endY);
-        grad.addColorStop(0, "rgba(255, 255, 255, 0.05)");
-        grad.addColorStop(0.5, `rgba(224, 242, 254, ${d.alpha * 0.9})`);
-        grad.addColorStop(1, `rgba(56, 189, 248, ${d.alpha})`);
-
-        ctx.beginPath();
         ctx.moveTo(dropX, dropY);
         ctx.lineTo(endX, endY);
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = d.thickness;
-        ctx.lineCap = "round";
-        ctx.stroke();
       }
+
+      ctx.strokeStyle = "rgba(200, 235, 255, 0.65)";
+      ctx.lineWidth = 1.4;
+      ctx.lineCap = "round";
+      ctx.stroke();
     };
 
     render();

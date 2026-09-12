@@ -61,20 +61,39 @@ export interface RiverFeature {
 
 export interface BuildingFeature {
   type: "Feature";
+  id?: string;
   properties: {
     id: string;
-    osm_type: "way" | "relation";
-    osm_id: number;
-    building: string;
-    name: string;
-    height_m: number;
-    height_source: string;
+    name?: string;
+    osm_type?: "way" | "relation";
+    osm_id?: number;
+    building?: string;
+    height?: number;
+    height_m?: number;
+    estimated_height?: number;
+    height_category?: string;
+    height_source?: string;
+    area_sqm?: number;
+    elevation?: number;
+    elevation_m?: number;
+    lat?: number;
+    lon?: number;
+    flood_risk?: "SAFE" | "MODERATE" | "HIGH" | "CRITICAL";
+    flood_risk_score?: number;
+    risk_color?: string;
+    landslide_risk?: "LOW" | "MODERATE" | "HIGH";
+    distance_to_river_m?: number;
+    distance_from_river?: string;
+    evacuation_zone?: string;
+    confidence?: number;
+    source?: string;
   };
   geometry: {
     type: "Polygon" | "MultiPolygon";
     coordinates: number[][][] | number[][][][];
   };
 }
+
 
 export interface OsmLoadingStatus {
   complete: boolean;
@@ -232,3 +251,60 @@ export async function getEmergencyShelters(lat?: number, lng?: number): Promise<
   const query = lat !== undefined && lng !== undefined ? `?lat=${lat}&lng=${lng}` : "";
   return apiGet<{ shelters: Shelter[] }>(`/geo/shelters${query}`);
 }
+
+export interface MicrosoftBuildingsResponse {
+  type: "FeatureCollection";
+  features: BuildingFeature[];
+  metadata: {
+    source: string;
+    total_buildings: number;
+    safe: number;
+    moderate: number;
+    high: number;
+    critical: number;
+    bbox: { min_lat: number; min_lon: number; max_lat: number; max_lon: number };
+    retrieved_at?: string;
+  };
+}
+
+export async function fetchMicrosoftBuildings(
+  params: {
+    minLat: number;
+    minLon: number;
+    maxLat: number;
+    maxLon: number;
+    water_level_m?: number;
+    max_buildings?: number;
+    polygon?: [number, number][];
+  },
+  signal?: AbortSignal
+): Promise<MicrosoftBuildingsResponse> {
+  if (params.polygon && params.polygon.length >= 3) {
+    return apiPost<MicrosoftBuildingsResponse>(
+      "/buildings",
+      {
+        minLat: params.minLat,
+        minLon: params.minLon,
+        maxLat: params.maxLat,
+        maxLon: params.maxLon,
+        water_level_m: params.water_level_m ?? 0.0,
+        max_buildings: params.max_buildings ?? 2500,
+        polygon: params.polygon,
+      },
+      { signal }
+    );
+  }
+
+  const query = new URLSearchParams({
+    minLat: params.minLat.toFixed(6),
+    minLon: params.minLon.toFixed(6),
+    maxLat: params.maxLat.toFixed(6),
+    maxLon: params.maxLon.toFixed(6),
+    ...(params.water_level_m !== undefined ? { water_level_m: params.water_level_m.toString() } : {}),
+    ...(params.max_buildings ? { max_buildings: params.max_buildings.toString() } : {}),
+  });
+
+  return apiGet<MicrosoftBuildingsResponse>(`/buildings?${query.toString()}`, { signal });
+}
+
+

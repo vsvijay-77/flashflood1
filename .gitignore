@@ -53,8 +53,15 @@ __pycache__/
 *pyc*
 venv/
 .venv/
+backend/venv
 backend/cache/
 backend/preview_*.png
+
+# Logs and local artifacts
+.logs/
+frontend/node_modules.previous/
+frontend/public/cesium/
+frontend/public/cesium
 
 # Environment files — NEVER commit these, they hold secrets (JWT_SECRET, API keys, DB URIs).
 # Commit the .env.example templates instead.

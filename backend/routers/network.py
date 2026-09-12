@@ -23,14 +23,6 @@ from models.schemas import (
 
 router = APIRouter(tags=["network"])
 
-# In-memory TTL caches to eliminate redundant remote database network roundtrips
-_STATS_CACHE: Dict[str, Any] = {"data": None, "expires_at": 0.0}
-_ZONES_CACHE: Dict[str, Any] = {"data": None, "expires_at": 0.0}
-
-def invalidate_network_cache():
-    _STATS_CACHE["expires_at"] = 0.0
-    _ZONES_CACHE["expires_at"] = 0.0
-
 UNITS = {
     "rainfall": "mm/h",
     "soil_moisture": "%",
@@ -44,15 +36,8 @@ UNITS = {
 
 @router.get("/zones", response_model=List[Zone])
 async def list_zones(user: dict = Depends(current_user)):
-    now = time.time()
-    if _ZONES_CACHE["data"] is not None and now < _ZONES_CACHE["expires_at"]:
-        return _ZONES_CACHE["data"]
-
     docs = await db.zones.find({}, {"_id": 0}).to_list(500)
-    result = [Zone(**d) for d in docs]
-    _ZONES_CACHE["data"] = result
-    _ZONES_CACHE["expires_at"] = now + 30.0  # 30-second TTL
-    return result
+    return [Zone(**d) for d in docs]
 
 
 @router.get("/zones/{zone_id}", response_model=Zone)
@@ -101,7 +86,6 @@ async def create_sensor(payload: SensorCreate, user: dict = Depends(require_role
     )
     await db.sensors.insert_one(sensor.model_dump())
     await db.zones.update_one({"id": payload.zone_id}, {"$inc": {"sensor_count": 1}})
-    invalidate_network_cache()
     return sensor
 
 
@@ -114,7 +98,6 @@ async def update_sensor(
     result = await db.sensors.update_one({"id": sensor_id}, {"$set": changes})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Sensor not found")
-    invalidate_network_cache()
     doc = await db.sensors.find_one({"id": sensor_id}, {"_id": 0})
     return Sensor(**doc)
 
@@ -126,16 +109,11 @@ async def delete_sensor(sensor_id: str, user: dict = Depends(require_roles("admi
         raise HTTPException(status_code=404, detail="Sensor not found")
     await db.sensors.delete_one({"id": sensor_id})
     await db.zones.update_one({"id": doc["zone_id"]}, {"$inc": {"sensor_count": -1}})
-    invalidate_network_cache()
     return MessageResponse(message=f"Sensor {doc['code']} decommissioned")
 
 
 @router.get("/stats", response_model=NetworkStats)
 async def network_stats(user: dict = Depends(current_user)):
-    now = time.time()
-    if _STATS_CACHE["data"] is not None and now < _STATS_CACHE["expires_at"]:
-        return _STATS_CACHE["data"]
-
     # Execute all 7 count queries concurrently rather than sequentially
     total, active, gateways, alerts, zones, critical, high = await asyncio.gather(
         db.sensors.count_documents({}),
@@ -147,7 +125,7 @@ async def network_stats(user: dict = Depends(current_user)):
         db.alerts.count_documents({"status": {"$ne": "resolved"}, "risk_level": "high"}),
     )
     level = "CRITICAL" if critical else "HIGH" if high else "MODERATE" if alerts else "LOW"
-    result = NetworkStats(
+    return NetworkStats(
         active_sensors=active,
         total_sensors=total,
         online_gateways=gateways,
@@ -156,9 +134,7 @@ async def network_stats(user: dict = Depends(current_user)):
         data_streams=active * 5,
         national_hazard_level=level,
     )
-    _STATS_CACHE["data"] = result
-    _STATS_CACHE["expires_at"] = now + 10.0  # 10-second TTL
-    return result
+
 
 
 

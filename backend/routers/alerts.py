@@ -33,6 +33,55 @@ async def list_alerts(
     return [Alert(**d) for d in docs]
 
 
+@router.get("/alerts/sos")
+async def get_sos_requests(
+    status: Optional[str] = Query(default=None),
+    emergency_type: Optional[str] = Query(default=None),
+):
+    """Fetch live mobile SOS emergency requests from Supabase mob_sos_requests table."""
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        def _fetch():
+            from lib.db import get_supabase
+            sb = get_supabase()
+            q = sb.table("mob_sos_requests").select("*")
+            if status:
+                q = q.eq("status", status)
+            if emergency_type:
+                q = q.eq("emergency_type", emergency_type)
+            return q.order("created_at", desc=True).limit(100).execute()
+        res = await loop.run_in_executor(None, _fetch)
+        return res.data or []
+    except Exception as e:
+        print(f"[SOS] Error fetching mob_sos_requests: {e}")
+        return []
+
+
+class SosStatusUpdate(AlertAction):
+    status: Optional[str] = None
+
+
+@router.patch("/alerts/sos/{sos_id}/status")
+async def update_sos_status(
+    sos_id: str,
+    payload: dict,
+):
+    """Update status of a mobile SOS request (e.g. IN_PROGRESS, RESOLVED, ACKNOWLEDGED)."""
+    try:
+        import asyncio
+        new_status = payload.get("status", "ACKNOWLEDGED")
+        loop = asyncio.get_running_loop()
+        def _update():
+            from lib.db import get_supabase
+            sb = get_supabase()
+            return sb.table("mob_sos_requests").update({"status": new_status}).eq("id", sos_id).execute()
+        res = await loop.run_in_executor(None, _update)
+        return {"status": "success", "data": res.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update SOS status: {str(e)}")
+
+
 @router.get("/alerts/{alert_id}", response_model=Alert)
 async def get_alert(alert_id: str, user: dict = Depends(current_user)):
     doc = await db.alerts.find_one({"id": alert_id}, {"_id": 0})
@@ -78,6 +127,8 @@ async def act_on_alert(
             raise HTTPException(status_code=422, detail="assigned_to is required to assign an alert")
         changes["status"] = "assigned"
         changes["assigned_to"] = payload.assigned_to
+    elif payload.action == "reopen":
+        changes["status"] = "open"
     else:
         changes["status"] = "resolved"
     await db.alerts.update_one({"id": alert_id}, {"$set": changes})
@@ -91,3 +142,4 @@ async def delete_alert(alert_id: str, user: dict = Depends(require_roles("admin"
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Alert not found")
     return MessageResponse(message="Alert record removed")
+

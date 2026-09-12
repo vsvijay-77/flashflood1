@@ -55,4 +55,4 @@ def test_acknowledge_assign_resolve_workflow_persists(client):
     assert stats["active_alerts"] == 2, stats  # was 3 unresolved, one just resolved
 
     # restore seeded state for other checks in this run
-    client.post(f"/alerts/{alert_id}/action", json={"action": "acknowledge"})
+    client.post(f"/alerts/{alert_id}/action", json={"action": "reopen"})

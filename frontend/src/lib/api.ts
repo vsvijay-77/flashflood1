@@ -1,4 +1,3 @@
-import { supabase } from "./supabase";
 // Typed fetch layer over the FastAPI backend. Base is the relative "/api" prefix so the
 // same code works in dev (Vite proxies /api → :8001) and behind a single origin in prod.
 const BASE = "/api";
@@ -45,15 +44,11 @@ async function refreshSession(): Promise<boolean> {
 
 
 async function send(method: string, path: string, body?: JsonBody, options?: RequestOptions): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession();
   const headers: Record<string, string> = body === undefined ? {} : { "Content-Type": "application/json" };
-  
-  if (session?.access_token) {
-    headers["Authorization"] = `Bearer ${session.access_token}`;
-  }
 
   return fetch(`${BASE}${path}`, {
     method,
+    credentials: "same-origin",
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: options?.signal,
@@ -84,9 +79,10 @@ async function request<T>(method: string, path: string, body?: JsonBody, options
 
 // The response type is yours to declare: nothing infers across the Python boundary, so a
 // TS interface here mirrors the endpoint's Pydantic model by hand — keep the two in sync.
-export const apiGet = <T>(path: string) => request<T>("GET", path);
+export const apiGet = <T>(path: string, options?: RequestOptions) => request<T>("GET", path, undefined, options);
 export const apiPost = <T>(path: string, body?: JsonBody, options?: RequestOptions) => request<T>("POST", path, body ?? null, options);
 export const apiPut = <T>(path: string, body?: JsonBody) => request<T>("PUT", path, body ?? null);
 export const apiPatch = <T>(path: string, body?: JsonBody) =>
   request<T>("PATCH", path, body ?? null);
 export const apiDelete = <T>(path: string) => request<T>("DELETE", path);
+

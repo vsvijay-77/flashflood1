@@ -13,10 +13,11 @@ const PlatformPage = lazy(() => import("@/pages/PublicPages").then(m => ({ defau
 const LoginPage = lazy(() => import("@/pages/AuthPages").then(m => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import("@/pages/AuthPages").then(m => ({ default: m.RegisterPage })));
 const ForgotPasswordPage = lazy(() => import("@/pages/AuthPages").then(m => ({ default: m.ForgotPasswordPage })));
+const OAuthConsentPage = lazy(() => import("@/pages/OAuthConsentPage"));
 
 const DashboardPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.DashboardPage })));
 const GISMonitoringPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.GISMonitoringPage })));
-const EnvironmentalMonitoringPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.EnvironmentalMonitoringPage })));
+const SosAlertsPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.SosAlertsPage })));
 const AnalyticsPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.AnalyticsPage })));
 const AreaDetailsPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.AreaDetailsPage })));
 
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/oauth/consent" element={<OAuthConsentPage />} />
 
           <Route
             element={
@@ -51,7 +53,8 @@ export default function App() {
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/gis" element={<GISMonitoringPage />} />
             <Route path="/digital-twin" element={<RoleBasedRoute allow={["admin", "gov_officer"]}><DigitalTwinPage /></RoleBasedRoute>} />
-            <Route path="/environmental" element={<RoleBasedRoute allow={["admin", "gov_officer", "field_officer"]}><EnvironmentalMonitoringPage /></RoleBasedRoute>} />
+            <Route path="/sos-alerts" element={<SosAlertsPage />} />
+            <Route path="/environmental" element={<Navigate to="/sos-alerts" replace />} />
             <Route path="/area" element={<AreaDetailsPage />} />
             <Route path="/risk" element={<RoleBasedRoute allow={["admin", "gov_officer"]}><RiskAssessmentPage /></RoleBasedRoute>} />
             <Route path="/alerts" element={<RoleBasedRoute allow={["admin", "gov_officer", "field_officer"]}><AlertsPage /></RoleBasedRoute>} />

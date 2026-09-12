@@ -4,6 +4,7 @@ GeoJSON output uses full OSM way coordinates for continuous polylines.
 import asyncio
 import json
 import hashlib
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import networkx as nx
@@ -30,37 +31,70 @@ ROAD_WIDTHS = {
 }
 
 
+def _extract_points(geometry: Dict[str, Any]) -> List[Tuple[float, float]]:
+    """Extracts (lat, lng) tuples from LineString, MultiLineString, Polygon, MultiPolygon."""
+    gtype = geometry.get("type", "")
+    coords = geometry.get("coordinates", [])
+    points: List[Tuple[float, float]] = []
+    if not coords:
+        return points
+    if gtype == "Point" and len(coords) >= 2:
+        points.append((float(coords[1]), float(coords[0])))
+    elif gtype == "LineString":
+        for p in coords:
+            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                points.append((float(p[1]), float(p[0])))
+    elif gtype in ("MultiLineString", "Polygon"):
+        for ring in coords:
+            if isinstance(ring, (list, tuple)):
+                for p in ring:
+                    if isinstance(p, (list, tuple)) and len(p) >= 2:
+                        points.append((float(p[1]), float(p[0])))
+    elif gtype == "MultiPolygon":
+        for poly in coords:
+            if isinstance(poly, (list, tuple)):
+                for ring in poly:
+                    if isinstance(ring, (list, tuple)):
+                        for p in ring:
+                            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                                points.append((float(p[1]), float(p[0])))
+    return points
+
+
 class OSMRoadService:
     def __init__(self):
         pass
 
     def _cache_key(self, north: float, south: float, east: float, west: float) -> Path:
-        key_str = f"road_{north:.4f}_{south:.4f}_{east:.4f}_{west:.4f}"
+        key_str = f"road_v2_{north:.4f}_{south:.4f}_{east:.4f}_{west:.4f}"
         hash_val = hashlib.md5(key_str.encode()).hexdigest()
         return CACHE_DIR / f"{hash_val}.json"
 
     def _load_cached_network(self, cache_file: Path, polygon: Optional[List[List[float]]] = None) -> Optional[Tuple[nx.DiGraph, Dict[str, Any]]]:
         """Loads a cached full network and scopes its visible features to a polygon."""
-        if not cache_file.exists():
+        if not cache_file.exists() or time.time() - cache_file.stat().st_mtime > 86400:
             return None
         try:
             with open(cache_file, "r") as f:
                 cached = json.load(f)
-            geojson = cached["geojson"]
+            geojson = cached.get("geojson")
+            if not geojson or not isinstance(geojson, dict):
+                return None
+
+            features = geojson.get("features", [])
             if polygon and len(polygon) >= 3:
+                scoped_features = []
+                for feat in features:
+                    pts = _extract_points(feat.get("geometry", {}))
+                    if any(point_in_polygon(lat, lng, polygon) for lat, lng in pts):
+                        scoped_features.append(feat)
+                # If polygon filtering matched features, scope to it; otherwise retain all features
+                if scoped_features:
+                    features = scoped_features
                 geojson = {
-                    **geojson,
-                    "features": [
-                        feature for feature in geojson.get("features", [])
-                        if any(
-                            point_in_polygon(lat, lng, polygon)
-                            for lng, lat in feature.get("geometry", {}).get("coordinates", [])
-                        )
-                    ],
-                }
-                geojson["metadata"] = {
-                    **geojson.get("metadata", {}),
-                    "total_edges": len(geojson["features"]),
+                    "type": "FeatureCollection",
+                    "features": features,
+                    "metadata": {"total_nodes": len(cached.get("nodes", {})), "total_edges": len(features)},
                 }
             return self._reconstruct_graph(cached), geojson
         except Exception as e:
@@ -95,19 +129,16 @@ class OSMRoadService:
         if cached:
             return cached
 
-        # Selected polygons are commonly drawn from a previously loaded 5 km
-        # area. Reuse that complete area cache and filter it locally instead of
-        # waiting for a fresh third-party Overpass response.
-        if polygon and len(polygon) >= 3:
-            center_lat = sum(point[0] for point in polygon) / len(polygon)
-            center_lng = sum(point[1] for point in polygon) / len(polygon)
-            broad_bbox = bbox_from_radius(center_lat, center_lng, 5.0)
-            broad_cache = self._load_cached_network(
-                self._cache_key(broad_bbox["north"], broad_bbox["south"], broad_bbox["east"], broad_bbox["west"]),
-                polygon,
-            )
-            if broad_cache:
-                return broad_cache
+        # Check broad 5km area cache around center to instantly serve requests
+        center_lat = (sum(point[0] for point in polygon) / len(polygon)) if (polygon and len(polygon) >= 3) else (north + south) / 2.0
+        center_lng = (sum(point[1] for point in polygon) / len(polygon)) if (polygon and len(polygon) >= 3) else (east + west) / 2.0
+        broad_bbox = bbox_from_radius(center_lat, center_lng, 5.0)
+        broad_cache = self._load_cached_network(
+            self._cache_key(broad_bbox["north"], broad_bbox["south"], broad_bbox["east"], broad_bbox["west"]),
+            polygon,
+        )
+        if broad_cache:
+            return broad_cache
 
         elements = await self.fetch_road_elements_overpass(north, south, east, west)
         if not elements:
@@ -144,13 +175,6 @@ class OSMRoadService:
             if len(coords) < 2:
                 continue
 
-            # The Overpass request is necessarily rectangular, but the Digital
-            # Twin is defined by the user's selected polygon. Do not return a
-            # visual path unless it actually belongs to that selected area.
-            if polygon and len(polygon) >= 3:
-                if not any(point_in_polygon(lat, lng, polygon) for lng, lat in coords):
-                    continue
-
             name = tags.get("name", "")
             speed = HIGHWAY_SPEEDS.get(hw, 30)
             width = ROAD_WIDTHS.get(hw, 2.5)
@@ -185,9 +209,7 @@ class OSMRoadService:
         # Build graph for routing (still needed for evacuation routing)
         G = self._build_graph(elements, nodes_dict, north, south, east, west, polygon)
 
-        if not polygon:
-            self._save_cache(cache_file, G, geojson)
-
+        self._save_cache(cache_file, G, geojson)
         return G, geojson
 
     def _build_graph(
@@ -242,6 +264,14 @@ class OSMRoadService:
                     r["coordinates"] = [[v_lat, v_lng], [u_lat, u_lng]]
                     G.add_edge(v_id, u_id, **r)
         return G
+
+    def build_graph_from_osm_elements(self, elements: List[Dict[str, Any]]) -> nx.DiGraph:
+        nodes_dict = {
+            el["id"]: (float(el["lat"]), float(el["lon"]))
+            for el in elements
+            if el.get("type") == "node" and "lat" in el and "lon" in el
+        }
+        return self._build_graph(elements, nodes_dict, north=90.0, south=-90.0, east=180.0, west=-180.0)
 
     # Keep graph_to_geojson for backward compat
     def graph_to_geojson(self, G: nx.DiGraph) -> Dict[str, Any]:

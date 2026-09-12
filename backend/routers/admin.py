@@ -19,19 +19,23 @@ router = APIRouter(tags=["admin"])
 
 @router.get("/users", response_model=List[User])
 async def list_users(user: dict = Depends(require_roles("admin"))):
+    docs = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    users_list = [User(**d) for d in docs]
+    existing_emails = {d.get("email") for d in docs}
+
     try:
         auth_users = supabase.auth.admin.list_users()
         profiles_res = supabase.table("user_profiles").select("*").execute()
         profiles_by_id = {p["id"]: p for p in (profiles_res.data or [])}
 
-        users_list = []
         for u in auth_users:
+            if u.email and u.email in existing_emails:
+                continue
             p = profiles_by_id.get(u.id, {})
             email = u.email or ""
             meta = getattr(u, "user_metadata", {}) or {}
             first_name = p.get("first_name") or meta.get("first_name") or (email.split("@")[0] if email else "Officer")
             last_name = p.get("last_name") or meta.get("last_name") or ""
-
             status = meta.get("status") or "active"
             if getattr(u, "banned_until", None):
                 status = "suspended"
@@ -53,11 +57,9 @@ async def list_users(user: dict = Depends(require_roles("admin"))):
                     created_at=u.created_at,
                 )
             )
-        return users_list
-    except Exception as exc:
-        print("Error listing users from Supabase:", exc)
-        docs = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
-        return [User(**d) for d in docs]
+    except Exception:
+        pass
+    return users_list
 
 
 @router.patch("/users/{user_id}", response_model=User)
@@ -72,6 +74,18 @@ async def update_user(
             raise HTTPException(status_code=422, detail="status must be pending, active or suspended")
         changes["verified"] = changes["status"] == "active"
 
+    # Update local database primary
+    await db.users.update_one({"id": user_id}, {"$set": changes})
+    doc = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if doc:
+        try:
+            supabase.auth.admin.update_user_by_id(user_id, {"user_metadata": changes})
+            supabase.table("user_profiles").upsert({"id": user_id, **changes}).execute()
+        except Exception:
+            pass
+        return User(**doc)
+
+    # Fallback to Supabase if not in MongoDB
     try:
         auth_user = supabase.auth.admin.get_user_by_id(user_id)
         if not auth_user or not auth_user.user:
@@ -117,26 +131,19 @@ async def update_user(
     except HTTPException:
         raise
     except Exception as exc:
-        print("Error updating user in Supabase:", exc)
-        result = await db.users.update_one({"id": user_id}, {"$set": changes})
-        if result and result.matched_count == 0:
-            raise HTTPException(status_code=404, detail="User not found")
-        doc = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-        if not doc:
-            raise HTTPException(status_code=404, detail="User not found")
-        return User(**doc)
+        raise HTTPException(status_code=404, detail="User not found")
 
 
 @router.delete("/users/{user_id}", response_model=MessageResponse)
 async def delete_user(user_id: str, user: dict = Depends(require_roles("admin"))):
     if user_id == user["id"]:
         raise HTTPException(status_code=400, detail="You cannot remove your own account.")
+    await db.users.delete_one({"id": user_id})
     try:
         supabase.auth.admin.delete_user(user_id)
         supabase.table("user_profiles").delete().eq("id", user_id).execute()
-    except Exception as exc:
-        print("Error deleting user in Supabase:", exc)
-        await db.users.delete_one({"id": user_id})
+    except Exception:
+        pass
     return MessageResponse(message="User account removed")
 
 

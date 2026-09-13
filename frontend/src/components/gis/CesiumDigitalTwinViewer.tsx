@@ -294,7 +294,8 @@ export function CesiumDigitalTwinViewer({
 
   // ─── 📡 3D IOT MESH NODES (MASTER & SLAVE SENSORS) ───
   const meshNodeEntitiesRef = useRef<any[]>([]);
-  const [showMeshNodes, setShowMeshNodes] = useState<boolean>(true);
+  const [weatherTimeTab, setWeatherTimeTab] = useState<"NOW" | "24H" | "48H" | "7D">("NOW");
+  const [showMeshNodes, setShowMeshNodes] = useState<boolean>(false);
   const [showMeshPanel, setShowMeshPanel] = useState<boolean>(false);
   const [showRainPanel, setShowRainPanel] = useState<boolean>(false);
   const [isPickingLocation, setIsPickingLocation] = useState<"master" | "slave" | SensorType | null>(null);
@@ -1222,9 +1223,9 @@ export function CesiumDigitalTwinViewer({
             show: showBuildings && (buildingRiskFilter === "ALL" || risk === buildingRiskFilter),
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flat()), holes),
-              material: Cesium.Color.fromCssColorString(riskColor).withAlpha(0.85),
+              material: Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.85),
               outline: true,
-              outlineColor: Cesium.Color.fromCssColorString(riskColor).brighten(0.35, new Cesium.Color()),
+              outlineColor: Cesium.Color.fromCssColorString("#7dd3fc"),
               outlineWidth: 1.5,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               extrudedHeight: height,
@@ -3507,8 +3508,8 @@ export function CesiumDigitalTwinViewer({
       {/* Cesium WebGL Viewport */}
       <div ref={cesiumContainerRef} className="w-full h-full bg-black" />
 
-      {/* 🌊 Flood Heatmap Controls on Map's Left Rail with Eye / EyeOff Visibility Toggle */}
-      <div className="absolute top-14 left-3 z-20 w-56 rounded-xl border border-cyan-500/50 bg-slate-950/95 p-3 shadow-2xl backdrop-blur-md text-white animate-in fade-in slide-in-from-left-2 duration-200">
+      {/* 🌊 Flood Heatmap Controls on Map's Left Rail with Eye / EyeOff Visibility Toggle (100% Opacity) */}
+      <div className="absolute top-14 left-3 z-20 w-56 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white animate-in fade-in slide-in-from-left-2 duration-200">
         <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2">
           <div className="flex items-center gap-1.5">
             <Waves className="size-4 text-cyan-400" />
@@ -3555,6 +3556,87 @@ export function CesiumDigitalTwinViewer({
             onChange={(e) => setForecastHour(Number(e.target.value))}
           />
         </label>
+      </div>
+
+      {/* 🌤️ Weather & Rainfall Forecast Box (Below Flood Forecast on Left Rail, 100% Opacity) */}
+      <div className="absolute top-[165px] left-3 z-20 w-56 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2.5 animate-in fade-in slide-in-from-left-2 duration-200">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+          <div className="flex items-center gap-1.5">
+            <CloudRain className="size-4 text-cyan-400" />
+            <span className="text-xs font-bold text-cyan-200">Weather & Rainfall</span>
+          </div>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+            {weatherTimeTab === "NOW" ? "Live" : weatherTimeTab}
+          </span>
+        </div>
+
+        {/* Weather - Current Weather */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-slate-400 font-medium">Weather:</span>
+            <span className="font-semibold text-white">
+              {weatherTimeTab === "NOW"
+                ? "Moderate Rain"
+                : weatherTimeTab === "24H"
+                ? "Heavy Rain"
+                : weatherTimeTab === "48H"
+                ? "Storm Alert"
+                : "Light Drizzle"}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-1 bg-slate-900 p-1.5 rounded-lg border border-slate-800 text-[10px]">
+            <div>
+              <span className="text-slate-400 block text-[9px]">Temp</span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {weatherTimeTab === "NOW" ? "27°C" : weatherTimeTab === "24H" ? "24°C" : weatherTimeTab === "48H" ? "23°C" : "29°C"}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[9px]">Humidity</span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {weatherTimeTab === "NOW" ? "82%" : weatherTimeTab === "24H" ? "94%" : weatherTimeTab === "48H" ? "98%" : "71%"}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Rainfall */}
+        <div className="flex items-center justify-between text-[11px] bg-slate-900 p-2 rounded-lg border border-slate-800">
+          <div className="flex items-center gap-1.5">
+            <Droplets className="size-3.5 text-blue-400" />
+            <span className="text-slate-300 font-medium">Rainfall:</span>
+          </div>
+          <span className="font-mono text-cyan-300 font-bold text-xs">
+            {weatherTimeTab === "NOW"
+              ? "12.4 mm/h"
+              : weatherTimeTab === "24H"
+              ? "45.8 mm/h"
+              : weatherTimeTab === "48H"
+              ? "68.2 mm/h"
+              : "2.1 mm/h"}
+          </span>
+        </div>
+
+        {/* Time Tabs: Now, 24 hrs, 48 hrs, 7 days */}
+        <div className="space-y-1">
+          <div className="text-[10px] text-slate-400 font-semibold">Forecast Horizon</div>
+          <div className="grid grid-cols-4 gap-1">
+            {(["NOW", "24H", "48H", "7D"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setWeatherTimeTab(tab)}
+                className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
+                  weatherTimeTab === tab
+                    ? "bg-cyan-500 text-slate-950 ring-1 ring-cyan-300 shadow-sm"
+                    : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
+                }`}
+              >
+                {tab === "NOW" ? "Now" : tab === "24H" ? "24 hrs" : tab === "48H" ? "48 hrs" : "7 days"}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* 🌧️ 3D Cesium Selected Area Rain Simulation Overlay (Restricted 100% strictly inside selected boundary) */}
@@ -3784,53 +3866,7 @@ export function CesiumDigitalTwinViewer({
               style={{ maxHeight: isFullscreen ? "82vh" : "calc(100% - 60px)" }}
               className="absolute top-full mt-1.5 right-0 w-84 bg-slate-900/98 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-3 z-50 animate-in fade-in-50 zoom-in-95 duration-150 flex flex-col gap-2.5 text-left overflow-y-auto overscroll-contain custom-dt-scrollbar"
             >
-              {/* MASTER / SLAVE / SENSOR MESH */}
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
-                  IoT Sensor Mesh
-                </div>
-                <div
-                  onClick={() => {
-                    enterFullscreen();
-                    setSimulationMenuOpen(false);
-                    setShowEvacPanel(false);
-                    setShowRainPanel(false);
-                    setShowMeshPanel(true);
-                  }}
-                  className="p-2 bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-cyan-500/50 rounded-lg flex items-center justify-between cursor-pointer transition-all group"
-                >
-                  <div>
-                    <div className="text-xs font-semibold text-white group-hover:text-cyan-300">
-                      IoT Mesh Nodes & Sensors
-                    </div>
-                    <div className="text-[10px] text-slate-400">
-                      {meshNodes.length > 0
-                        ? `${masterNode ? "1 Master" : "0 Master"}, ${slaveNodes.length} Slaves, ${deployedSensors.length} Sensors`
-                        : "Click to place Master, Slaves & Sensors"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setShowMeshPanel(true);
-                    }}
-                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                      showMeshPanel
-                        ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-xs"
-                        : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700"
-                    }`}
-                  >
-                    {showMeshPanel ? "Active" : "Open"}
-                  </button>
-                </div>
-              </div>
 
-              <div className="border-t border-slate-800" />
 
               {/* RAIN */}
               <div className="space-y-1">
@@ -4427,215 +4463,7 @@ export function CesiumDigitalTwinViewer({
         </div>
       )}
 
-      {/* 📡 IOT MESH NODES & SENSORS (MASTER / SLAVE) FLOATING OVERLAY PANEL */}
-      {showMeshPanel && (
-        <div
-          onWheel={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-          style={{ maxHeight: isFullscreen ? "85vh" : "calc(100% - 70px)" }}
-          className="absolute top-14 right-3 z-30 w-96 bg-slate-900/95 backdrop-blur-md border border-cyan-500/50 rounded-xl p-3.5 shadow-2xl text-white flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden"
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-slate-700/80 pb-2.5 shrink-0">
-            <div className="flex items-center gap-2">
-              <div className="size-7 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-                <Radio className="size-4 animate-pulse" />
-              </div>
-              <div>
-                <div className="text-xs font-bold text-white leading-tight flex items-center gap-1.5">
-                  <span>IoT Mesh Nodes & Sensors</span>
-                  <span className="text-[9px] bg-cyan-950 text-cyan-300 border border-cyan-700 px-1.5 py-0.2 rounded-full font-mono">
-                    Master / Slave
-                  </span>
-                </div>
-                <div className="text-[10px] text-slate-400">Click anywhere on map to drop nodes & field sensors</div>
-              </div>
-            </div>
-            <button
-              onClick={() => setShowMeshPanel(false)}
-              className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-              title="Close Mesh Panel"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
 
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
-            {/* Quick Summary Bar */}
-            <div className="grid grid-cols-3 gap-1.5">
-              <div className="bg-slate-950/70 border border-amber-500/30 rounded-lg p-2 text-center">
-                <div className="text-[9px] text-amber-400 font-bold uppercase tracking-wider">Master Gateway</div>
-                <div className="text-xs font-bold text-amber-200 mt-0.5 font-mono">
-                  {masterNode ? "1 Active" : "0 Placed"}
-                </div>
-              </div>
-              <div className="bg-slate-950/70 border border-cyan-500/30 rounded-lg p-2 text-center">
-                <div className="text-[9px] text-cyan-400 font-bold uppercase tracking-wider">Slave Nodes</div>
-                <div className="text-xs font-bold text-cyan-200 mt-0.5 font-mono">
-                  {slaveNodes.length} Deployed
-                </div>
-              </div>
-              <div className="bg-slate-950/70 border border-emerald-500/30 rounded-lg p-2 text-center">
-                <div className="text-[9px] text-emerald-400 font-bold uppercase tracking-wider">Sensors</div>
-                <div className="text-xs font-bold text-emerald-200 mt-0.5 font-mono">
-                  {deployedSensors.length} Live
-                </div>
-              </div>
-            </div>
-
-            {/* 📍 Click Map to Place Section */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 space-y-2">
-              <div className="text-[11px] font-bold text-cyan-300 flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <MapPin className="size-3.5 text-cyan-400" />
-                  Place Nodes Anywhere on 3D Map
-                </span>
-                {isPickingLocation && (
-                  <span className="text-[9px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded animate-pulse">
-                    Click Map Now
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setIsPickingLocation("master")}
-                  className={`p-2 rounded-lg text-xs font-semibold cursor-pointer border text-left transition-all ${
-                    isPickingLocation === "master"
-                      ? "bg-amber-950/90 border-amber-400 ring-2 ring-amber-500 text-white"
-                      : "bg-slate-900 hover:bg-slate-850 border-amber-500/30 text-amber-200"
-                  }`}
-                >
-                  <div className="font-bold text-amber-300 flex items-center gap-1">
-                    <Radio className="size-3 text-amber-400" />
-                    <span>+ Drop Master</span>
-                  </div>
-                  <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
-                    Central LoRaWAN Gateway node
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsPickingLocation("slave")}
-                  className={`p-2 rounded-lg text-xs font-semibold cursor-pointer border text-left transition-all ${
-                    isPickingLocation === "slave"
-                      ? "bg-cyan-950/90 border-cyan-400 ring-2 ring-cyan-500 text-white"
-                      : "bg-slate-900 hover:bg-slate-850 border-cyan-500/30 text-cyan-200"
-                  }`}
-                >
-                  <div className="font-bold text-cyan-300 flex items-center gap-1">
-                    <Cpu className="size-3 text-cyan-400" />
-                    <span>+ Drop Slave</span>
-                  </div>
-                  <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
-                    Relay Slave node for sensors
-                  </div>
-                </button>
-              </div>
-
-              {/* Quick Preset Sensor buttons */}
-              <div className="pt-1 space-y-1.5">
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  Drop Sensor Node on Map:
-                </div>
-                <div className="grid grid-cols-3 gap-1">
-                  {[
-                    { type: "water_level", label: "Water Level", icon: Waves, color: "text-cyan-300 hover:bg-cyan-950" },
-                    { type: "soil_moisture", label: "Soil Moisture", icon: Droplets, color: "text-emerald-300 hover:bg-emerald-950" },
-                    { type: "imu", label: "9-Axis IMU", icon: Navigation, color: "text-purple-300 hover:bg-purple-950" },
-                    { type: "tilt", label: "Tilt Sentry", icon: ShieldAlert, color: "text-amber-300 hover:bg-amber-950" },
-                    { type: "raindrop", label: "Rain Drop", icon: CloudRain, color: "text-sky-300 hover:bg-sky-950" },
-                  ].map((s) => {
-                    const SIcon = s.icon;
-                    const isActive = isPickingLocation === s.type;
-                    return (
-                      <button
-                        key={s.type}
-                        type="button"
-                        onClick={() => setIsPickingLocation(s.type as SensorType)}
-                        className={`p-1.5 rounded text-[10px] font-semibold border border-slate-800 bg-slate-900 flex items-center gap-1 cursor-pointer transition-all ${
-                          isActive ? "bg-cyan-600 text-white border-cyan-400" : s.color
-                        }`}
-                      >
-                        <SIcon className="size-3" />
-                        <span className="truncate">{s.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Instant Auto-Deploy Button */}
-              <button
-                type="button"
-                onClick={addMasterAtCenter}
-                className="w-full mt-1.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs rounded-lg shadow cursor-pointer transition-all flex items-center justify-center gap-1.5"
-              >
-                <Zap className="size-3.5" />
-                <span>Auto-Deploy Gateway & Nodes at Map Center</span>
-              </button>
-            </div>
-
-            {/* Deployed Nodes List */}
-            <div className="space-y-1.5">
-              <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
-                <span>Deployed Mesh Nodes ({meshNodes.length})</span>
-                <span className="text-[9px] text-slate-400 font-mono">
-                  {showMeshNodes ? "Visible on 3D Map" : "Hidden"}
-                </span>
-              </div>
-
-              {meshNodes.length === 0 ? (
-                <div className="text-center py-4 bg-slate-950/60 rounded-xl border border-dashed border-slate-800 text-slate-500 text-xs">
-                  No mesh nodes deployed yet. Click "+ Drop Master" or "+ Drop Slave" above to place anywhere on the 3D viewer!
-                </div>
-              ) : (
-                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
-                  {meshNodes.map((node) => {
-                    const isMaster = node.type === "master";
-                    const nodeSensors = deployedSensors.filter((s) => s.slaveId === node.id);
-                    return (
-                      <div
-                        key={node.id}
-                        className={`p-2 rounded-xl border flex items-center justify-between text-xs transition-all ${
-                          isMaster
-                            ? "bg-amber-950/40 border-amber-500/50"
-                            : "bg-slate-950/80 border-slate-800 hover:border-cyan-500/40"
-                        }`}
-                      >
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`font-bold ${isMaster ? "text-amber-300" : "text-cyan-300"}`}>
-                              {isMaster ? "📡 " : "⚡ "}{node.name}
-                            </span>
-                            <span className="text-[9px] font-mono px-1.5 py-0.5 bg-slate-900 rounded text-slate-400">
-                              {node.lat.toFixed(4)}°, {node.lng.toFixed(4)}°
-                            </span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 font-mono flex items-center gap-2">
-                            <span>Signal: <strong className="text-emerald-400">{node.signalDbm} dBm</strong></span>
-                            <span>Bat: <strong className="text-emerald-400">{node.battery}%</strong></span>
-                            {!isMaster && <span>Sensors: <strong className="text-cyan-300">{nodeSensors.length}</strong></span>}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => deleteNode(node.id)}
-                          className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
-                          title="Remove node"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* 🌧️ STANDALONE RAIN SIMULATION PANEL (Shows ONLY Rain without Simulation Studio) */}
       {showRainPanel && (

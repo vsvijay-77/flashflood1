@@ -388,7 +388,7 @@ export function DigitalTwinPage() {
           {twinViewMode === "3d" ? (
             <div className="w-full transition-all duration-500 ease-out animate-in fade-in zoom-in-[0.99]">
               <CesiumDigitalTwinViewer
-                key="cesium-digital-twin"
+                key={`cesium-dt-${selectedAreaId || areaTitle}-${lat.toFixed(4)}-${lng.toFixed(4)}`}
                 latitude={lat}
                 longitude={lng}
                 areaName={areaTitle}

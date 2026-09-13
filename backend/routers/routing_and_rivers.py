@@ -118,7 +118,14 @@ async def extract_networks(payload: LocationRequest = Body(...)):
     Extracts real-world OpenStreetMap road network and river/waterway channels for any selected location.
     Accepts place name, polygon, or coordinates + radius.
     """
-    if payload.place_name:
+    # 1. Prioritize explicit polygon, viewport bbox, or coordinates
+    if payload.polygon and len(payload.polygon) >= 3:
+        bbox = bbox_from_polygon(payload.polygon)
+    elif payload.north is not None and payload.south is not None and payload.east is not None and payload.west is not None:
+        bbox = _derive_bbox(payload)
+    elif payload.lat is not None and payload.lng is not None:
+        bbox = _derive_bbox(payload)
+    elif payload.place_name:
         geocoded = await geocode_place_name(payload.place_name)
         if geocoded:
             bbox = {

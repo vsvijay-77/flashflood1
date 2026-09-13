@@ -417,17 +417,7 @@ export function CesiumDigitalTwinViewer({
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch (e) {}
-    const firstSlave = meshNodes.find((n) => n.type === "slave");
-    if (firstSlave) {
-      return [
-        { id: `sensor-water_level-${firstSlave.id}`, type: "water_level", name: "Water Level Sensor #1", slaveId: firstSlave.id, connectedAt: "System Init" },
-        { id: `sensor-soil_moisture-${firstSlave.id}`, type: "soil_moisture", name: "Soil Moisture Sensor #1", slaveId: firstSlave.id, connectedAt: "System Init" },
-        { id: `sensor-imu-${firstSlave.id}`, type: "imu", name: "9-Axis IMU #1", slaveId: firstSlave.id, connectedAt: "System Init" },
-        { id: `sensor-tilt-${firstSlave.id}`, type: "tilt", name: "Tilt Sensor #1", slaveId: firstSlave.id, connectedAt: "System Init" },
-        { id: `sensor-raindrop-${firstSlave.id}`, type: "raindrop", name: "Rain Drop Sensor #1", slaveId: firstSlave.id, connectedAt: "System Init" },
-      ];
-    }
-    return [];
+    return []; // Sensors only appear when user explicitly places or connects them
   });
 
   useEffect(() => {
@@ -552,6 +542,19 @@ export function CesiumDigitalTwinViewer({
     }
     // High-resolution 16-point natural basin perimeter around center coordinates (~1.2 km radius)
     return generateCirclePolygon(latitude, longitude, 1200, 16);
+  };
+
+  /** Ensures polygon coordinates [[lat, lng], ...] are in counter-clockwise (CCW) order */
+  const ensureCounterClockwise = (coords: [number, number][]): [number, number][] => {
+    if (!coords || coords.length < 3) return coords;
+    let shoelace = 0;
+    for (let i = 0; i < coords.length; i++) {
+      const p1 = coords[i];
+      const p2 = coords[(i + 1) % coords.length];
+      // x = lng, y = lat: shoelace sum = (x1 * y2 - x2 * y1)
+      shoelace += p1[1] * p2[0] - p2[1] * p1[0];
+    }
+    return shoelace < 0 ? [...coords].reverse() : coords;
   };
 
   const isPointInPolygon = (lat: number, lng: number, poly: [number, number][]): boolean => {
@@ -985,7 +988,13 @@ export function CesiumDigitalTwinViewer({
         const coords = road.geometry?.coordinates;
         if (!coords || coords.length < 2) return;
 
-        const clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
+        let clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
+        if (clippedSegments.length === 0) {
+          const anyInside = (coords as [number, number][]).some((p) => isPointInPolygon(p[1], p[0], activePoly));
+          if (anyInside) {
+            clippedSegments = [coords as [number, number][]];
+          }
+        }
         if (clippedSegments.length === 0) return;
 
         const rType = road.properties?.road_type || "residential";
@@ -1064,7 +1073,13 @@ export function CesiumDigitalTwinViewer({
         const coords = river.geometry?.coordinates;
         if (!coords || coords.length < 2) return;
 
-        const clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
+        let clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
+        if (clippedSegments.length === 0) {
+          const anyInside = (coords as [number, number][]).some((p) => isPointInPolygon(p[1], p[0], activePoly));
+          if (anyInside) {
+            clippedSegments = [coords as [number, number][]];
+          }
+        }
         if (clippedSegments.length === 0) return;
 
         const props = (river.properties as any) || {};
@@ -1530,7 +1545,7 @@ export function CesiumDigitalTwinViewer({
             lat: latitude,
             lng: longitude,
             radius_km: searchRadiusKm,
-            place_name: searchOverride || areaName || undefined,
+            place_name: searchOverride || undefined,
           }
         : viewportBbox
         ? {
@@ -1545,7 +1560,7 @@ export function CesiumDigitalTwinViewer({
             lat: latitude,
             lng: longitude,
             radius_km: searchRadiusKm,
-            place_name: searchOverride || areaName || undefined,
+            place_name: searchOverride || undefined,
           };
 
       console.log(`[DT] Fetching complete selected-area network: ${selectedPolygon ? `${selectedPolygon.length} boundary points` : viewportBbox ? `${viewportBbox.south.toFixed(3)},${viewportBbox.west.toFixed(3)} → ${viewportBbox.north.toFixed(3)},${viewportBbox.east.toFixed(3)}` : `center ${latitude},${longitude} r=${searchRadiusKm}km`}`);
@@ -1702,7 +1717,7 @@ export function CesiumDigitalTwinViewer({
       }
 
       // 3. 🎯 STRICT FILTER: Keep houses ONLY inside the marked area polygon
-      const markedAreaBuildings = rawCandidates.filter((b) => {
+      let markedAreaBuildings = rawCandidates.filter((b) => {
         const coords = b.geometry?.coordinates;
         if (!coords) return false;
         const ring = b.geometry.type === "Polygon"
@@ -1719,6 +1734,25 @@ export function CesiumDigitalTwinViewer({
 
         return isPointInPolygon(cLat, cLon, activePoly);
       });
+
+      // Fallback: If strict polygon raycasting yielded 0 but raw candidates exist within bounding box
+      if (markedAreaBuildings.length === 0 && rawCandidates.length > 0) {
+        markedAreaBuildings = rawCandidates.filter((b) => {
+          const coords = b.geometry?.coordinates;
+          if (!coords) return false;
+          const ring = b.geometry.type === "Polygon"
+            ? (coords as number[][][])[0]
+            : (coords as number[][][][])[0]?.[0];
+          if (!ring || ring.length < 3) return false;
+          const cLat = typeof b.properties?.lat === "number" && !isNaN(b.properties.lat)
+            ? b.properties.lat
+            : ring.reduce((sum, p) => sum + p[1], 0) / ring.length;
+          const cLon = typeof b.properties?.lon === "number" && !isNaN(b.properties.lon)
+            ? b.properties.lon
+            : ring.reduce((sum, p) => sum + p[0], 0) / ring.length;
+          return cLat >= minLat && cLat <= maxLat && cLon >= minLon && cLon <= maxLon;
+        });
+      }
 
       // 4. 📊 ACCURATE STATS: Calculate true values exclusively from the marked area houses
       const stats = {
@@ -2342,6 +2376,9 @@ export function CesiumDigitalTwinViewer({
       cleanCoords.pop();
     }
 
+    // Ensure CCW winding order so Cesium does not invert clipping and clip the inside terrain!
+    const ccwCoords = ensureCounterClockwise(cleanCoords);
+
     // 1. Precise 3D Terrain & Satellite Imagery clipping using Cesium's ClippingPolygonCollection.
     //    inverse = true clips away all terrain and imagery OUTSIDE the selected polygon!
     let clippingApplied = false;
@@ -2352,7 +2389,7 @@ export function CesiumDigitalTwinViewer({
       (!Cesium.ClippingPolygonCollection.isSupported || Cesium.ClippingPolygonCollection.isSupported(viewer.scene))
     ) {
       try {
-        const cartesianPositions = cleanCoords.map(([lat, lng]) =>
+        const cartesianPositions = ccwCoords.map(([lat, lng]) =>
           Cesium.Cartesian3.fromDegrees(lng, lat)
         );
         const clipPoly = new Cesium.ClippingPolygon({
@@ -2370,14 +2407,14 @@ export function CesiumDigitalTwinViewer({
       }
     }
 
-    // 2. Set cartographicLimitRectangle tightly around the polygon so Cesium only loads tiles for this area
+    // 2. Set cartographicLimitRectangle around the polygon with generous padding for 3D oblique tilt perspective
     const lats = cleanCoords.map(([la]) => la);
     const lngs = cleanCoords.map(([, lo]) => lo);
     const minLat = Math.min(...lats);
     const maxLat = Math.max(...lats);
     const minLng = Math.min(...lngs);
     const maxLng = Math.max(...lngs);
-    const pad = clippingApplied ? 0.005 : 0.0005;
+    const pad = 0.035; // ~3.8km padding so 3D tilted camera angles never cull the terrain tiles
 
     try {
       viewer.scene.globe.cartographicLimitRectangle = Cesium.Rectangle.fromDegrees(
@@ -2598,6 +2635,9 @@ export function CesiumDigitalTwinViewer({
             // Smoothly dissolve the loading veil
             setLoading(false);
 
+            // Load paths, water bodies, and buildings concurrently with entry flight
+            scheduleSelectedAreaLoad(polyCoords, true);
+
             // 3. Single continuous, uninterrupted cinematic flight into high-resolution 3D oblique perspective (6,500m at -45° tilt)
             viewerRef.current.camera.flyTo({
               destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.045, 6500),
@@ -2610,11 +2650,11 @@ export function CesiumDigitalTwinViewer({
               easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
               complete: () => {
                 isInFlightRef.current = false;
-                scheduleSelectedAreaLoad();
+                scheduleSelectedAreaLoad(polyCoords, true);
               },
               cancel: () => {
                 isInFlightRef.current = false;
-                scheduleSelectedAreaLoad();
+                scheduleSelectedAreaLoad(polyCoords, true);
               },
             });
           }, 120);
@@ -2981,6 +3021,33 @@ export function CesiumDigitalTwinViewer({
       try { buildingAbortRef.current.abort(); } catch (e) {}
     }
 
+    // Sync mesh nodes & deployed sensors for the new area (clears previous area sensors)
+    const newSafeName = (areaName || "default").replace(/\s+/g, "_");
+    const newStorageKey = `dt_mesh_nodes_${newSafeName}`;
+    const newSensorsStorageKey = `dt_deployed_sensors_${newSafeName}`;
+
+    let loadedNodes: DigitalTwinMeshNode[] = [];
+    try {
+      const saved = localStorage.getItem(newStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) loadedNodes = parsed;
+      }
+    } catch (e) {}
+
+    let loadedSensors: DeployedSensor[] = [];
+    try {
+      const saved = localStorage.getItem(newSensorsStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) loadedSensors = parsed;
+      }
+    } catch (e) {}
+
+    setMeshNodes(loadedNodes);
+    setDeployedSensors(loadedSensors);
+    render3DMeshNodes(loadedNodes);
+
     const areaCacheKey = polyCoords && polyCoords.length >= 3
       ? `poly_${polyCoords.map(([pLat, pLng]) => `${pLat.toFixed(4)},${pLng.toFixed(4)}`).join(";")}`
       : `coord_${latitude.toFixed(3)}_${longitude.toFixed(3)}`;
@@ -3009,7 +3076,7 @@ export function CesiumDigitalTwinViewer({
     lastViewportBboxRef.current = "";
 
     // Start loading the new area networks concurrently in parallel with camera flight
-    scheduleSelectedAreaLoad(polyCoords);
+    scheduleSelectedAreaLoad(polyCoords, true);
 
     const onFlyComplete = () => {
       isInFlightRef.current = false;

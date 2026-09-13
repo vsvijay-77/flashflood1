@@ -3752,148 +3752,49 @@ export function CesiumDigitalTwinViewer({
               className="absolute top-full mt-1.5 right-0 w-84 bg-slate-900/98 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-3 z-50 animate-in fade-in-50 zoom-in-95 duration-150 flex flex-col gap-2.5 text-left overflow-y-auto overscroll-contain custom-dt-scrollbar"
             >
               {/* MASTER / SLAVE / SENSOR MESH */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between px-0.5">
+              <div className="space-y-1">
+                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
+                  IoT Sensor Mesh
+                </div>
+                <div
+                  onClick={() => {
+                    enterFullscreen();
+                    setSimulationMenuOpen(false);
+                    setShowEvacPanel(false);
+                    setShowRainPanel(false);
+                    setShowMeshPanel(true);
+                  }}
+                  className="p-2 bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-cyan-500/50 rounded-lg flex items-center justify-between cursor-pointer transition-all group"
+                >
                   <div>
-                    <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Sensor Mesh</div>
-                    <div className="text-[10px] text-slate-500">Master, slave and field sensor network</div>
+                    <div className="text-xs font-semibold text-white group-hover:text-cyan-300">
+                      IoT Mesh Nodes & Sensors
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {meshNodes.length > 0
+                        ? `${masterNode ? "1 Master" : "0 Master"}, ${slaveNodes.length} Slaves, ${deployedSensors.length} Sensors`
+                        : "Click to place Master, Slaves & Sensors"}
+                    </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setShowMeshPanel((open) => !open)}
-                    className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition-colors ${
-                      showMeshPanel ? "bg-cyan-500 text-slate-950" : "bg-slate-800 text-cyan-300 hover:bg-slate-700"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      enterFullscreen();
+                      setSimulationMenuOpen(false);
+                      setShowEvacPanel(false);
+                      setShowRainPanel(false);
+                      setShowMeshPanel(true);
+                    }}
+                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      showMeshPanel
+                        ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-xs"
+                        : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700"
                     }`}
                   >
-                    {showMeshPanel ? "Hide" : "Open"}
+                    {showMeshPanel ? "Active" : "Open"}
                   </button>
                 </div>
-
-                {showMeshPanel && (
-                  <div className="space-y-2 rounded-lg border border-cyan-500/30 bg-slate-950/70 p-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] text-slate-400">
-                        {masterNode ? "1 master" : "No master"} · {slaveNodes.length} slaves · {deployedSensors.length} sensors
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowMeshNodes((visible) => !visible)}
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
-                          showMeshNodes ? "bg-emerald-600/80 text-emerald-100" : "bg-slate-800 text-slate-400"
-                        }`}
-                      >
-                        {showMeshNodes ? "Map visible" : "Map hidden"}
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={addMasterAtCenter}
-                        className="rounded-md bg-amber-600/90 hover:bg-amber-500 px-2 py-1.5 text-[10px] font-bold text-white cursor-pointer"
-                      >
-                        + Master at center
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsPickingLocation("master")}
-                        className="rounded-md bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-[10px] font-semibold text-amber-200 cursor-pointer"
-                      >
-                        Place Master on map
-                      </button>
-                    </div>
-
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Add slave + sensor</div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {([
-                        ["water_level", "Water"],
-                        ["soil_moisture", "Soil"],
-                        ["imu", "IMU"],
-                        ["tilt", "Tilt"],
-                        ["raindrop", "Rain drop"],
-                      ] as Array<[SensorType, string]>).map(([type, label]) => (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => addPresetSlaveNode(type)}
-                          className="rounded-md bg-cyan-700/80 hover:bg-cyan-600 px-2 py-1.5 text-[10px] font-semibold text-cyan-50 cursor-pointer"
-                        >
-                          + {label} slave
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsPickingLocation("slave")}
-                      className="w-full rounded-md bg-slate-800 hover:bg-slate-700 px-2 py-1.5 text-[10px] font-semibold text-cyan-200 cursor-pointer"
-                    >
-                      Place custom Slave on map
-                    </button>
-
-                    {slaveNodes.length > 0 && (
-                      <>
-                        <select
-                          value={selectedTargetSlaveId}
-                          onChange={(event) => setSelectedTargetSlaveId(event.target.value)}
-                          className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-[10px] text-white"
-                        >
-                          <option value="">Attach sensor to first slave</option>
-                          {slaveNodes.map((slave) => (
-                            <option key={slave.id} value={slave.id}>{slave.name}</option>
-                          ))}
-                        </select>
-                        <div className="grid grid-cols-3 gap-1.5">
-                          {([
-                            ["water_level", "Water"],
-                            ["soil_moisture", "Soil"],
-                            ["imu", "IMU"],
-                            ["tilt", "Tilt"],
-                            ["raindrop", "Rain"],
-                          ] as Array<[SensorType, string]>).map(([type, label]) => (
-                            <button
-                              key={type}
-                              type="button"
-                              onClick={() => addSensorToSlave(type)}
-                              className="rounded bg-slate-800 hover:bg-slate-700 px-1.5 py-1 text-[9px] font-semibold text-slate-200 cursor-pointer"
-                            >
-                              + {label} sensor
-                            </button>
-                          ))}
-                        </div>
-                      </>
-                    )}
-
-                    <div className="max-h-28 overflow-y-auto space-y-1 pr-0.5">
-                      {masterNode && (
-                        <div className="flex items-center gap-1.5 rounded bg-amber-950/50 border border-amber-700/50 px-2 py-1 text-[10px]">
-                          <Radio className="size-3 text-amber-300 shrink-0" />
-                          <span className="truncate text-amber-100 flex-1">Master · {masterNode.name}</span>
-                          <button type="button" onClick={() => focusOnNode(masterNode)} className="text-amber-300 hover:text-white cursor-pointer">Focus</button>
-                        </div>
-                      )}
-                      {slaveNodes.map((slave) => (
-                        <div key={slave.id} className="flex items-center gap-1.5 rounded bg-cyan-950/50 border border-cyan-700/50 px-2 py-1 text-[10px]">
-                          <Network className="size-3 text-cyan-300 shrink-0" />
-                          <span className="truncate text-cyan-100 flex-1">Slave · {slave.name}</span>
-                          <button type="button" onClick={() => focusOnNode(slave)} className="text-cyan-300 hover:text-white cursor-pointer">Focus</button>
-                          <button type="button" onClick={() => deleteNode(slave.id)} className="text-rose-300 hover:text-rose-100 cursor-pointer" title="Delete slave"><Trash2 className="size-3" /></button>
-                        </div>
-                      ))}
-                    </div>
-                    {deployedSensors.length > 0 && (
-                      <div className="max-h-24 overflow-y-auto space-y-1 border-t border-slate-800 pt-1.5">
-                        {deployedSensors.map((sensor) => (
-                          <div key={sensor.id} className="flex items-center gap-1.5 rounded bg-slate-900/80 px-2 py-1 text-[10px]">
-                            <Activity className="size-3 text-emerald-300 shrink-0" />
-                            <span className="truncate text-slate-300 flex-1">{sensor.name}</span>
-                            <span className="text-[9px] text-slate-500">{slaveNodes.find((slave) => slave.id === sensor.slaveId)?.name || "slave"}</span>
-                            <button type="button" onClick={() => deleteDeployedSensor(sensor.id)} className="text-rose-300 hover:text-rose-100 cursor-pointer" title="Delete sensor"><Trash2 className="size-3" /></button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
 
               <div className="border-t border-slate-800" />

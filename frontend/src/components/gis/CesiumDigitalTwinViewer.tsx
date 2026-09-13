@@ -46,6 +46,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import CesiumSelectedAreaRainOverlay from "../simulation/CesiumSelectedAreaRainOverlay";
+import TwinForecastHeatmap from "./TwinForecastHeatmap";
 import ThreeWaterSimulation from "../simulation/ThreeWaterSimulation";
 import DisasterIntelligenceChat from "./DisasterIntelligenceChat";
 import { toast } from "sonner";
@@ -190,6 +191,7 @@ export function CesiumDigitalTwinViewer({
   const [internalRain, setInternalRain] = useState<boolean>(false);
   const rainActive = isRaining !== undefined ? isRaining : internalRain;
   const [cesiumViewer, setCesiumViewer] = useState<any>(null);
+  const [forecastActive, setForecastActive] = useState(false);
   const [waterSimActive, setWaterSimActive] = useState<boolean>(false);
 
   // Movement flags for WASD and free-style navigation
@@ -1022,6 +1024,7 @@ export function CesiumDigitalTwinViewer({
       });
     } finally {
       viewer.entities.resumeEvents();
+      viewer.scene.requestRender();
       console.log(`[DT] render3DRoads: added ${roadEntitiesRef.current.length} entities to viewer`);
     }
   };
@@ -1109,6 +1112,7 @@ export function CesiumDigitalTwinViewer({
       });
     } finally {
       viewer.entities.resumeEvents();
+      viewer.scene.requestRender();
       console.log(`[DT] render3DRivers: added ${riverEntitiesRef.current.length} entities to viewer`);
     }
   };
@@ -1232,6 +1236,7 @@ export function CesiumDigitalTwinViewer({
       });
     } finally {
       viewer.entities.resumeEvents();
+      viewer.scene.requestRender();
       console.log(`[DT] render3DBuildings: added ${buildingEntitiesRef.current.length} Microsoft 3D building entities`);
     }
   };
@@ -2358,6 +2363,7 @@ export function CesiumDigitalTwinViewer({
 
     let isDisposed = false;
     let viewer: any = null;
+    let removePointerListeners = () => {};
 
     async function initCesium() {
       try {
@@ -2403,6 +2409,9 @@ export function CesiumDigitalTwinViewer({
         viewer = new Cesium.Viewer(cesiumContainerRef.current, {
           terrainProvider: terrainProvider || undefined,
           baseLayer: baseLayer || undefined,
+          requestRenderMode: true,
+          maximumRenderTimeChange: Infinity,
+          targetFrameRate: 60,
           animation: false,
           timeline: false,
           baseLayerPicker: false,
@@ -2678,9 +2687,19 @@ export function CesiumDigitalTwinViewer({
         window.addEventListener("mouseup", handleMouseUp);
         window.addEventListener("mousemove", handleMouseMove);
         canvas.addEventListener("wheel", handleWheel, { passive: false });
+        removePointerListeners = () => {
+          canvas.removeEventListener("mousedown", handleMouseDown);
+          window.removeEventListener("mouseup", handleMouseUp);
+          window.removeEventListener("mousemove", handleMouseMove);
+          canvas.removeEventListener("wheel", handleWheel);
+        };
 
-        // 🎮 WASD & FLAT VIEW TICK LOOP (preRender)
-        scene.preRender.addEventListener(() => {
+        // Input stays responsive while the scene is idle between requested frames.
+        let lastMovementTime = performance.now();
+        scene.preUpdate.addEventListener(() => {
+          const now = performance.now();
+          const movementStep = Math.min((now - lastMovementTime) / (1000 / 60), 3);
+          lastMovementTime = now;
           if (!viewerRef.current || viewerRef.current.isDestroyed()) return;
           const cam = viewerRef.current.camera;
           const flags = movementFlagsRef.current;
@@ -2697,7 +2716,8 @@ export function CesiumDigitalTwinViewer({
             flags.lookUp ||
             flags.lookDown;
 
-          if (!hasMovement) return;
+          if (!hasMovement || document.hidden) return;
+          scene.requestRender();
 
           if (viewModeRef.current === "flat") {
             // Normal Ground Movements on Flat View using WASD
@@ -2717,7 +2737,7 @@ export function CesiumDigitalTwinViewer({
             const currentCarto = ellipsoid.cartesianToCartographic(cam.position);
             const curAlt = currentCarto ? currentCarto.height : groundHeightMeters + 1.8;
             const heightAboveGround = Math.max(1.5, curAlt - groundHeightMeters);
-            const walkSpeed = Math.min(50.0, Math.max(5.5, heightAboveGround * 0.35));
+            const walkSpeed = Math.min(50.0, Math.max(5.5, heightAboveGround * 0.35)) * movementStep;
             let movedOnGround = false;
 
             if (flags.forward) {
@@ -2755,17 +2775,17 @@ export function CesiumDigitalTwinViewer({
 
             // Up / Down keys (Q / E or D-Pad): Increase / Decrease Altitude
             if (flags.up) {
-              const climb = Math.min(10.0, Math.max(0.4, heightAboveGround * 0.035));
+              const climb = Math.min(10.0, Math.max(0.4, heightAboveGround * 0.035)) * movementStep;
               cam.moveUp(climb);
             }
             if (flags.down) {
-              const descend = Math.min(10.0, Math.max(0.4, heightAboveGround * 0.035));
+              const descend = Math.min(10.0, Math.max(0.4, heightAboveGround * 0.035)) * movementStep;
               if (curAlt - descend >= groundHeightMeters + 1.2) {
                 cam.moveDown(descend);
               }
             }
             if (flags.turnLeft) {
-              const newHeading = Cesium.Math.zeroToTwoPi(cam.heading - Cesium.Math.toRadians(1.2));
+              const newHeading = Cesium.Math.zeroToTwoPi(cam.heading - Cesium.Math.toRadians(1.2 * movementStep));
               cam.setView({
                 destination: cam.position,
                 orientation: {
@@ -2777,7 +2797,7 @@ export function CesiumDigitalTwinViewer({
               setCamHeading(Math.round(Cesium.Math.toDegrees(newHeading)));
             }
             if (flags.turnRight) {
-              const newHeading = Cesium.Math.zeroToTwoPi(cam.heading + Cesium.Math.toRadians(1.2));
+              const newHeading = Cesium.Math.zeroToTwoPi(cam.heading + Cesium.Math.toRadians(1.2 * movementStep));
               cam.setView({
                 destination: cam.position,
                 orientation: {
@@ -2806,7 +2826,7 @@ export function CesiumDigitalTwinViewer({
             // 3D / Top-Down Flight Mode
             const carto = cam.positionCartographic;
             const curH = carto ? Math.max(5, carto.height) : 500;
-            const moveSpeed = Math.max(16.0, curH * 0.08);
+            const moveSpeed = Math.max(16.0, curH * 0.08) * movementStep;
 
             if (flags.forward) cam.moveForward(moveSpeed);
             if (flags.backward) cam.moveBackward(moveSpeed);
@@ -2815,10 +2835,10 @@ export function CesiumDigitalTwinViewer({
             if (flags.up) cam.moveUp(moveSpeed * 0.7);
             if (flags.down) cam.moveDown(moveSpeed * 0.7);
 
-            if (flags.turnLeft) cam.lookLeft(Cesium.Math.toRadians(1.2));
-            if (flags.turnRight) cam.lookRight(Cesium.Math.toRadians(1.2));
-            if (flags.lookUp) cam.lookUp(Cesium.Math.toRadians(0.8));
-            if (flags.lookDown) cam.lookDown(Cesium.Math.toRadians(0.8));
+            if (flags.turnLeft) cam.lookLeft(Cesium.Math.toRadians(1.2 * movementStep));
+            if (flags.turnRight) cam.lookRight(Cesium.Math.toRadians(1.2 * movementStep));
+            if (flags.lookUp) cam.lookUp(Cesium.Math.toRadians(0.8 * movementStep));
+            if (flags.lookDown) cam.lookDown(Cesium.Math.toRadians(0.8 * movementStep));
           }
         });
 
@@ -2838,6 +2858,7 @@ export function CesiumDigitalTwinViewer({
 
     return () => {
       isDisposed = true;
+      removePointerListeners();
       networkAbortRef.current?.abort();
       buildingAbortRef.current?.abort();
       if (orbitListenerRef.current) {
@@ -2864,6 +2885,11 @@ export function CesiumDigitalTwinViewer({
       }
     };
   }, [cesiumReady]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (viewer && !viewer.isDestroyed()) viewer.scene.requestRender();
+  });
 
   // React to Latitude / Longitude / Polygon changes
   useEffect(() => {
@@ -3037,9 +3063,15 @@ export function CesiumDigitalTwinViewer({
       const distance = viewMode === "flat" ? 60.0 : 7500.0;
       const pitchAngle = viewMode === "flat" ? -4 : -38;
 
-      orbitListenerRef.current = viewer.scene.preRender.addEventListener(() => {
+      let lastOrbitTime = performance.now();
+      orbitListenerRef.current = viewer.scene.preUpdate.addEventListener(() => {
+        const now = performance.now();
+        const dt = Math.min((now - lastOrbitTime) / 1000, 0.05);
+        lastOrbitTime = now;
+        if (document.hidden) return;
         if (!viewerRef.current || viewerRef.current.isDestroyed()) return;
-        angle += 0.0025;
+        angle += 0.15 * dt;
+        viewer.scene.requestRender();
         viewer.camera.lookAt(
           target,
           new Cesium.HeadingPitchRange(angle, Cesium.Math.toRadians(pitchAngle), distance)
@@ -3481,6 +3513,8 @@ export function CesiumDigitalTwinViewer({
         isFlatView={viewMode === "flat"}
       />
 
+      {forecastActive && <TwinForecastHeatmap viewer={cesiumViewer || viewerRef.current} polygon={getActivePolygon()} />}
+
       {/* 🌊 3D Realistic Three.js Water Simulation (OSM Water Bodies + DEM Shallow-Water Flow) */}
       <ThreeWaterSimulation
         cesiumViewer={cesiumViewer || viewerRef.current}
@@ -3690,301 +3724,7 @@ export function CesiumDigitalTwinViewer({
               style={{ maxHeight: isFullscreen ? "82vh" : "calc(100% - 60px)" }}
               className="absolute top-full mt-1.5 right-0 w-84 bg-slate-900/98 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-3 z-50 animate-in fade-in-50 zoom-in-95 duration-150 flex flex-col gap-2.5 text-left overflow-y-auto overscroll-contain custom-dt-scrollbar"
             >
-              {/* 1. NODES (MASTER / SLAVE) */}
-              <div className="space-y-1.5">
-                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
-                  Nodes
-                </div>
-
-                <div className="space-y-1">
-                  {/* Master */}
-                  <div
-                    onClick={() => {
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setActivePanelTab("master");
-                      setShowMeshPanel(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-amber-500/50 flex items-center justify-between cursor-pointer transition-all group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-amber-300">Master</div>
-                      <div className="text-[10px] text-slate-400">
-                        {masterNode ? "Placed on map" : "Not placed"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          enterFullscreen();
-                          setSimulationMenuOpen(false);
-                          setShowEvacPanel(false);
-                          setShowRainPanel(false);
-                          setShowMeshNodes(true);
-                          setIsPickingLocation("master");
-                        }}
-                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold rounded cursor-pointer transition-all active:scale-95"
-                      >
-                        {masterNode ? "Relocate" : "Place"}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Slave */}
-                  <div
-                    onClick={() => {
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setActivePanelTab("slave");
-                      setShowMeshPanel(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-cyan-500/50 flex items-center justify-between cursor-pointer transition-all group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-cyan-300">Slave</div>
-                      <div className="text-[10px] text-slate-400">
-                        {slaveNodes.length > 0 ? `${slaveNodes.length} placed` : "None placed"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          enterFullscreen();
-                          setSimulationMenuOpen(false);
-                          setShowEvacPanel(false);
-                          setShowRainPanel(false);
-                          setShowMeshNodes(true);
-                          setIsPickingLocation("slave");
-                        }}
-                        className="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold rounded cursor-pointer transition-all active:scale-95"
-                      >
-                        Place
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* DIVIDER */}
-              <div className="border-t border-slate-800" />
-
-              {/* 2. SENSORS (WATER LEVEL, SOIL MOISTURE, 9-AXIS IMU, TILT SENSOR, RAIN DROP SENSOR) */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between px-0.5">
-                  <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Sensors</span>
-                  <span className="text-[9px] text-cyan-400 font-mono">Connects to Slave</span>
-                </div>
-
-                <div className="space-y-1">
-                  {/* Water Level */}
-                  <div
-                    onClick={() => {
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setActivePanelTab("sensors");
-                      setShowMeshPanel(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500/50 flex items-center justify-between cursor-pointer transition-all group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-sky-300">Water Level</div>
-                      <div className="text-[10px] text-slate-400">
-                        {deployedSensors.filter((s) => s.type === "water_level").length} active
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (slaveNodes.length === 0) {
-                          toast.error("Condition: Place a Slave node first! All sensors connect to a Slave node.");
-                          return;
-                        }
-                        enterFullscreen();
-                        setSimulationMenuOpen(false);
-                        setShowEvacPanel(false);
-                        setShowRainPanel(false);
-                        setShowMeshNodes(true);
-                        setIsPickingLocation("water_level");
-                      }}
-                      className="px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold rounded cursor-pointer transition-all active:scale-95"
-                    >
-                      Place
-                    </button>
-                  </div>
-
-                  {/* Soil Moisture */}
-                  <div
-                    onClick={() => {
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setActivePanelTab("sensors");
-                      setShowMeshPanel(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-emerald-500/50 flex items-center justify-between cursor-pointer transition-all group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-emerald-300">Soil Moisture</div>
-                      <div className="text-[10px] text-slate-400">
-                        {deployedSensors.filter((s) => s.type === "soil_moisture").length} active
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (slaveNodes.length === 0) {
-                          toast.error("Condition: Place a Slave node first! All sensors connect to a Slave node.");
-                          return;
-                        }
-                        enterFullscreen();
-                        setSimulationMenuOpen(false);
-                        setShowEvacPanel(false);
-                        setShowRainPanel(false);
-                        setShowMeshNodes(true);
-                        setIsPickingLocation("soil_moisture");
-                      }}
-                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold rounded cursor-pointer transition-all active:scale-95"
-                    >
-                      Place
-                    </button>
-                  </div>
-
-                  {/* 9-Axis IMU */}
-                  <div
-                    onClick={() => {
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setActivePanelTab("sensors");
-                      setShowMeshPanel(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-purple-500/50 flex items-center justify-between cursor-pointer transition-all group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-purple-300">9-Axis IMU</div>
-                      <div className="text-[10px] text-slate-400">
-                        {deployedSensors.filter((s) => s.type === "imu").length} active
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (slaveNodes.length === 0) {
-                          toast.error("Condition: Place a Slave node first! All sensors connect to a Slave node.");
-                          return;
-                        }
-                        enterFullscreen();
-                        setSimulationMenuOpen(false);
-                        setShowEvacPanel(false);
-                        setShowRainPanel(false);
-                        setShowMeshNodes(true);
-                        setIsPickingLocation("imu");
-                      }}
-                      className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold rounded cursor-pointer transition-all active:scale-95"
-                    >
-                      Place
-                    </button>
-                  </div>
-
-                  {/* Tilt Sensor */}
-                  <div
-                    onClick={() => {
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setActivePanelTab("sensors");
-                      setShowMeshPanel(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-amber-500/50 flex items-center justify-between cursor-pointer transition-all group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-amber-300">Tilt Sensor</div>
-                      <div className="text-[10px] text-slate-400">
-                        {deployedSensors.filter((s) => s.type === "tilt").length} active
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (slaveNodes.length === 0) {
-                          toast.error("Condition: Place a Slave node first! All sensors connect to a Slave node.");
-                          return;
-                        }
-                        enterFullscreen();
-                        setSimulationMenuOpen(false);
-                        setShowEvacPanel(false);
-                        setShowRainPanel(false);
-                        setShowMeshNodes(true);
-                        setIsPickingLocation("tilt");
-                      }}
-                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold rounded cursor-pointer transition-all active:scale-95"
-                    >
-                      Place
-                    </button>
-                  </div>
-
-                  {/* Rain Drop Sensor */}
-                  <div
-                    onClick={() => {
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setActivePanelTab("sensors");
-                      setShowMeshPanel(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-blue-500/50 flex items-center justify-between cursor-pointer transition-all group"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold text-white group-hover:text-blue-300">Rain Drop Sensor</div>
-                      <div className="text-[10px] text-slate-400">
-                        {deployedSensors.filter((s) => s.type === "raindrop").length} active
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (slaveNodes.length === 0) {
-                          toast.error("Condition: Place a Slave node first! All sensors connect to a Slave node.");
-                          return;
-                        }
-                        enterFullscreen();
-                        setSimulationMenuOpen(false);
-                        setShowEvacPanel(false);
-                        setShowRainPanel(false);
-                        setShowMeshNodes(true);
-                        setIsPickingLocation("raindrop");
-                      }}
-                      className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold rounded cursor-pointer transition-all active:scale-95"
-                    >
-                      Place
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* DIVIDER */}
-              <div className="border-t border-slate-800" />
-
-              {/* 3. RAIN */}
+              {/* RAIN */}
               <div className="space-y-1">
                 <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
                   Rain
@@ -4032,6 +3772,11 @@ export function CesiumDigitalTwinViewer({
               {/* DIVIDER */}
               <div className="border-t border-slate-800" />
 
+              <button type="button" aria-pressed={forecastActive}
+                onClick={() => { setForecastActive(value => !value); setSimulationMenuOpen(false); }}
+                className="w-full rounded-lg border border-cyan-800 bg-slate-950 p-2 text-left text-xs text-cyan-200">
+                GNN–Transformer heatmap · {forecastActive ? "Hide" : "Show"}
+              </button>
               {/* 4. WATER */}
               <div className="space-y-1">
                 <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
@@ -4541,1228 +4286,6 @@ export function CesiumDigitalTwinViewer({
             onClose={() => setShowAIChat(false)}
             containerClassName="bg-white border-0 shadow-none flex flex-col h-[520px]"
           />
-        </div>
-      )}
-
-      {/* 📡 ADD SENSOR (3D IOT MESH NETWORK CONTROL PANEL) */}
-      {showMeshPanel && (
-        <div
-          onWheel={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-          style={{ maxHeight: isFullscreen ? "85vh" : "calc(100% - 70px)" }}
-          className={`absolute z-30 w-92 bg-slate-900/95 backdrop-blur-md border border-cyan-500/50 rounded-xl p-3.5 shadow-2xl text-white flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden overscroll-contain ${
-            showSrtm30 && showSrtmLegend
-              ? "top-[320px] right-3"
-              : "top-14 right-3"
-          }`}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-slate-700/80 pb-2.5 shrink-0">
-            <div className="flex items-center gap-2">
-              <div className="size-6 rounded-md bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center">
-                <Sliders className="size-3.5 text-cyan-400" />
-              </div>
-              <div>
-                <div className="text-xs font-bold text-white leading-tight">Simulation Studio</div>
-                <div className="text-[10px] text-slate-400">IoT Mesh Nodes & Sensors (Master/Slave)</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setShowMeshNodes((prev) => !prev)}
-                title={showMeshNodes ? "Hide 3D Nodes & Links" : "Show 3D Nodes & Links"}
-                className={`text-[10px] px-2 py-0.5 rounded font-semibold transition-colors ${
-                  showMeshNodes
-                    ? "bg-cyan-700/80 text-cyan-100 hover:bg-cyan-700"
-                    : "bg-slate-800 text-slate-400 hover:text-white"
-                }`}
-              >
-                {showMeshNodes ? "Visible" : "Hidden"}
-              </button>
-              <button
-                onClick={() => setShowMeshPanel(false)}
-                className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-                title="Close Panel"
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Simulation Tabs: Master, Slave, Sensors, History */}
-          <div className="grid grid-cols-4 gap-1 shrink-0">
-            {/* Tab 1: Master */}
-            <button
-              type="button"
-              onClick={() => {
-                enterFullscreen();
-                setSimulationMenuOpen(false);
-                setActivePanelTab("master");
-              }}
-              className={`p-2 rounded-xl text-left transition-all cursor-pointer border ${
-                activePanelTab === "master"
-                  ? "bg-amber-950/80 border-amber-400 ring-2 ring-amber-500/40 shadow-md shadow-amber-950/50"
-                  : "bg-slate-950/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-400 hover:text-white"
-              }`}
-            >
-              <div className="flex items-center justify-between mb-0.5">
-                <span className="font-bold text-[11px] text-white truncate">Master</span>
-                <span className="relative flex h-2 w-2 shrink-0">
-                  {masterNode ? (
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  ) : (
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-600"></span>
-                  )}
-                </span>
-              </div>
-              <div className="text-[10px] font-mono font-bold text-amber-300 truncate">
-                {masterNode ? "Placed" : "Off"}
-              </div>
-            </button>
-
-            {/* Tab 2: Slave */}
-            <button
-              type="button"
-              onClick={() => {
-                enterFullscreen();
-                setSimulationMenuOpen(false);
-                setActivePanelTab("slave");
-              }}
-              className={`p-2 rounded-xl text-left transition-all cursor-pointer border ${
-                activePanelTab === "slave"
-                  ? "bg-cyan-950/80 border-cyan-400 ring-2 ring-cyan-500/40 shadow-md shadow-cyan-950/50"
-                  : "bg-slate-950/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-400 hover:text-white"
-              }`}
-            >
-              <div className="flex items-center justify-between mb-0.5">
-                <span className="font-bold text-[11px] text-white truncate">Slave</span>
-                <span className="relative flex h-2 w-2 shrink-0">
-                  {slaveNodes.length > 0 ? (
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400"></span>
-                  ) : (
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-600"></span>
-                  )}
-                </span>
-              </div>
-              <div className="text-[10px] font-mono font-bold text-cyan-300 truncate">
-                {slaveNodes.length > 0 ? `${slaveNodes.length} Online` : "0 Nodes"}
-              </div>
-            </button>
-
-            {/* Tab 3: Sensors */}
-            <button
-              type="button"
-              onClick={() => {
-                enterFullscreen();
-                setSimulationMenuOpen(false);
-                setActivePanelTab("sensors");
-              }}
-              className={`p-2 rounded-xl text-left transition-all cursor-pointer border ${
-                activePanelTab === "sensors"
-                  ? "bg-orange-950/80 border-orange-400 ring-2 ring-orange-500/40 shadow-md shadow-orange-950/50"
-                  : "bg-slate-950/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-400 hover:text-white"
-              }`}
-            >
-              <div className="flex items-center justify-between mb-0.5">
-                <span className="font-bold text-[11px] text-white truncate">Sensors</span>
-                <span className="relative flex h-2 w-2 shrink-0">
-                  {deployedSensors.length > 0 ? (
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-400"></span>
-                  ) : (
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-600"></span>
-                  )}
-                </span>
-              </div>
-              <div className="text-[10px] font-mono font-bold text-orange-300 truncate">
-                {deployedSensors.length > 0 ? `${deployedSensors.length} Active` : "0 Sensors"}
-              </div>
-            </button>
-
-            {/* Tab 4: History / Log */}
-            <button
-              type="button"
-              onClick={() => {
-                enterFullscreen();
-                setSimulationMenuOpen(false);
-                setActivePanelTab("activity");
-              }}
-              title="Audit & Activity History"
-              className={`p-2 rounded-xl border transition-all cursor-pointer flex flex-col items-center justify-center ${
-                activePanelTab === "activity"
-                  ? "bg-slate-700 text-white border-slate-500 ring-2 ring-slate-400/40"
-                  : "bg-slate-950/60 hover:bg-slate-900/90 border-slate-800/80 text-slate-400 hover:text-white"
-              }`}
-            >
-              <History className="size-3.5 text-slate-300 mb-0.5" />
-              <div className="text-[9px] font-bold text-slate-400">Log</div>
-            </button>
-          </div>
-
-          {/* TAB 0: SENSORS (MANUAL ADD, CONNECTED TO SLAVE, CLICK-TO-DELETE SENSORS, SLAVE & MASTER) */}
-          {activePanelTab === "sensors" && (
-            <div
-              onWheel={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1.5 overscroll-contain custom-dt-scrollbar"
-            >
-              {/* Top Master Gateway Status & Click to Delete Master */}
-              <div className="bg-slate-950/80 rounded-xl p-2.5 border border-amber-500/40 space-y-2 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="size-7 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300">
-                      <Radio className="size-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <span>Central Gateway (Master)</span>
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30">
-                          15.0 km LoRa Range
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-amber-300/80 font-mono">
-                        {masterNode
-                          ? `Lat: ${masterNode.lat.toFixed(5)}°N • Lng: ${masterNode.lng.toFixed(5)}°E`
-                          : "No Master Gateway active"}
-                      </div>
-                    </div>
-                  </div>
-
-                  {masterNode ? (
-                    <button
-                      type="button"
-                      onClick={() => deleteNode(masterNode.id)}
-                      className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-sm cursor-pointer active:scale-95 transition-all"
-                      title="Click to Delete Master Gateway"
-                    >
-                      <Trash2 className="size-3" />
-                      <span>Click to Delete Master</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={addMasterAtCenter}
-                      className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-sm cursor-pointer active:scale-95 transition-all"
-                      title="Deploy Master Gateway at center coordinates"
-                    >
-                      <Radio className="size-3" />
-                      <span>+ Deploy Master (15km)</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* STRICT CONDITION BANNER: SENSORS CONNECT ONLY TO SLAVE NODES */}
-              <div className="p-2.5 rounded-xl bg-slate-950/90 border border-cyan-500/40 space-y-1.5 shadow-sm">
-                <div className="flex items-center gap-2 text-xs font-bold text-cyan-300">
-                  <ShieldAlert className="size-4 text-cyan-400 shrink-0" />
-                  <span>Condition: Sensors Can Connect ONLY to a Slave Node</span>
-                </div>
-                <div className="text-[10px] text-slate-300 leading-relaxed">
-                  Physical sensors wire directly into Slave RTU stations. The 15.0 km Master Gateway acts strictly as an RF aggregator and cannot have direct sensor wiring.
-                </div>
-              </div>
-
-              {/* Target Slave Selector for Connection */}
-              <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-200">Target Slave Node for Sensors:</span>
-                  <span className={`text-[10px] font-mono font-bold ${slaveNodes.length > 0 ? "text-cyan-400" : "text-amber-400"}`}>
-                    {slaveNodes.length > 0 ? `${slaveNodes.length} Slave${slaveNodes.length > 1 ? "s" : ""} Online` : "0 Slaves Deployed"}
-                  </span>
-                </div>
-
-                {slaveNodes.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {slaveNodes.length > 1 ? (
-                      <select
-                        value={selectedTargetSlaveId || slaveNodes[0]?.id}
-                        onChange={(e) => setSelectedTargetSlaveId(e.target.value)}
-                        className="w-full bg-slate-950 text-cyan-300 text-xs font-mono rounded-lg px-2.5 py-1.5 border border-cyan-500/40 focus:outline-none focus:ring-1 focus:ring-cyan-400 cursor-pointer"
-                      >
-                        {slaveNodes.map((s, i) => (
-                          <option key={s.id} value={s.id}>
-                            Slave #{i + 1}: {s.name} ({s.lat.toFixed(5)}°N, {s.lng.toFixed(5)}°E)
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <div className="text-xs text-cyan-300 bg-slate-950 p-2 rounded-lg border border-slate-800 font-mono flex items-center justify-between">
-                        <span>Slave #1: {slaveNodes[0]?.name}</span>
-                        <span className="text-[10px] text-emerald-400 font-bold">Ready for Sensor Wiring</span>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="p-2.5 bg-amber-950/40 border border-amber-500/40 rounded-lg text-center space-y-1.5">
-                    <div className="text-amber-300 font-bold text-xs flex items-center justify-center gap-1.5">
-                      <AlertTriangle className="size-3.5" />
-                      <span>No Slave Node Deployed</span>
-                    </div>
-                    <div className="text-[10px] text-amber-200/80">
-                      Sensors cannot connect to the Master Gateway. Please deploy a Slave node first.
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => addPresetSlaveNode("water_level")}
-                      className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded-md text-[11px] font-bold cursor-pointer transition-all shadow-xs"
-                    >
-                      + Deploy Slave Node
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Click to Add Sensor Section (5 Sensor Types) */}
-              <div className="bg-slate-900/90 rounded-xl p-3 border border-cyan-500/40 space-y-2.5 shadow-md">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                    <Radio className="size-3.5 text-cyan-400" />
-                    <span>Click to Add Sensor (Connects to Slave)</span>
-                  </div>
-                  <span className="text-[10px] text-cyan-300 font-mono">
-                    5 Sensor Presets
-                  </span>
-                </div>
-                <div className="text-[10px] text-slate-300 leading-tight">
-                  Click any button below to connect a sensor to the target Slave node:
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => addSensorToSlave("water_level")}
-                    className="p-2 bg-slate-950/80 hover:bg-cyan-950/90 border border-cyan-500/40 hover:border-cyan-400 rounded-lg text-left transition-all cursor-pointer group shadow-xs"
-                    title="Click to Add Hydrostatic Water Level Sensor to Slave"
-                  >
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <div className="size-5 rounded bg-cyan-500/20 text-cyan-300 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <Waves className="size-3" />
-                      </div>
-                      <span className="text-[11px] font-bold text-cyan-200 group-hover:text-white truncate">
-                        + Water Level
-                      </span>
-                    </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      {rainActive ? `${(2.105 + simRainIntensity * 0.035).toFixed(2)} m` : "1.20 m"} depth
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => addSensorToSlave("imu")}
-                    className="p-2 bg-slate-950/80 hover:bg-purple-950/90 border border-purple-500/40 hover:border-purple-400 rounded-lg text-left transition-all cursor-pointer group shadow-xs"
-                    title="Click to Add 9-Axis IMU Orientation & Landslide Sentry to Slave"
-                  >
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <div className="size-5 rounded bg-purple-500/20 text-purple-300 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <Navigation className="size-3" />
-                      </div>
-                      <span className="text-[11px] font-bold text-purple-200 group-hover:text-white truncate">
-                        + 9-Axis IMU
-                      </span>
-                    </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      ±0.032g • 0.24°/s gyro
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => addSensorToSlave("soil_moisture")}
-                    className="p-2 bg-slate-950/80 hover:bg-emerald-950/90 border border-emerald-500/40 hover:border-emerald-400 rounded-lg text-left transition-all cursor-pointer group shadow-xs"
-                    title="Click to Add Capacitive Soil Saturation Probe to Slave"
-                  >
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <div className="size-5 rounded bg-emerald-500/20 text-emerald-300 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <Activity className="size-3" />
-                      </div>
-                      <span className="text-[11px] font-bold text-emerald-200 group-hover:text-white truncate">
-                        + Soil Moisture
-                      </span>
-                    </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      {rainActive ? `${(42.5 + Math.min(56.5, simRainIntensity * 0.28)).toFixed(1)}%` : "42.5%"} saturation
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => addSensorToSlave("tilt")}
-                    className="p-2 bg-slate-950/80 hover:bg-amber-950/90 border border-amber-500/40 hover:border-amber-400 rounded-lg text-left transition-all cursor-pointer group shadow-xs"
-                    title="Click to Add Tilt Sensor & Inclinometer to Slave"
-                  >
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <div className="size-5 rounded bg-amber-500/20 text-amber-300 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <Activity className="size-3" />
-                      </div>
-                      <span className="text-[11px] font-bold text-amber-200 group-hover:text-white truncate">
-                        + Tilt Sensor
-                      </span>
-                    </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      {rainActive ? "Tilt 2.35° • Warning" : "Tilt 0.12° • Stable"}
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => addSensorToSlave("raindrop")}
-                    className="col-span-2 p-2 bg-slate-950/80 hover:bg-sky-950/90 border border-sky-500/40 hover:border-sky-400 rounded-lg text-left transition-all cursor-pointer group shadow-xs"
-                    title="Click to Add Optical Raindrop Precipitation Sensor to Slave"
-                  >
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <div className="size-5 rounded bg-sky-500/20 text-sky-300 flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <CloudRain className="size-3" />
-                      </div>
-                      <span className="text-[11px] font-bold text-sky-200 group-hover:text-white truncate">
-                        + Raindrop Sensor
-                      </span>
-                    </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      {rainActive ? `${simRainIntensity.toFixed(1)} mm/h • ${(simRainIntensity * 1.15).toFixed(1)} drops/cm²` : "0.0 mm/h • 0.0 drops/cm² (Dry)"}
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              {/* SHOW SENSORS SEPARATELY (ALL DEPLOYED SENSORS LIST WITH CLICK TO DELETE) */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                    <Radio className="size-3 text-cyan-400" />
-                    <span>Deployed Sensors ({deployedSensors.length})</span>
-                  </span>
-                  {deployedSensors.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeployedSensors([]);
-                        toast.info("Cleared all deployed sensors");
-                      }}
-                      className="text-[9px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
-                      title="Delete all sensors"
-                    >
-                      Delete All Sensors
-                    </button>
-                  )}
-                </div>
-
-                {deployedSensors.length === 0 ? (
-                  <div className="p-4 bg-slate-950/60 rounded-xl border border-dashed border-slate-800 text-center space-y-2">
-                    <div className="size-8 mx-auto rounded-full bg-slate-800/80 flex items-center justify-center text-slate-400">
-                      <Radio className="size-4" />
-                    </div>
-                    <div className="text-xs font-semibold text-slate-300">No Sensors Currently Deployed</div>
-                    <div className="text-[10px] text-slate-500 max-w-xs mx-auto">
-                      Click any of the 5 sensor types above to deploy sensors connected to a Slave node.
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {deployedSensors.map((sensor) => {
-                      const connectedSlave = slaveNodes.find((s) => s.id === sensor.slaveId);
-                      const slaveIdx = slaveNodes.findIndex((s) => s.id === sensor.slaveId);
-                      const distKm = masterNode && connectedSlave
-                        ? calculateDistanceKm(connectedSlave.lat, connectedSlave.lng, masterNode.lat, masterNode.lng)
-                        : 0;
-
-                      return (
-                        <div
-                          key={sensor.id}
-                          className="p-3 bg-slate-950/90 rounded-xl border border-cyan-500/30 space-y-2 shadow-sm hover:border-cyan-400/60 transition-colors"
-                        >
-                          {/* Sensor Header with Click to Delete Sensor */}
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                              <div className="size-7 rounded-lg bg-slate-900 border border-cyan-500/40 flex items-center justify-center shrink-0">
-                                {sensor.type === "water_level" && <Waves className="size-4 text-cyan-300" />}
-                                {sensor.type === "soil_moisture" && <Activity className="size-4 text-emerald-300" />}
-                                {sensor.type === "imu" && <Navigation className="size-4 text-purple-300" />}
-                                {sensor.type === "tilt" && <Activity className="size-4 text-amber-300" />}
-                                {sensor.type === "raindrop" && <CloudRain className="size-4 text-sky-300" />}
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-xs font-bold text-white truncate">{sensor.name}</span>
-                                  <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                                    ONLINE
-                                  </span>
-                                </div>
-                                <div className="text-[10px] text-cyan-300 flex items-center gap-1 mt-0.5 truncate">
-                                  <Share2 className="size-2.5 text-cyan-400 shrink-0" />
-                                  <span className="truncate">
-                                    Connected to: {connectedSlave ? connectedSlave.name : "Slave Node"} {slaveIdx >= 0 ? `(#${slaveIdx + 1})` : ""}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              {sensor.lat !== undefined && sensor.lng !== undefined && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const viewer = viewerRef.current;
-                                    if (!viewer || viewer.isDestroyed()) return;
-                                    viewer.camera.flyTo({
-                                      destination: Cesium.Cartesian3.fromDegrees(sensor.lng!, sensor.lat! - 0.001, 150),
-                                      orientation: {
-                                        heading: Cesium.Math.toRadians(0),
-                                        pitch: Cesium.Math.toRadians(-35),
-                                        roll: 0.0,
-                                      },
-                                      duration: 1.0,
-                                    });
-                                  }}
-                                  className="p-1 text-orange-400 hover:text-orange-200 hover:bg-slate-800/80 rounded cursor-pointer transition-all"
-                                  title={`Focus on ${sensor.name} in 3D`}
-                                >
-                                  <Crosshair className="size-3" />
-                                </button>
-                              )}
-                              {/* Explicit Click to Delete Sensor Button */}
-                              <button
-                                type="button"
-                                onClick={() => deleteDeployedSensor(sensor.id)}
-                                className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-md text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95 shrink-0 shadow-xs"
-                                title={`Click to Delete ${sensor.name}`}
-                              >
-                                <Trash2 className="size-2.5" />
-                                <span>Click to Delete Sensor</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Live Sensor Readings with Appropriate Decimals */}
-                          <div className="bg-black/40 p-2 rounded-lg border border-white/5 font-mono text-[10px] space-y-1">
-                            {sensor.type === "water_level" && (
-                              <>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-slate-400">Water Depth:</span>
-                                  <span className="text-cyan-300 font-bold">
-                                    {rainActive ? `${(2.105 + simRainIntensity * 0.035).toFixed(2)} m` : "1.20 m"}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between text-[9px] text-slate-400">
-                                  <span>Hydrostatic Pressure:</span>
-                                  <span className="text-slate-200">
-                                    {rainActive ? `${(120.45 + simRainIntensity * 0.12).toFixed(2)} kPa` : "101.32 kPa"}
-                                  </span>
-                                </div>
-                              </>
-                            )}
-
-                            {sensor.type === "imu" && (
-                              <>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-slate-400">Acceleration:</span>
-                                  <span className="text-purple-300 font-bold">
-                                    {rainActive ? `±${(0.032).toFixed(3)}g` : `±${(0.005).toFixed(3)}g`}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between text-[9px] text-slate-400">
-                                  <span>Gyro Rate / Tilt:</span>
-                                  <span className="text-slate-200">
-                                    {rainActive ? `${(0.24).toFixed(2)}°/s • Roll 1.12°` : `${(0.02).toFixed(2)}°/s • Roll 0.15°`}
-                                  </span>
-                                </div>
-                              </>
-                            )}
-
-                            {sensor.type === "soil_moisture" && (
-                              <>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-slate-400">Soil Saturation:</span>
-                                  <span className="text-emerald-300 font-bold">
-                                    {rainActive ? `${(42.5 + Math.min(56.5, simRainIntensity * 0.28)).toFixed(1)}%` : "42.5%"}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between text-[9px] text-slate-400">
-                                  <span>Volumetric Water Content:</span>
-                                  <span className="text-slate-200">
-                                    {rainActive ? `${(0.435).toFixed(3)} m³/m³` : `${(0.245).toFixed(3)} m³/m³`}
-                                  </span>
-                                </div>
-                              </>
-                            )}
-
-                            {sensor.type === "tilt" && (
-                              <>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-slate-400">Slope Incline:</span>
-                                  <span className="text-amber-300 font-bold">
-                                    {rainActive ? "2.35° • Warning" : "0.12° • Stable"}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between text-[9px] text-slate-400">
-                                  <span>Pitch / Roll Deviation:</span>
-                                  <span className="text-slate-200">
-                                    {rainActive ? "Pitch: +1.8° • Roll: +0.55°" : "Pitch: 0.05° • Roll: 0.07°"}
-                                  </span>
-                                </div>
-                              </>
-                            )}
-
-                            {sensor.type === "raindrop" && (
-                              <>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-slate-400">Precipitation Rate:</span>
-                                  <span className="text-sky-300 font-bold">
-                                    {rainActive ? `${simRainIntensity.toFixed(1)} mm/h` : "0.0 mm/h"}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between text-[9px] text-slate-400">
-                                  <span>Droplet Density:</span>
-                                  <span className="text-slate-200">
-                                    {rainActive ? `${(simRainIntensity * 1.15).toFixed(1)} drops/cm²` : "0.0 drops/cm²"}
-                                  </span>
-                                </div>
-                              </>
-                            )}
-
-                            {connectedSlave && (
-                              <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[9px]">
-                                <span className="text-slate-400">LoRa Link to Master:</span>
-                                <span className={distKm <= 15.0 ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>
-                                  {distKm.toFixed(3)} km ({distKm <= 15.0 ? "Within 15km Range" : "Out of Range"})
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* CONNECTED SLAVES LIST WITH CLICK TO DELETE SLAVE */}
-              <div className="space-y-2 pt-2 border-t border-slate-800">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Connected Slaves ({slaveNodes.length})
-                  </span>
-                </div>
-
-                {slaveNodes.map((slave, idx) => {
-                  const distKm = masterNode
-                    ? calculateDistanceKm(slave.lat, slave.lng, masterNode.lat, masterNode.lng)
-                    : 0;
-                  const slaveSensorsCount = deployedSensors.filter((s) => s.slaveId === slave.id).length;
-
-                  return (
-                    <div
-                      key={slave.id}
-                      className="p-2.5 bg-slate-950/80 rounded-xl border border-cyan-500/20 space-y-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="size-2 rounded-full bg-cyan-400"></span>
-                            <span className="text-xs font-bold text-white">{slave.name}</span>
-                            <span className="text-[9px] font-mono text-cyan-300 bg-cyan-950 px-1.5 py-0.2 rounded border border-cyan-700/50">
-                              Slave #{idx + 1}
-                            </span>
-                          </div>
-                          <div className="text-[10px] text-cyan-300/80 mt-0.5">
-                            {slaveSensorsCount} Sensor{slaveSensorsCount !== 1 ? "s" : ""} Attached • Battery: {slave.battery}%
-                          </div>
-                        </div>
-
-                        {/* Explicit Click to Delete Slave */}
-                        <button
-                          type="button"
-                          onClick={() => deleteNode(slave.id)}
-                          className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-md text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95 shrink-0 shadow-xs"
-                          title={`Click to Delete ${slave.name}`}
-                        >
-                          <Trash2 className="size-2.5" />
-                          <span>Click to Delete Slave</span>
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-1 text-[10px] font-mono bg-black/40 p-1.5 rounded border border-white/5 text-slate-300">
-                        <div>Lat: <span className="text-cyan-300 font-bold">{slave.lat.toFixed(5)}°N</span></div>
-                        <div>Lng: <span className="text-cyan-300 font-bold">{slave.lng.toFixed(5)}°E</span></div>
-                        <div>Dist to Master: <span className="text-white font-bold">{distKm.toFixed(3)} km</span></div>
-                        <div>Range: <span className={distKm <= 15.0 ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>{distKm <= 15.0 ? "In 15km" : "Out of 15km"}</span></div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-
-
-          {/* TAB 1: MASTER VIEW */}
-          {activePanelTab === "master" && (
-            <div
-              onWheel={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1.5 overscroll-contain custom-dt-scrollbar"
-            >
-              {masterNode ? (
-                <div className="bg-gradient-to-br from-amber-950/30 via-slate-800/80 to-slate-900/90 rounded-xl p-3 border border-amber-500/50 space-y-3 shadow-md">
-                  <div className="flex items-center justify-between">
-                    <span className="px-2 py-0.5 rounded text-[9px] font-extrabold bg-amber-500 text-slate-950 uppercase tracking-wide flex items-center gap-1">
-                      <Radio className="size-2.5" />
-                      <span>Master Gateway</span>
-                    </span>
-                    <span className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-bold bg-emerald-950/50 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                      <span className="size-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                      Active • Connected
-                    </span>
-                  </div>
-
-                  <div>
-                    <div className="font-bold text-sm text-white">{masterNode.name}</div>
-                    <div className="text-[11px] text-amber-200/80 mt-0.5">{masterNode.role}</div>
-                  </div>
-
-                  {/* 15 km Master Range Banner */}
-                  <div className="p-2 rounded-lg bg-amber-950/40 border border-amber-500/40 flex items-center justify-between text-xs">
-                    <span className="text-amber-200 font-semibold flex items-center gap-1.5">
-                      <Radio className="size-3.5 text-amber-400" />
-                      <span>LoRa RF Range:</span>
-                    </span>
-                    <span className="font-bold font-mono text-amber-300 bg-amber-900/60 px-2 py-0.5 rounded border border-amber-600/50">
-                      15.0 km (15,000m)
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-[10px] font-mono bg-black/30 p-2 rounded-lg border border-white/5 text-slate-300">
-                    <div>Lat: {masterNode.lat.toFixed(5)}°N</div>
-                    <div>Lng: {masterNode.lng.toFixed(5)}°E</div>
-                    <div>RF Range: <span className="text-amber-300 font-bold">15.0 km</span></div>
-                    <div>Slaves: <span className="text-cyan-300 font-bold">{slaveNodes.length} active</span></div>
-                    <div>Power: {masterNode.battery}% (Solar)</div>
-                    <div>Signal: {masterNode.signalDbm} dBm</div>
-                  </div>
-
-                  <div className="space-y-2 pt-1">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => focusOnNode(masterNode)}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 bg-amber-600/90 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold shadow-xs cursor-pointer active:scale-95 transition-all"
-                        title="Focus on Master Gateway in 3D"
-                      >
-                        <Crosshair className="size-3.5" />
-                        <span>Focus 3D</span>
-                      </button>
-                      <button
-                        onClick={() => setIsPickingLocation("master")}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white rounded-lg text-xs font-semibold cursor-pointer active:scale-95 transition-all"
-                        title="Click on 3D terrain to reposition Master"
-                      >
-                        <MapPin className="size-3.5 text-amber-300" />
-                        <span>Move</span>
-                      </button>
-                    </div>
-                    {/* Explicit Click to Delete Master Button */}
-                    <button
-                      onClick={() => deleteNode(masterNode.id)}
-                      className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold shadow-md cursor-pointer active:scale-95 transition-all"
-                      title="Click to delete this Master Gateway from the network"
-                    >
-                      <Trash2 className="size-3.5" />
-                      <span>Click to Delete Master</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-slate-800/60 border border-dashed border-amber-500/40 rounded-xl p-4 text-center space-y-3">
-                  <div className="size-10 rounded-full bg-amber-950/80 border border-amber-400/40 flex items-center justify-center mx-auto text-amber-300">
-                    <Radio className="size-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-white">No Master Gateway</h4>
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      Place the Master gateway to establish central communication for slave sensors.
-                    </p>
-                  </div>
-                  <div className="flex flex-col gap-1.5 pt-1">
-                    <button
-                      onClick={() => setIsPickingLocation("master")}
-                      className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold shadow-md cursor-pointer active:scale-95 transition-all"
-                    >
-                      <Crosshair className="size-3.5" />
-                      <span>Click Map to Place Master</span>
-                    </button>
-                    <button
-                      onClick={addMasterAtCenter}
-                      className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-[10px] font-semibold cursor-pointer transition-all"
-                    >
-                      <MapPin className="size-3 text-amber-300" />
-                      <span>Place Master at Center</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB 2: SLAVE VIEW */}
-          {activePanelTab === "slave" && (
-            <div
-              onWheel={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1.5 overscroll-contain custom-dt-scrollbar"
-            >
-              {/* Add Slave Controls */}
-              <div className="space-y-2 bg-slate-950/50 rounded-xl p-2.5 border border-slate-800">
-                <button
-                  onClick={() => setIsPickingLocation("slave")}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold shadow-sm cursor-pointer active:scale-95 transition-all"
-                >
-                  <Crosshair className="size-3.5" />
-                  <span>+ Click Map to Add Slave Sensor</span>
-                </button>
-                <button
-                  onClick={() => navigate("/environmental")}
-                  className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/50 rounded-lg text-xs font-bold cursor-pointer active:scale-95 transition-all"
-                >
-                  <span>📡 View Deployed Sensor Data →</span>
-                </button>
-
-                {/* Link to Dedicated Sensors Tab */}
-                <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-orange-300 flex items-center gap-1">
-                      <Radio className="size-3 text-orange-400" />
-                      <span>Sensors Management</span>
-                    </span>
-                    <span className="text-[9px] text-orange-400/80 font-mono">
-                      {deployedSensors.length > 0 ? `${deployedSensors.length} Deployed` : "Sensors Tab"}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActivePanelTab("sensors")}
-                    className="w-full py-2 px-3 bg-gradient-to-r from-orange-950/80 to-slate-900 border border-orange-500/40 hover:border-orange-400 rounded-lg text-left transition-all cursor-pointer group shadow-xs flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="size-6 rounded-lg bg-orange-500/20 text-orange-400 flex items-center justify-center group-hover:scale-105 transition-transform">
-                        <Radio className="size-3.5" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-white group-hover:text-orange-200">
-                          Configure & Place Sensors →
-                        </div>
-                        <div className="text-[9px] text-slate-400">
-                          Water Level, Soil Moisture, IMU, Tilt & Raindrop
-                        </div>
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold text-orange-400 group-hover:translate-x-0.5 transition-transform">
-                      Open Tab
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Slaves List Header */}
-              <div className="flex flex-col gap-1.5 px-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Connected Slaves ({slaveNodes.length})
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setIsDeleteMode((prev) => !prev)}
-                      className={`text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer transition-all ${
-                        isDeleteMode
-                          ? "bg-rose-600 text-white animate-pulse"
-                          : "text-rose-400 hover:text-rose-300 hover:bg-slate-800"
-                      }`}
-                      title="Click any node on the 3D map to delete it"
-                    >
-                      {isDeleteMode ? "✕ Exit Delete" : "🗑️ Delete Mode"}
-                    </button>
-                    {slaveNodes.length > 0 && (
-                      <button
-                        onClick={() => setMeshNodes((p) => p.filter((n) => n.type === "master"))}
-                        className="text-[9px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
-                        title="Remove all slave nodes"
-                      >
-                        Clear Slaves
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="inline-flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300 border border-amber-700/40">● Master</span>
-                  <span className="inline-flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-0.5 rounded bg-cyan-900/50 text-cyan-300 border border-cyan-700/40">● Slave</span>
-                  <span className="inline-flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-0.5 rounded bg-violet-900/50 text-violet-300 border border-violet-700/40">● Sensor</span>
-                </div>
-              </div>
-
-              {/* Slave Cards */}
-              {slaveNodes.length === 0 ? (
-                <div className="bg-slate-800/40 border border-slate-800 rounded-xl p-4 text-center text-xs text-slate-400">
-                  No slave sensors connected yet. Click above or select a preset to add telemetry stations.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {slaveNodes.map((slave, idx) => {
-                    const distKm = masterNode ? calculateDistanceKm(masterNode.lat, masterNode.lng, slave.lat, slave.lng) : 0;
-                    return (
-                      <div
-                        key={slave.id}
-                        className={`bg-slate-800/70 hover:bg-slate-800 rounded-xl p-2.5 border border-cyan-500/30 transition-all ${
-                          selectedNodeId === slave.id ? "ring-2 ring-cyan-400 shadow-cyan-500/20" : ""
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-950 text-cyan-200 border border-cyan-500/40">
-                            ⚡ SLAVE #{idx + 1}
-                          </span>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => focusOnNode(slave)}
-                              className="text-cyan-400 hover:text-cyan-200 p-1 hover:bg-slate-700/60 rounded cursor-pointer"
-                              title="Focus in 3D"
-                            >
-                              <Crosshair className="size-3" />
-                            </button>
-                            <button
-                              onClick={() => setNodeAsMaster(slave.id)}
-                              className="text-[9px] text-amber-400 hover:text-amber-300 px-1.5 py-0.5 hover:bg-slate-700/60 rounded cursor-pointer"
-                              title="Promote to Master Node"
-                            >
-                              Make Master
-                            </button>
-                            <button
-                              onClick={() => deleteNode(slave.id)}
-                              className="text-rose-400 hover:text-rose-300 p-1 hover:bg-slate-700/60 rounded cursor-pointer"
-                              title="Delete Slave Node"
-                            >
-                              <Trash2 className="size-3" />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="font-bold text-xs text-white mt-1">{slave.name}</div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">{slave.role}</div>
-
-                        {/* Appropriate Decimals for Slave Coordinates & Master Link */}
-                        <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono bg-black/40 p-2 rounded-lg border border-white/5 text-slate-300 mt-2">
-                          <div>Lat: <span className="text-cyan-300 font-bold">{slave.lat.toFixed(5)}°N</span></div>
-                          <div>Lng: <span className="text-cyan-300 font-bold">{slave.lng.toFixed(5)}°E</span></div>
-                          <div>Dist to Master: <span className="text-white font-bold">{distKm.toFixed(3)} km</span></div>
-                          <div>Range Status: <span className={distKm <= 15.0 ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>{distKm <= 15.0 ? "Within 15km" : "Out of 15km"}</span></div>
-                          <div>Power: <span className="text-slate-200">{slave.battery}% (LiPo)</span></div>
-                          <div>RF Signal: <span className="text-emerald-400">{slave.signalDbm} dBm</span></div>
-                        </div>
-
-                        {/* Network Topology Connection Banner: Telemetry Sensors -> Slave -> Master (15km) */}
-                        <div className="mt-2 p-1.5 bg-slate-950/80 rounded-lg border border-slate-800 text-[9px] text-slate-300 flex items-center justify-between font-mono">
-                          <span className="flex items-center gap-1 text-cyan-300 font-bold">
-                            <Network className="size-2.5 text-cyan-400" />
-                            <span>5 Telemetry Sensors</span>
-                          </span>
-                          <span className="text-slate-500">➔</span>
-                          <span className="text-cyan-400 font-bold">Slave #{idx + 1}</span>
-                          <span className="text-slate-500">➔</span>
-                          <span className="text-amber-400 font-bold truncate max-w-[110px]" title={masterNode ? `${masterNode.name} (15km Range)` : "Master Gateway (15km)"}>
-                            {masterNode ? masterNode.name : "Master Gateway (15km)"}
-                          </span>
-                        </div>
-
-                        {/* 5 Connected Telemetry Sensors with Click-to-Delete for Each */}
-                        <div className="mt-2 space-y-1.5">
-                          <div className="text-[9px] font-extrabold uppercase tracking-wider text-cyan-300 flex items-center justify-between">
-                            <span className="flex items-center gap-1">
-                              <Radio className="size-2.5 text-cyan-400" />
-                              <span>Sensors Connected to Slave #{idx + 1}</span>
-                            </span>
-                            <span className={`text-[8px] font-bold px-1.5 py-0.2 rounded-full ${
-                              rainActive ? "bg-sky-500/20 text-sky-300 border border-sky-400/40 animate-pulse" : "bg-slate-800 text-slate-400"
-                            }`}>
-                              {rainActive ? "Live Pouring Data" : "Standby Data"}
-                            </span>
-                          </div>
-
-                          <div className="space-y-1">
-                            {/* 1. Water Level Sensor */}
-                            {!isSensorDeleted(slave.id, "level") ? (
-                              <div className="p-1.5 bg-slate-950/80 rounded-md border border-cyan-500/30 flex items-center justify-between gap-1.5">
-                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                  <div className="size-5 rounded bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300 shrink-0">
-                                    <Waves className="size-3" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-[9px] font-bold text-slate-200 truncate">Water Level Sensor</div>
-                                    <div className="text-[8px] font-mono text-cyan-300 truncate">
-                                      {rainActive ? `${(2.105 + simRainIntensity * 0.035).toFixed(2)} m` : "1.20 m"}
-                                    </div>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteSensor(slave.id, "level")}
-                                  className="px-1.5 py-0.5 bg-rose-950/90 hover:bg-rose-900 text-rose-300 border border-rose-600/50 rounded text-[9px] font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95 shrink-0"
-                                  title="Click to delete Water Level Sensor"
-                                >
-                                  <Trash2 className="size-2.5 text-rose-400" />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="p-1.5 bg-slate-950/40 rounded-md border border-dashed border-slate-700/60 flex items-center justify-between text-[9px] text-slate-500">
-                                <span>Water Level Sensor (Deleted)</span>
-                                <button
-                                  type="button"
-                                  onClick={() => restoreSensor(slave.id, "level")}
-                                  className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer"
-                                >
-                                  + Reconnect
-                                </button>
-                              </div>
-                            )}
-
-                            {/* 2. 9-Axis IMU */}
-                            {!isSensorDeleted(slave.id, "imu") ? (
-                              <div className="p-1.5 bg-slate-950/80 rounded-md border border-purple-500/30 flex items-center justify-between gap-1.5">
-                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                  <div className="size-5 rounded bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 shrink-0">
-                                    <Navigation className="size-3" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-[9px] font-bold text-slate-200 truncate">9-Axis IMU</div>
-                                    <div className="text-[8px] font-mono text-purple-300 truncate">
-                                      {rainActive
-                                        ? `Accel: ±${(0.032).toFixed(3)}g • Gyro ${(0.24).toFixed(2)}°/s`
-                                        : `Accel: ±${(0.005).toFixed(3)}g • Gyro ${(0.02).toFixed(2)}°/s`}
-                                    </div>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteSensor(slave.id, "imu")}
-                                  className="px-1.5 py-0.5 bg-rose-950/90 hover:bg-rose-900 text-rose-300 border border-rose-600/50 rounded text-[9px] font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95 shrink-0"
-                                  title="Click to delete 9-Axis IMU"
-                                >
-                                  <Trash2 className="size-2.5 text-rose-400" />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="p-1.5 bg-slate-950/40 rounded-md border border-dashed border-slate-700/60 flex items-center justify-between text-[9px] text-slate-500">
-                                <span>9-Axis IMU (Deleted)</span>
-                                <button
-                                  type="button"
-                                  onClick={() => restoreSensor(slave.id, "imu")}
-                                  className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer"
-                                >
-                                  + Reconnect
-                                </button>
-                              </div>
-                            )}
-
-                            {/* 3. Soil Moisture Sensor */}
-                            {!isSensorDeleted(slave.id, "soil") ? (
-                              <div className="p-1.5 bg-slate-950/80 rounded-md border border-emerald-500/30 flex items-center justify-between gap-1.5">
-                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                  <div className="size-5 rounded bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300 shrink-0">
-                                    <Activity className="size-3" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-[9px] font-bold text-slate-200 truncate">Soil Moisture Sensor</div>
-                                    <div className="text-[8px] font-mono text-emerald-300 truncate">
-                                      {rainActive
-                                        ? `${(42.5 + Math.min(56.5, simRainIntensity * 0.28)).toFixed(1)}% Saturation`
-                                        : "42.5% Saturation"}
-                                    </div>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteSensor(slave.id, "soil")}
-                                  className="px-1.5 py-0.5 bg-rose-950/90 hover:bg-rose-900 text-rose-300 border border-rose-600/50 rounded text-[9px] font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95 shrink-0"
-                                  title="Click to delete Soil Moisture Sensor"
-                                >
-                                  <Trash2 className="size-2.5 text-rose-400" />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="p-1.5 bg-slate-950/40 rounded-md border border-dashed border-slate-700/60 flex items-center justify-between text-[9px] text-slate-500">
-                                <span>Soil Moisture Sensor (Deleted)</span>
-                                <button
-                                  type="button"
-                                  onClick={() => restoreSensor(slave.id, "soil")}
-                                  className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer"
-                                >
-                                  + Reconnect
-                                </button>
-                              </div>
-                            )}
-
-                            {/* 4. Flow Meter */}
-                            {!isSensorDeleted(slave.id, "flow") ? (
-                              <div className="p-1.5 bg-slate-950/80 rounded-md border border-amber-500/30 flex items-center justify-between gap-1.5">
-                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                  <div className="size-5 rounded bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
-                                    <Activity className="size-3" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-[9px] font-bold text-slate-200 truncate">Flow Meter</div>
-                                    <div className="text-[8px] font-mono text-amber-300 truncate">
-                                      {rainActive
-                                        ? `${(2.45 + simRainIntensity * 0.165).toFixed(2)} m³/s`
-                                        : "2.45 m³/s"}
-                                    </div>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteSensor(slave.id, "flow")}
-                                  className="px-1.5 py-0.5 bg-rose-950/90 hover:bg-rose-900 text-rose-300 border border-rose-600/50 rounded text-[9px] font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95 shrink-0"
-                                  title="Click to delete Flow Meter"
-                                >
-                                  <Trash2 className="size-2.5 text-rose-400" />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="p-1.5 bg-slate-950/40 rounded-md border border-dashed border-slate-700/60 flex items-center justify-between text-[9px] text-slate-500">
-                                <span>Flow Meter (Deleted)</span>
-                                <button
-                                  type="button"
-                                  onClick={() => restoreSensor(slave.id, "flow")}
-                                  className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer"
-                                >
-                                  + Reconnect
-                                </button>
-                              </div>
-                            )}
-
-                            {/* 5. Raindrop Sensor */}
-                            {!isSensorDeleted(slave.id, "raindrop") ? (
-                              <div className="p-1.5 bg-slate-950/80 rounded-md border border-sky-500/30 flex items-center justify-between gap-1.5">
-                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                  <div className="size-5 rounded bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-300 shrink-0">
-                                    <CloudRain className="size-3" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-[9px] font-bold text-slate-200 truncate">Raindrop Sensor</div>
-                                    <div className="text-[8px] font-mono text-sky-300 truncate">
-                                      {rainActive
-                                        ? `${simRainIntensity.toFixed(1)} mm/h • ${(Math.min(99.9, simRainIntensity * 1.15)).toFixed(1)} drops/cm²`
-                                        : "0.0 mm/h • 0.0 drops/cm² (Dry)"}
-                                    </div>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteSensor(slave.id, "raindrop")}
-                                  className="px-1.5 py-0.5 bg-rose-950/90 hover:bg-rose-900 text-rose-300 border border-rose-600/50 rounded text-[9px] font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95 shrink-0"
-                                  title="Click to delete Raindrop Sensor"
-                                >
-                                  <Trash2 className="size-2.5 text-rose-400" />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="p-1.5 bg-slate-950/40 rounded-md border border-dashed border-slate-700/60 flex items-center justify-between text-[9px] text-slate-500">
-                                <span>Raindrop Sensor (Deleted)</span>
-                                <button
-                                  type="button"
-                                  onClick={() => restoreSensor(slave.id, "raindrop")}
-                                  className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer"
-                                >
-                                  + Reconnect
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Bottom Actions: Distance & Click to Delete Slave */}
-                        <div className="mt-2 pt-2 border-t border-slate-700/50 space-y-2">
-                          <div className="flex items-center justify-between text-[10px] font-mono">
-                            <span className="text-cyan-300 flex items-center gap-1">
-                              <Share2 className="size-2.5 text-cyan-400" />
-                              <span>
-                                {masterNode
-                                  ? `Link: ${distKm.toFixed(3)} km (${distKm <= 15.0 ? "In 15km Range" : "Out of Range"})`
-                                  : "No Master"}
-                              </span>
-                            </span>
-                            <span className="text-emerald-400 font-bold">
-                              {slave.signalDbm} dBm
-                            </span>
-                          </div>
-
-                          {/* Explicit Click to Delete Slave Button */}
-                          <button
-                            type="button"
-                            onClick={() => deleteNode(slave.id)}
-                            className="w-full py-1.5 px-3 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm cursor-pointer active:scale-95 transition-all"
-                            title={`Click to delete ${slave.name} from the network`}
-                          >
-                            <Trash2 className="size-3.5" />
-                            <span>Click to Delete Slave</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-
-          {/* TAB 2: USER ACTIVITY LOG */}
-          {activePanelTab === "activity" && (
-            <div
-              onWheel={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1.5 overscroll-contain custom-dt-scrollbar"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  User Actions Audit Log
-                </span>
-                {userActivities.length > 0 && (
-                  <button
-                    onClick={clearUserActivities}
-                    className="text-[9px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
-                  >
-                    Clear Log
-                  </button>
-                )}
-              </div>
-
-              {userActivities.length === 0 ? (
-                <div className="bg-slate-800/40 border border-slate-700/40 rounded-lg p-4 text-center text-slate-400 text-xs">
-                  <Clock className="size-5 mx-auto mb-1 opacity-50 text-cyan-400" />
-                  <span>No user activity recorded yet.</span>
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    Your node additions, movements, promotions, and deletions will be logged here.
-                  </p>
-                </div>
-              ) : (
-                userActivities.map((act) => (
-                  <div
-                    key={act.id}
-                    className="bg-slate-800/80 border border-slate-700/50 rounded-lg p-2 text-xs text-white flex flex-col gap-1 shadow-xs"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-[11px] text-cyan-300 flex items-center gap-1">
-                        <Activity className="size-3 text-emerald-400" />
-                        <span>{act.action}</span>
-                      </span>
-                      <span className="text-[9px] font-mono text-slate-400">{act.timestamp}</span>
-                    </div>
-                    <p className="text-[10px] text-slate-300 leading-snug">{act.details}</p>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
         </div>
       )}
 

@@ -510,6 +510,7 @@ export default function DisasterIntelligenceChat({
       );
     } finally {
       if (activeRequestRef.current === requestToken) {
+        activeRequestRef.current = null;
         setLoading(false);
         abortRef.current = null;
         setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 100);

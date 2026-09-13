@@ -175,7 +175,7 @@ def generate_disaster_intelligence_response(query: str, spatial: Dict[str, Any],
     using real Digital Twin spatial topology, elevation, road network, river channels,
     building footprints, and IoT telemetry.
     """
-    q = query.lower()
+    q = query.lower().strip()
     area = spatial["area_name"]
     lat = spatial["latitude"]
     lng = spatial["longitude"]
@@ -208,7 +208,20 @@ def generate_disaster_intelligence_response(query: str, spatial: Dict[str, Any],
         risk_status = "LOW"
         risk_summary = f"Conditions stable in **{area}**. Monitoring normal channel baseline."
 
-    if any(k in q for k in ("evac", "route", "escape", "road", "path", "safe")):
+    # 1. Greetings / Help / Capabilities
+    if any(q == g or q.startswith(g + " ") for g in ("hi", "hello", "hey", "help", "who are you", "what can you do", "start")):
+        return (
+            f"Hello! I am your **AI Disaster Intelligence Assistant** for **{area}** ({lat:.4f}°N, {lng:.4f}°E).\n\n"
+            f"I am continuously connected to your 3D Digital Twin GIS, monitoring:\n"
+            f"• 🛣️ **Evacuation Routes & Paths**: {len(paths)} mapped corridors (e.g. *{primary_road}*)\n"
+            f"• 🌊 **Hydrological Hazards**: Drainage channels and river flow (e.g. *{primary_river}*)\n"
+            f"• 📡 **IoT Mesh Telemetry**: {len(nodes)} mesh nodes & {len(sensors)} field sensors active\n"
+            f"• 🌧️ **Precipitation & Water Flow**: Rain intensity ({rain_val:.1f} mm/h) and 3D surface flow\n\n"
+            f"How can I assist you right now? You can ask me for evacuation paths, flood risk status, weather forecasts, or sensor readings!"
+        )
+
+    # 2. Evacuation Routes & Path Guidance
+    if any(k in q for k in ("evac", "route", "escape", "road", "path", "safe", "where to go", "direction")):
         return (
             f"### 🚨 Evacuation & Path Intelligence for **{area}**\n\n"
             f"📍 **Position**: {lat:.4f}°N, {lng:.4f}°E | Risk Status: **{risk_status}**\n\n"
@@ -221,7 +234,8 @@ def generate_disaster_intelligence_response(query: str, spatial: Dict[str, Any],
             f"• Mapped paths in active zone: {len(paths)} road segments verified in 3D Digital Twin."
         )
 
-    elif any(k in q for k in ("rain", "precip", "weather", "forecast", "wind", "storm")):
+    # 3. Weather / Rain / Precipitation / Simulation
+    if any(k in q for k in ("rain", "precip", "weather", "forecast", "wind", "storm", "cloud", "temp")):
         return (
             f"### 🌧️ Meteorological & Simulation Report for **{area}**\n\n"
             f"📍 **Location**: {area} ({lat:.4f}°N, {lng:.4f}°E)\n\n"
@@ -235,7 +249,33 @@ def generate_disaster_intelligence_response(query: str, spatial: Dict[str, Any],
             f"Low-elevation road segments along **{primary_road}** are monitored for water accumulation."
         )
 
-    elif any(k in q for k in ("sensor", "node", "master", "slave", "mesh", "telemetry", "lora")):
+    # 4. Landslide / Soil Saturation / Slope Hazard
+    if any(k in q for k in ("landslide", "soil", "slope", "mud", "debris", "slide", "ground")):
+        return (
+            f"### ⛰️ Landslide & Terrain Saturation Vulnerability for **{area}**\n\n"
+            f"📍 **Coordinates**: {lat:.4f}°N, {lng:.4f}°E | Risk: **{risk_status}**\n\n"
+            f"#### 🔬 Geological & Soil Parameters:\n"
+            f"• **Soil Saturation Level**: Evaluated along high-gradient slopes above **{primary_road}**.\n"
+            f"• **Slope Stability Warning**: Heavy rainfall ({rain_val:.1f} mm/h) increases pore-water pressure, escalating slope failure risk.\n"
+            f"• **Critical Watch Zones**: Steep embankments overlooking **{primary_river}**.\n\n"
+            f"#### ⚠️ Safety Recommendation:\n"
+            f"Stay clear of cut-slopes, unreinforced hill faces, and drainage ravines. Utilize elevated ridge routes like **{secondary_road}**."
+        )
+
+    # 5. Emergency Actions / Urgent Protocol
+    if any(k in q for k in ("emergency", "action", "what should i do", "what to do", "danger", "urgent", "safety")):
+        return (
+            f"### 🚨 Immediate Emergency Response Protocol for **{area}**\n\n"
+            f"Current Threat Level: **{risk_status}** | Location: {area} ({lat:.4f}°N, {lng:.4f}°E)\n\n"
+            f"#### 📋 Step-by-Step Emergency Directives:\n"
+            f"1. **Evacuate Low Areas**: Immediately move away from **{primary_river}** and surrounding low-lying channels.\n"
+            f"2. **Use High-Ground Routes**: Take **{primary_road}** or **{secondary_road}** uphill toward assembly points.\n"
+            f"3. **Do Not Cross Water**: Never walk or drive through flooded road segments.\n"
+            f"4. **Monitor Telemetry Uplinks**: Follow real-time alerts from the active IoT mesh network ({len(nodes)} nodes online)."
+        )
+
+    # 6. IoT Sensors & Mesh Telemetry
+    if any(k in q for k in ("sensor", "node", "master", "slave", "mesh", "telemetry", "lora", "signal", "battery")):
         master_nodes = [n for n in nodes if n.get("type") == "master"]
         slave_nodes = [n for n in nodes if n.get("type") == "slave"]
         sensor_list_str = ", ".join(f"**{s.get('name') or s.get('type')}**" for s in sensors[:6]) or "None deployed"
@@ -253,16 +293,30 @@ def generate_disaster_intelligence_response(query: str, spatial: Dict[str, Any],
             f"• All LoRaWAN node battery levels nominal (> 92%)."
         )
 
-    elif any(k in q for k in ("building", "structure", "house", "shelter")):
+    # 7. Buildings & Structural Vulnerability
+    if any(k in q for k in ("building", "structure", "house", "home", "shelter", "hospital", "school")):
         return (
             f"### 🏢 Building Footprint & Structural Risk for **{area}**\n\n"
             f"📍 **Monitored Zone**: {area} ({lat:.4f}°N, {lng:.4f}°E)\n\n"
             f"#### 🏗️ Structural Summary:\n"
-            f"• **Indexed Buildings**: {len(buildings) if buildings else 'Multiple footprint polygons indexed'}\n"
+            f"• **Indexed Buildings**: {len(buildings) if buildings else 'Multiple footprint polygons indexed in 3D twin'}\n"
             f"• **Drainage Proximity**: Buildings near **{primary_river}** exhibit elevated inundation vulnerability.\n"
             f"• **Recommended Safe Shelters**: Move to reinforced multi-story structures along **{primary_road}**."
         )
 
+    # 8. Elevation / Location Coordinates
+    if any(k in q for k in ("elevation", "height", "altitude", "coord", "location", "position", "where")):
+        return (
+            f"### 📍 Geographic & Topographic Profile for **{area}**\n\n"
+            f"• **Area Name**: {area}\n"
+            f"• **Center Coordinates**: Latitude {lat:.4f}°N, Longitude {lng:.4f}°E\n"
+            f"• **Monitored Radius**: {req.radius_km or 5.0} km bounding box\n"
+            f"• **Primary Drainage**: {primary_river}\n"
+            f"• **Main Access Road**: {primary_road}\n"
+            f"• **Current Risk Status**: **{risk_status}** ({telemetry})"
+        )
+
+    # Fallback for any other custom question
     return (
         f"### 🛡️ AI Disaster Intelligence Report for **{area}**\n\n"
         f"📍 **Location**: {area} ({lat:.4f}°N, {lng:.4f}°E) | Risk Level: **{risk_status}**\n\n"
@@ -272,7 +326,7 @@ def generate_disaster_intelligence_response(query: str, spatial: Dict[str, Any],
         f"2. **Waterways & Drainage**: **{primary_river}** is monitoring surface runoff.\n"
         f"3. **Environmental State**: {telemetry}\n"
         f"4. **Field Telemetry**: {len(nodes)} mesh nodes and {len(sensors)} field sensors active.\n\n"
-        f"💡 *Ask about evacuation routes, rain simulation, water flow, or sensor telemetry for instant detail.*"
+        f"💡 *Ask about evacuation routes, rain simulation, landslides, water flow, or sensor telemetry for specific detail.*"
     )
 
 

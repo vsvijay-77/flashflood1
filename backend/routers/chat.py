@@ -1,11 +1,12 @@
 """
 Disaster Intelligence Chat Router
-Connects Digital Twin spatial context (paths, location name, coordinates, sensors) to Qwen2.5-VL AI model.
+Streams AI responses directly from external LLM API (Qwen2.5-VL) in chunks
+with spatial GIS context (paths, location name, coordinates, sensors).
 """
 import asyncio
+import json
 import logging
 import os
-import time
 from typing import List, Optional, Dict, Any
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -16,7 +17,6 @@ from services.location_service import bbox_from_radius, bbox_from_polygon
 from services.osm_road_service import OSMRoadService
 from services.osm_river_service import OSMRiverService
 from lib.db import db
-from services.qdrant_service import knowledge_store
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,6 @@ async def _extract_spatial_context(
     effective_lng = lng if lng is not None else 77.0048
     effective_name = area_name or f"Zone ({effective_lat:.4f}°N, {effective_lng:.4f}°E)"
 
-    # Resolve Bounding Box
     if polygon and len(polygon) >= 3:
         bbox = bbox_from_polygon(polygon)
     else:
@@ -86,7 +85,7 @@ async def _extract_spatial_context(
         try:
             _, road_geojson = await asyncio.wait_for(
                 road_service.get_road_network(north, south, east, west, polygon=polygon),
-                timeout=0.25,
+                timeout=0.3,
             )
             named_roads = set()
             for feat in road_geojson.get("features", []):
@@ -99,15 +98,14 @@ async def _extract_spatial_context(
                 elif rtype in ("primary", "secondary", "tertiary", "trunk"):
                     named_roads.add(f"{rtype.capitalize()} Route")
             return sorted(named_roads)[:100]
-        except Exception as exc:
-            logger.info("Roads fallback for chat context (%s)", exc)
+        except Exception:
             return []
 
     async def load_rivers() -> List[str]:
         try:
             _, river_geojson = await asyncio.wait_for(
                 river_service.get_river_network(north, south, east, west, polygon=polygon),
-                timeout=0.25,
+                timeout=0.3,
             )
             named_rivers = set()
             for feat in river_geojson.get("features", []):
@@ -119,8 +117,7 @@ async def _extract_spatial_context(
                 elif wtype in ("river", "stream", "canal"):
                     named_rivers.add(f"Local {wtype.capitalize()}")
             return sorted(named_rivers)[:50]
-        except Exception as exc:
-            logger.info("Rivers fallback for chat context (%s)", exc)
+        except Exception:
             return []
 
     async def load_telemetry() -> str:
@@ -149,191 +146,46 @@ async def _extract_spatial_context(
         load_paths(), load_rivers(), load_telemetry()
     )
 
-    if not extracted_paths:
-        extracted_paths = [
-            "Main Access Corridor",
-            "Emergency Evacuation Route #1 (High Ridge Path)",
-            "Downhill Drainage Flume Road",
-            "Community Bypass Way",
-        ]
-    if not extracted_rivers:
-        extracted_rivers = ["Local Catchment Stream", "Primary Valley Drainage Channel"]
-
     return {
         "area_name": effective_name,
         "latitude": effective_lat,
         "longitude": effective_lng,
-        "paths": extracted_paths,
-        "rivers": extracted_rivers,
+        "paths": extracted_paths or ["Main Access Road", "High Ridge Evacuation Path"],
+        "rivers": extracted_rivers or ["Local River Channel", "Valley Stream"],
         "telemetry": telemetry_summary,
     }
 
 
-def generate_disaster_intelligence_response(query: str, spatial: Dict[str, Any], req: ChatRequest) -> str:
-    """
-    Generates a rich, highly detailed, location-grounded AI Disaster Intelligence analysis
-    using real Digital Twin spatial topology, elevation, road network, river channels,
-    building footprints, and IoT telemetry.
-    """
-    q = query.lower().strip()
-    area = spatial["area_name"]
-    lat = spatial["latitude"]
-    lng = spatial["longitude"]
-    paths = spatial["paths"]
-    rivers = spatial["rivers"]
-    telemetry = spatial["telemetry"]
-    sensors = req.sensors or []
-    nodes = req.mesh_nodes or []
-    buildings = req.buildings or []
-    zones = req.risk_zones or []
+def _build_system_prompt(spatial: Dict[str, Any], req: ChatRequest) -> str:
+    paths_list = "\n".join(f"  • {p}" for p in spatial["paths"][:30])
+    rivers_list = "\n".join(f"  • {r}" for r in spatial["rivers"][:20])
 
-    primary_road = paths[0] if paths else "Main Access Corridor"
-    secondary_road = paths[1] if len(paths) > 1 else "High Ridge Evacuation Path"
-    primary_river = rivers[0] if rivers else "Primary Drainage Channel"
+    return f"""You are an authoritative AI Disaster Intelligence & Early Warning Specialist for Flash Floods and Landslides.
+You are embedded directly inside the 3D Digital Twin GIS Operations Command Center.
 
-    rain_val = req.rainfall_intensity or 0.0
-    is_rain = req.rain_active or rain_val > 0
-    is_water = req.water_sim_active
+INITIAL MONITORED LOCATION & GEOGRAPHIC DETAILS:
+- Location Name: {spatial['area_name']}
+- Position: Latitude {spatial['latitude']:.4f}°N, Longitude {spatial['longitude']:.4f}°E
+- Extracted Roads, Paths & Evacuation Corridors:
+{paths_list}
+- River Channels & Drainage Systems:
+{rivers_list}
+- Environmental & Simulation State:
+  Rain simulation: {'active' if req.rain_active else 'inactive'} ({req.rainfall_intensity or 0} mm/h)
+  3D Water flow simulation: {'active' if req.water_sim_active else 'inactive'}
+  {spatial['telemetry']}
 
-    if rain_val > 50 or len(zones) > 2:
-        risk_status = "CRITICAL"
-        risk_summary = f"Extreme flash flood alert for **{area}**. Torrential rainfall ({rain_val:.1f} mm/h) poses imminent inundation hazards."
-    elif rain_val > 20 or is_water:
-        risk_status = "HIGH"
-        risk_summary = f"High flood vulnerability for **{area}**. Rapid surface runoff entering local channels."
-    elif is_rain or rain_val > 5:
-        risk_status = "MODERATE"
-        risk_summary = f"Moderate surface water pooling detected in **{area}**."
-    else:
-        risk_status = "LOW"
-        risk_summary = f"Conditions stable in **{area}**. Monitoring normal channel baseline."
-
-    # 1. Greetings / Help / Capabilities
-    if any(q == g or q.startswith(g + " ") for g in ("hi", "hello", "hey", "help", "who are you", "what can you do", "start")):
-        return (
-            f"Hello! I am your **AI Disaster Intelligence Assistant** for **{area}** ({lat:.4f}°N, {lng:.4f}°E).\n\n"
-            f"I am continuously connected to your 3D Digital Twin GIS, monitoring:\n"
-            f"• 🛣️ **Evacuation Routes & Paths**: {len(paths)} mapped corridors (e.g. *{primary_road}*)\n"
-            f"• 🌊 **Hydrological Hazards**: Drainage channels and river flow (e.g. *{primary_river}*)\n"
-            f"• 📡 **IoT Mesh Telemetry**: {len(nodes)} mesh nodes & {len(sensors)} field sensors active\n"
-            f"• 🌧️ **Precipitation & Water Flow**: Rain intensity ({rain_val:.1f} mm/h) and 3D surface flow\n\n"
-            f"How can I assist you right now? You can ask me for evacuation paths, flood risk status, weather forecasts, or sensor readings!"
-        )
-
-    # 2. Evacuation Routes & Path Guidance
-    if any(k in q for k in ("evac", "route", "escape", "road", "path", "safe", "where to go", "direction")):
-        return (
-            f"### 🚨 Evacuation & Path Intelligence for **{area}**\n\n"
-            f"📍 **Position**: {lat:.4f}°N, {lng:.4f}°E | Risk Status: **{risk_status}**\n\n"
-            f"#### 🛣️ Recommended Evacuation Corridors:\n"
-            f"1. **Primary High-Ground Path**: Proceed via **{primary_road}**. Move uphill toward designated high-altitude assembly points.\n"
-            f"2. **Secondary Alternate Corridor**: **{secondary_road}** is clear if main choke points experience water pooling.\n"
-            f"3. **Hazard Choke Points**: Avoid low-lying crossings near **{primary_river}**.\n\n"
-            f"#### 🛡️ Action Plan:\n"
-            f"• Avoid driving or walking through moving water on **{primary_river}** banks.\n"
-            f"• Mapped paths in active zone: {len(paths)} road segments verified in 3D Digital Twin."
-        )
-
-    # 3. Weather / Rain / Precipitation / Simulation
-    if any(k in q for k in ("rain", "precip", "weather", "forecast", "wind", "storm", "cloud", "temp")):
-        return (
-            f"### 🌧️ Meteorological & Simulation Report for **{area}**\n\n"
-            f"📍 **Location**: {area} ({lat:.4f}°N, {lng:.4f}°E)\n\n"
-            f"#### 📊 Current Atmospheric & Simulation Parameters:\n"
-            f"• **Rain Simulation**: {'ACTIVE' if is_rain else 'INACTIVE'} ({rain_val:.1f} mm/h intensity)\n"
-            f"• **Wind Velocity**: {req.wind_speed if req.wind_speed is not None else '18.5'} km/h\n"
-            f"• **Shared Forecast Window**: +{req.forecast_hour} Hour(s) Ahead\n"
-            f"• **3D Water Surface Flow**: {'ACTIVE (Hydraulic Mesh Enabled)' if is_water else 'Inactive'}\n\n"
-            f"#### 🌊 Impact Assessment:\n"
-            f"Precipitation runoff is draining directly into **{primary_river}**. "
-            f"Low-elevation road segments along **{primary_road}** are monitored for water accumulation."
-        )
-
-    # 4. Landslide / Soil Saturation / Slope Hazard
-    if any(k in q for k in ("landslide", "soil", "slope", "mud", "debris", "slide", "ground")):
-        return (
-            f"### ⛰️ Landslide & Terrain Saturation Vulnerability for **{area}**\n\n"
-            f"📍 **Coordinates**: {lat:.4f}°N, {lng:.4f}°E | Risk: **{risk_status}**\n\n"
-            f"#### 🔬 Geological & Soil Parameters:\n"
-            f"• **Soil Saturation Level**: Evaluated along high-gradient slopes above **{primary_road}**.\n"
-            f"• **Slope Stability Warning**: Heavy rainfall ({rain_val:.1f} mm/h) increases pore-water pressure, escalating slope failure risk.\n"
-            f"• **Critical Watch Zones**: Steep embankments overlooking **{primary_river}**.\n\n"
-            f"#### ⚠️ Safety Recommendation:\n"
-            f"Stay clear of cut-slopes, unreinforced hill faces, and drainage ravines. Utilize elevated ridge routes like **{secondary_road}**."
-        )
-
-    # 5. Emergency Actions / Urgent Protocol
-    if any(k in q for k in ("emergency", "action", "what should i do", "what to do", "danger", "urgent", "safety")):
-        return (
-            f"### 🚨 Immediate Emergency Response Protocol for **{area}**\n\n"
-            f"Current Threat Level: **{risk_status}** | Location: {area} ({lat:.4f}°N, {lng:.4f}°E)\n\n"
-            f"#### 📋 Step-by-Step Emergency Directives:\n"
-            f"1. **Evacuate Low Areas**: Immediately move away from **{primary_river}** and surrounding low-lying channels.\n"
-            f"2. **Use High-Ground Routes**: Take **{primary_road}** or **{secondary_road}** uphill toward assembly points.\n"
-            f"3. **Do Not Cross Water**: Never walk or drive through flooded road segments.\n"
-            f"4. **Monitor Telemetry Uplinks**: Follow real-time alerts from the active IoT mesh network ({len(nodes)} nodes online)."
-        )
-
-    # 6. IoT Sensors & Mesh Telemetry
-    if any(k in q for k in ("sensor", "node", "master", "slave", "mesh", "telemetry", "lora", "signal", "battery")):
-        master_nodes = [n for n in nodes if n.get("type") == "master"]
-        slave_nodes = [n for n in nodes if n.get("type") == "slave"]
-        sensor_list_str = ", ".join(f"**{s.get('name') or s.get('type')}**" for s in sensors[:6]) or "None deployed"
-
-        return (
-            f"### 📡 IoT Mesh Nodes & Telemetry Summary for **{area}**\n\n"
-            f"📍 **Location**: {area} ({lat:.4f}°N, {lng:.4f}°E)\n\n"
-            f"#### ⚡ Network Topology:\n"
-            f"• **Master Gateways**: {len(master_nodes)} Active ({master_nodes[0].get('name') if master_nodes else 'Master Gateway #1'})\n"
-            f"• **Slave Relay Nodes**: {len(slave_nodes)} Deployed across monitored grid\n"
-            f"• **Attached Field Sensors**: {len(sensors)} Active Sensors ({sensor_list_str})\n\n"
-            f"#### 📈 Live Telemetry Baseline:\n"
-            f"• {telemetry}\n"
-            f"• RF Link Quality: Strong (-58 dBm to -68 dBm range)\n"
-            f"• All LoRaWAN node battery levels nominal (> 92%)."
-        )
-
-    # 7. Buildings & Structural Vulnerability
-    if any(k in q for k in ("building", "structure", "house", "home", "shelter", "hospital", "school")):
-        return (
-            f"### 🏢 Building Footprint & Structural Risk for **{area}**\n\n"
-            f"📍 **Monitored Zone**: {area} ({lat:.4f}°N, {lng:.4f}°E)\n\n"
-            f"#### 🏗️ Structural Summary:\n"
-            f"• **Indexed Buildings**: {len(buildings) if buildings else 'Multiple footprint polygons indexed in 3D twin'}\n"
-            f"• **Drainage Proximity**: Buildings near **{primary_river}** exhibit elevated inundation vulnerability.\n"
-            f"• **Recommended Safe Shelters**: Move to reinforced multi-story structures along **{primary_road}**."
-        )
-
-    # 8. Elevation / Location Coordinates
-    if any(k in q for k in ("elevation", "height", "altitude", "coord", "location", "position", "where")):
-        return (
-            f"### 📍 Geographic & Topographic Profile for **{area}**\n\n"
-            f"• **Area Name**: {area}\n"
-            f"• **Center Coordinates**: Latitude {lat:.4f}°N, Longitude {lng:.4f}°E\n"
-            f"• **Monitored Radius**: {req.radius_km or 5.0} km bounding box\n"
-            f"• **Primary Drainage**: {primary_river}\n"
-            f"• **Main Access Road**: {primary_road}\n"
-            f"• **Current Risk Status**: **{risk_status}** ({telemetry})"
-        )
-
-    # Fallback for any other custom question
-    return (
-        f"### 🛡️ AI Disaster Intelligence Report for **{area}**\n\n"
-        f"📍 **Location**: {area} ({lat:.4f}°N, {lng:.4f}°E) | Risk Level: **{risk_status}**\n\n"
-        f"{risk_summary}\n\n"
-        f"#### 📌 Digital Twin Status Overview:\n"
-        f"1. **Evacuation Path**: **{primary_road}** provides direct access to high ground.\n"
-        f"2. **Waterways & Drainage**: **{primary_river}** is monitoring surface runoff.\n"
-        f"3. **Environmental State**: {telemetry}\n"
-        f"4. **Field Telemetry**: {len(nodes)} mesh nodes and {len(sensors)} field sensors active.\n\n"
-        f"💡 *Ask about evacuation routes, rain simulation, landslides, water flow, or sensor telemetry for specific detail.*"
-    )
+OPERATIONAL DIRECTIVES:
+1. Always ground your response in the monitored area: "{spatial['area_name']}" at ({spatial['latitude']:.4f}°N, {spatial['longitude']:.4f}°E).
+2. Explicitly mention specific roads, paths, and waterways from above when answering evacuation, flood risk, or weather questions.
+3. Answer the user's question directly, clearly, and concisely in formatted markdown.
+"""
 
 
 @router.post("/stream")
 async def chat_stream(req: ChatRequest):
     """
-    Streams AI responses token-by-token with full geographic, path, and location context.
+    Streams AI responses directly from API in chunks token-by-token.
     """
     spatial = await _extract_spatial_context(
         lat=req.latitude,
@@ -344,64 +196,40 @@ async def chat_stream(req: ChatRequest):
         radius_km=req.radius_km or 5.0,
     )
 
-    query_text = req.get_query() or "What is the terrain risk and evacuation plan?"
+    query_text = req.get_query() or "What is the flood risk and evacuation plan?"
+    system_prompt = _build_system_prompt(spatial, req)
+
+    user_prompt = query_text
+    if req.history and len(req.history) > 0:
+        history_snippet = "\n".join(
+            f"{h.get('role', 'user').capitalize()}: {h.get('text', '')[:300]}"
+            for h in req.history[-3:]
+            if h.get('text')
+        )
+        user_prompt = f"Previous conversation context:\n{history_snippet}\n\nUser Question: {user_prompt}"
 
     async def event_generator():
-        import json
+        client_timeout = httpx.Timeout(60.0, connect=10.0, read=50.0)
+        data = {
+            "user_prompt": user_prompt,
+            "system_prompt": system_prompt,
+            "max_tokens": "384",
+        }
+        api_url = f"{QWEN_API_URL.rstrip('/')}/text"
 
-        # Check if custom external LLM endpoint is provided and reachable
-        has_custom_llm = os.environ.get("LLM_API_URL") or (
-            QWEN_API_URL and "3.211.159.169" not in QWEN_API_URL
-        )
-
-        upstream_emitted = False
-        if has_custom_llm:
-            try:
-                system_prompt = _build_system_prompt(spatial)
-                client_timeout = httpx.Timeout(1.5, connect=0.4, read=1.2)
-                async with httpx.AsyncClient(timeout=client_timeout) as client:
-                    data = {
-                        "user_prompt": query_text,
-                        "system_prompt": system_prompt,
-                        "max_tokens": "384",
-                    }
-                    async with client.stream("POST", f"{QWEN_API_URL}/text", data=data) as response:
-                        response.raise_for_status()
-                        stream = response.aiter_text().__aiter__()
-                        while True:
-                            try:
-                                chunk = await asyncio.wait_for(stream.__anext__(), timeout=0.8)
-                            except StopAsyncIteration:
-                                break
-                            if chunk:
-                                upstream_emitted = True
-                                yield f"data: {json.dumps({'token': chunk})}\n\n"
-            except Exception as exc:
-                logger.info(f"Custom LLM stream unavailable: {exc}")
-
-        if not upstream_emitted:
-            full_response = generate_disaster_intelligence_response(query_text, spatial, req)
-            # Stream response in natural word/phrase chunks for smooth real-time display
-            words = full_response.split(" ")
-            chunk_size = 3
-            for i in range(0, len(words), chunk_size):
-                chunk = " ".join(words[i : i + chunk_size])
-                if i + chunk_size < len(words):
-                    chunk += " "
-                yield f"data: {json.dumps({'token': chunk})}\n\n"
-                await asyncio.sleep(0.015)
+        try:
+            async with httpx.AsyncClient(timeout=client_timeout) as client:
+                async with client.stream("POST", api_url, data=data) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_text():
+                        if chunk:
+                            yield f"data: {json.dumps({'token': chunk})}\n\n"
+        except Exception as exc:
+            logger.error(f"Error streaming directly from API: {exc}")
+            err_payload = json.dumps({"token": f"\n\n*[API Streaming Error: {str(exc)}]*"})
+            yield f"data: {err_payload}\n\n"
 
         yield f"data: {json.dumps({'done': True})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
-        },
-    )
 
     return StreamingResponse(
         event_generator(),
@@ -428,7 +256,6 @@ async def chat_risk_analyze(req: RiskAnalyzeRequest):
         radius_km=req.radius_km or 5.0,
     )
 
-    # Determine risk level from zone data or default
     risk_level = "MODERATE"
     confidence = 88
     try:

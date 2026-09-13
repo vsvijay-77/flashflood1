@@ -47,15 +47,61 @@ async def get_sos_requests(
             sb = get_supabase()
             q = sb.table("mob_sos_requests").select("*")
             if status:
-                q = q.eq("status", status)
+                q = q.ilike("status", f"%{status.strip()}%")
             if emergency_type:
-                q = q.eq("emergency_type", emergency_type)
+                q = q.ilike("emergency_type", f"%{emergency_type.strip()}%")
             return q.order("created_at", desc=True).limit(100).execute()
         res = await loop.run_in_executor(None, _fetch)
         return res.data or []
     except Exception as e:
         print(f"[SOS] Error fetching mob_sos_requests: {e}")
-        return []
+        # Fallback to local MongoDB if available
+        try:
+            from lib.db import get_mongo_fallback
+            mongo = get_mongo_fallback()
+            query = {}
+            if status:
+                query["status"] = {"$regex": status.strip(), "$options": "i"}
+            if emergency_type:
+                query["emergency_type"] = {"$regex": emergency_type.strip(), "$options": "i"}
+            cursor = mongo["mob_sos_requests"].find(query, {"_id": 0}).sort("created_at", -1).limit(100)
+            return await cursor.to_list(100)
+        except Exception:
+            return []
+
+
+@router.post("/alerts/sos")
+async def create_sos_request(payload: dict):
+    """Insert a new mobile SOS request into mob_sos_requests table."""
+    try:
+        import asyncio
+        import uuid
+        from datetime import datetime, timezone
+        loop = asyncio.get_running_loop()
+        def _create():
+            from lib.db import get_supabase
+            sb = get_supabase()
+            data = {
+                "id": payload.get("id") or str(uuid.uuid4()),
+                "user_id": payload.get("user_id"),
+                "full_name": payload.get("full_name") or "Citizen",
+                "phone_number": payload.get("phone_number") or "",
+                "language": payload.get("language") or "en",
+                "location_name": payload.get("location_name") or "Current Location",
+                "latitude": payload.get("latitude"),
+                "longitude": payload.get("longitude"),
+                "location_accuracy_m": payload.get("location_accuracy_m"),
+                "emergency_type": payload.get("emergency_type") or "FLOOD_RESCUE",
+                "description": payload.get("description") or "",
+                "status": (payload.get("status") or "RECEIVED").upper(),
+                "created_at": payload.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                "location_source": payload.get("location_source") or "mobile_app",
+            }
+            return sb.table("mob_sos_requests").insert(data).execute()
+        res = await loop.run_in_executor(None, _create)
+        return {"status": "success", "data": res.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create SOS request: {str(e)}")
 
 
 class SosStatusUpdate(AlertAction):
@@ -70,7 +116,7 @@ async def update_sos_status(
     """Update status of a mobile SOS request (e.g. IN_PROGRESS, RESOLVED, ACKNOWLEDGED)."""
     try:
         import asyncio
-        new_status = payload.get("status", "ACKNOWLEDGED")
+        new_status = (payload.get("status") or "ACKNOWLEDGED").upper()
         loop = asyncio.get_running_loop()
         def _update():
             from lib.db import get_supabase

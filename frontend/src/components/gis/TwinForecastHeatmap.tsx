@@ -57,7 +57,7 @@ export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onS
     onSelectedHourChange?.(next);
   };
   const [visible, setVisible] = useState(true);
-  const [opacity, setOpacity] = useState(0.6);
+  const [opacity, setOpacity] = useState(1.0);
   const layerRef = useRef<any>(null);
   const opacityRef = useRef(opacity);
   opacityRef.current = opacity;
@@ -139,7 +139,7 @@ export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onS
       <div className="grid grid-cols-2 gap-1 text-slate-300"><span>Rain {frame.precipitation.toFixed(1)} mm/h</span><span>{frame.temperature_2m.toFixed(1)} °C</span><span>Humidity {frame.relative_humidity_2m}%</span><span>Wind {frame.wind_speed_10m} km/h</span></div>
       <div className="mt-2 h-2 rounded bg-gradient-to-r from-blue-600 via-cyan-500 via-35% to-red-600" style={{ background: "linear-gradient(to right,#2563eb,#06b6d4,#facc15,#dc2626)" }} />
       <div className="mt-1 flex justify-between text-[10px]"><span>Low · 0</span><span>Relative hazard index</span><span>High · 1</span></div>
-      <label className="mt-2 flex items-center gap-2">Opacity<input aria-label="Heatmap opacity" className="w-full accent-cyan-400" type="range" min={0.1} max={0.9} step={0.05} value={opacity} onChange={e => setOpacity(Number(e.target.value))} /></label>
+      <label className="mt-2 flex items-center gap-2">Opacity<input aria-label="Heatmap opacity" className="w-full accent-cyan-400" type="range" min={0.1} max={1.0} step={0.05} value={opacity} onChange={e => setOpacity(Number(e.target.value))} /></label>
       <p className="mt-2 text-[10px] text-slate-400"><a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline">Open-Meteo</a> · fetched {new Date(forecast.fetched_at).toLocaleTimeString()} · area-centre weather; local terrain variation. Not a calibrated flood probability.</p>
     </>}
   </section>;

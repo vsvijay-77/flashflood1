@@ -3508,103 +3508,118 @@ export function CesiumDigitalTwinViewer({
       {/* Cesium WebGL Viewport */}
       <div ref={cesiumContainerRef} className="w-full h-full bg-black" />
 
-      {/* 🌤️ Compact Weather & Forecast Control Box on Left Rail (100% Opacity) */}
-      <div className="absolute top-14 left-3 z-20 w-64 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-2.5 shadow-2xl text-white space-y-2 animate-in fade-in slide-in-from-left-2 duration-200">
-        {/* Header with Map Visibility Toggle */}
-        <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2">
-          <div className="flex items-center gap-1.5">
-            <CloudRain className="size-4 text-cyan-400" />
-            <span className="text-xs font-bold text-cyan-200">Weather & Forecast</span>
+      {/* 🌤️ Weather & Flood Forecast Control Box on Left Rail (Shifted 50px down: top-[105px], 100% Opacity) */}
+      <div className="absolute top-[105px] left-3 z-20 w-64 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-3 animate-in fade-in slide-in-from-left-2 duration-200">
+        {/* SECTION 1: WEATHER */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+            <div className="flex items-center gap-1.5">
+              <CloudRain className="size-4 text-cyan-400" />
+              <span className="text-xs font-bold text-cyan-200">Weather</span>
+            </div>
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+              Live Overview
+            </span>
           </div>
-          <button
-            type="button"
-            aria-pressed={forecastActive}
-            onClick={() => setForecastActive((prev) => !prev)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer shadow-sm ${
-              forecastActive
-                ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 ring-1 ring-cyan-300"
-                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-            }`}
-            title={forecastActive ? "Map Visible (Click to turn Off)" : "Map Off (Click to turn Visible)"}
-          >
-            {forecastActive ? (
-              <>
-                <Eye className="size-3 text-slate-950" />
-                <span>Visible</span>
-              </>
-            ) : (
-              <>
-                <EyeOff className="size-3 text-slate-400" />
-                <span>Off</span>
-              </>
-            )}
-          </button>
-        </div>
 
-        {/* Compact Weather Details & Rainfall */}
-        <div className="grid grid-cols-2 gap-1.5 text-[10px] bg-slate-900 p-1.5 rounded-lg border border-slate-800">
-          <div>
-            <span className="text-slate-400 block text-[9px]">Weather</span>
-            <span className="font-semibold text-white truncate block">
-              {weatherDayTab === "1d"
-                ? "Moderate Rain"
-                : weatherDayTab === "2d"
-                ? "Heavy Rain"
-                : weatherDayTab === "3d"
-                ? "Storm Alert"
-                : weatherDayTab === "4d"
-                ? "Thunderstorm"
-                : weatherDayTab === "5d"
-                ? "Passing Showers"
-                : weatherDayTab === "6d"
-                ? "Light Drizzle"
-                : "Clear Sky"}
-            </span>
-          </div>
-          <div>
-            <span className="text-slate-400 block text-[9px]">Rainfall</span>
-            <span className="font-mono text-cyan-300 font-bold">
-              {weatherDayTab === "1d"
-                ? "12.4 mm/h"
-                : weatherDayTab === "2d"
-                ? "28.5 mm/h"
-                : weatherDayTab === "3d"
-                ? "54.2 mm/h"
-                : weatherDayTab === "4d"
-                ? "68.0 mm/h"
-                : weatherDayTab === "5d"
-                ? "18.3 mm/h"
-                : weatherDayTab === "6d"
-                ? "4.1 mm/h"
-                : "0.0 mm/h"}
-            </span>
+          <div className="grid grid-cols-2 gap-1.5 text-[10px] bg-slate-900 p-2 rounded-lg border border-slate-800">
+            <div>
+              <span className="text-slate-400 block text-[9px]">Weather</span>
+              <span className="font-semibold text-white truncate block">
+                {weatherDayTab === "1d"
+                  ? "Moderate Rain"
+                  : weatherDayTab === "2d"
+                  ? "Heavy Rain"
+                  : weatherDayTab === "3d"
+                  ? "Storm Alert"
+                  : weatherDayTab === "4d"
+                  ? "Thunderstorm"
+                  : weatherDayTab === "5d"
+                  ? "Passing Showers"
+                  : weatherDayTab === "6d"
+                  ? "Light Drizzle"
+                  : "Clear Sky"}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[9px]">Rainfall</span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {weatherDayTab === "1d"
+                  ? "12.4 mm/h"
+                  : weatherDayTab === "2d"
+                  ? "28.5 mm/h"
+                  : weatherDayTab === "3d"
+                  ? "54.2 mm/h"
+                  : weatherDayTab === "4d"
+                  ? "68.0 mm/h"
+                  : weatherDayTab === "5d"
+                  ? "18.3 mm/h"
+                  : weatherDayTab === "6d"
+                  ? "4.1 mm/h"
+                  : "0.0 mm/h"}
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* 1d, 2d, 3d, 4d, 5d, 6d, 7d Forecast Horizon Buttons */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[9px] text-slate-400 font-semibold">
-            <span>Forecast Horizon</span>
-            <span className="font-mono text-cyan-300 font-bold">{weatherDayTab}</span>
+        {/* DISTINCT SPACE & DIVIDER BETWEEN WEATHER AND FLOOD FORECAST */}
+        <div className="border-t border-slate-800 pt-2.5 space-y-2">
+          {/* SECTION 2: FLOOD FORECAST */}
+          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5">
+            <div className="flex items-center gap-1.5">
+              <Waves className="size-4 text-cyan-400" />
+              <span className="text-xs font-bold text-cyan-200">Flood Forecast</span>
+            </div>
+            <button
+              type="button"
+              aria-pressed={forecastActive}
+              onClick={() => setForecastActive((prev) => !prev)}
+              className={`flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer shadow-sm ${
+                forecastActive
+                  ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 ring-1 ring-cyan-300"
+                  : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+              }`}
+              title={forecastActive ? "Flood Forecast Visible (Click to turn Off)" : "Flood Forecast Off (Click to turn Visible)"}
+            >
+              {forecastActive ? (
+                <>
+                  <Eye className="size-3 text-slate-950" />
+                  <span>Visible</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="size-3 text-slate-400" />
+                  <span>Off</span>
+                </>
+              )}
+            </button>
           </div>
-          <div className="grid grid-cols-7 gap-1">
-            {(["1d", "2d", "3d", "4d", "5d", "6d", "7d"] as const).map((day, idx) => (
-              <button
-                key={day}
-                type="button"
-                onClick={() => {
-                  setWeatherDayTab(day);
-                  setForecastHour(idx * 2);
-                }}
-                className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
-                  weatherDayTab === day
-                    ? "bg-cyan-500 text-slate-950 ring-1 ring-cyan-300 shadow-sm"
-                    : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
-                }`}
-              >
-                {day}
-              </button>
-            ))}
+
+          {/* 1d, 2d, 3d, 4d, 5d, 6d, 7d Forecast Horizon Buttons */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[9px] text-slate-400 font-semibold">
+              <span>Forecast Horizon</span>
+              <span className="font-mono text-cyan-300 font-bold">{weatherDayTab}</span>
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {(["1d", "2d", "3d", "4d", "5d", "6d", "7d"] as const).map((day, idx) => (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => {
+                    setWeatherDayTab(day);
+                    setForecastHour(idx * 2);
+                  }}
+                  className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
+                    weatherDayTab === day
+                      ? "bg-cyan-500 text-slate-950 ring-1 ring-cyan-300 shadow-sm"
+                      : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
+                  }`}
+                >
+                  {day}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

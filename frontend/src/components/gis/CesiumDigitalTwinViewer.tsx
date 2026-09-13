@@ -997,28 +997,43 @@ export function CesiumDigitalTwinViewer({
         const risk = road.properties?.flood_risk || 0;
         const widthPx = road.properties?.width_px;
 
-        // Color: flooded = dark red, major = bright red, minor = muted red/salmon
+        // Cartographic hierarchy with dark casing:
+        // Ensures roads/paths never mix with rivers (zIndex: 30 > 15) or house boundaries
         let strokeColor: string;
+        let outlineColor: string;
         let lineWidth: number;
+        let outlineWidth: number;
 
         if (access === "flooded" || risk >= 0.7) {
-          strokeColor = "#dc2626";   // Dark red — flooded
+          strokeColor = "#ef4444";   // Danger red — flooded road
+          outlineColor = "#7f1d1d";  // Deep crimson outline
           lineWidth = widthPx ?? 6.0;
-        } else if (rType === "motorway") {
-          strokeColor = "#ff4444";   // Bright red
-          lineWidth = widthPx ?? 7.0;
-        } else if (rType === "trunk" || rType === "primary") {
-          strokeColor = "#ef4444";   // Red 500
-          lineWidth = widthPx ?? 5.5;
+          outlineWidth = 2.0;
+        } else if (rType === "motorway" || rType === "trunk") {
+          strokeColor = "#f59e0b";   // Amber-500 — arterial highways
+          outlineColor = "#0f172a";  // Slate-900 border
+          lineWidth = widthPx ?? 6.5;
+          outlineWidth = 2.0;
+        } else if (rType === "primary") {
+          strokeColor = "#fbbf24";   // Amber-400 — primary connectors
+          outlineColor = "#1e293b";  // Slate-800 border
+          lineWidth = widthPx ?? 5.0;
+          outlineWidth = 1.5;
         } else if (rType === "secondary" || rType === "tertiary") {
-          strokeColor = "#f87171";   // Red 400
+          strokeColor = "#fef08a";   // Warm cream/yellow-200 — secondary streets
+          outlineColor = "#334155";  // Slate-700 border
           lineWidth = widthPx ?? 4.0;
-        } else if (rType === "residential" || rType === "unclassified") {
-          strokeColor = "#fca5a5";   // Red 300
-          lineWidth = widthPx ?? 2.5;
+          outlineWidth = 1.5;
+        } else if (rType === "residential" || rType === "living_street" || rType === "unclassified") {
+          strokeColor = "#ffffff";   // Crisp white — residential streets
+          outlineColor = "#334155";  // Slate-700 border
+          lineWidth = widthPx ?? 3.0;
+          outlineWidth = 1.0;
         } else {
-          strokeColor = "#fecaca";   // Red 200 — tracks, paths
-          lineWidth = widthPx ?? 1.5;
+          strokeColor = "#cbd5e1";   // Light slate — footpaths, trails, service paths
+          outlineColor = "#475569";  // Slate-600 border
+          lineWidth = widthPx ?? 2.0;
+          outlineWidth = 1.0;
         }
 
         clippedSegments.forEach((seg) => {
@@ -1031,8 +1046,13 @@ export function CesiumDigitalTwinViewer({
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray(flatPositions),
               width: lineWidth,
-              material: Cesium.Color.fromCssColorString(strokeColor).withAlpha(isMajor ? 0.95 : 0.85),
+              material: new Cesium.PolylineOutlineMaterialProperty({
+                color: Cesium.Color.fromCssColorString(strokeColor),
+                outlineColor: Cesium.Color.fromCssColorString(outlineColor),
+                outlineWidth: outlineWidth,
+              }),
               clampToGround: true,
+              zIndex: 30,
             },
           });
           roadEntitiesRef.current.push(ent);
@@ -1069,7 +1089,7 @@ export function CesiumDigitalTwinViewer({
               material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               classificationType: Cesium.ClassificationType.TERRAIN,
-              zIndex: 5,
+              zIndex: 10,
             },
           }));
         }
@@ -1081,8 +1101,13 @@ export function CesiumDigitalTwinViewer({
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray(line.flat()),
               width: Math.max(3, Math.min(12, props.width_m || 4)),
-              material: Cesium.Color.fromCssColorString(type === "river" ? "#0284c7" : "#38bdf8"),
-              clampToGround: true, zIndex: 6,
+              material: new Cesium.PolylineOutlineMaterialProperty({
+                color: Cesium.Color.fromCssColorString(type === "river" ? "#0284c7" : "#38bdf8"),
+                outlineColor: Cesium.Color.fromCssColorString("#082f49"),
+                outlineWidth: 1.5,
+              }),
+              clampToGround: true,
+              zIndex: 15,
             },
           }));
         }
@@ -1121,8 +1146,9 @@ export function CesiumDigitalTwinViewer({
         }
         if (Boolean(entity._simulationFlooded) === flooded) continue;
         entity._simulationFlooded = flooded;
-        entity.polygon.material = Cesium.Color.fromCssColorString(flooded ? "#ef4444" : "#facc15").withAlpha(flooded ? 1 : 0.85);
-        entity.polygon.outlineColor = Cesium.Color.fromCssColorString(flooded ? "#b91c1c" : "#fde047");
+        const baseRiskColor = entity._baseBuildingData?.risk_color || "#10b981";
+        entity.polygon.material = Cesium.Color.fromCssColorString(flooded ? "#ef4444" : baseRiskColor).withAlpha(flooded ? 1 : 0.92);
+        entity.polygon.outlineColor = Cesium.Color.fromCssColorString(flooded ? "#7f1d1d" : "#0f172a");
         entity.billboard.show = flooded;
         entity._buildingData = flooded
           ? { ...entity._baseBuildingData, flood_risk: "CRITICAL", risk_color: "#ef4444", simulated_water_depth_m: depth }
@@ -1230,10 +1256,10 @@ export function CesiumDigitalTwinViewer({
             },
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flat()), holes),
-              material: Cesium.Color.fromCssColorString("#facc15").withAlpha(0.85),
+              material: Cesium.Color.fromCssColorString(riskColor).withAlpha(0.92),
               outline: true,
-              outlineColor: Cesium.Color.fromCssColorString("#fde047"),
-              outlineWidth: 1.5,
+              outlineColor: Cesium.Color.fromCssColorString("#0f172a"),
+              outlineWidth: 2.0,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               extrudedHeight: height,
               extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
@@ -1286,6 +1312,7 @@ export function CesiumDigitalTwinViewer({
           color: Cesium.Color.fromCssColorString(routeColor),
         }),
         clampToGround: true,
+        zIndex: 50,
       },
     });
     evacuationEntitiesRef.current.push(pathEntity);

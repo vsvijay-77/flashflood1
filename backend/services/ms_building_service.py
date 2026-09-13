@@ -17,12 +17,13 @@ from typing import Dict, Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path("/Users/vijay/Documents/flash_flood/backend/cache/ms_buildings")
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+CACHE_DIR = BACKEND_DIR / "cache" / "ms_buildings"
 TILES_DIR = CACHE_DIR / "tiles"
 ZONES_DIR = CACHE_DIR / "zones"
 INDEX_PATH = CACHE_DIR / "dataset_links_index.json"
 DATASET_LINKS_URL = "https://bfppub.blob.core.windows.net/%24web/2026-08-13/dataset-links.csv"
-FALLBACK_GEOJSON = Path("/Users/vijay/Documents/flash_flood/backend/pollachi_buildings.geojson")
+FALLBACK_GEOJSON = BACKEND_DIR / "pollachi_buildings.geojson"
 
 os.makedirs(TILES_DIR, exist_ok=True)
 os.makedirs(ZONES_DIR, exist_ok=True)
@@ -697,6 +698,8 @@ class MSBuildingService:
             counts = {"SAFE": 0, "MODERATE": 0, "HIGH": 0, "CRITICAL": 0}
             bldg_idx = 0
 
+            placed_centers: List[Tuple[float, float]] = []
+
             # Step along road ways and place houses offset from the road
             for item in elements:
                 if item.get("type") != "way":
@@ -728,7 +731,7 @@ class MSBuildingService:
                         base_lon = p1_lon + frac * (p2_lon - p1_lon)
 
                         for side in (-1.0, 1.0):
-                            offset_dist = 12.0  # 12 meters offset from road centerline
+                            offset_dist = 24.0  # 24 meters offset from road centerline (ensures >=12m setback from road edges)
                             h_lat = base_lat + (perp_y * offset_dist * side) / 111132.0
                             h_lon = base_lon + (perp_x * offset_dist * side) / (111132.0 * math.cos(math.radians(base_lat)))
 
@@ -738,6 +741,27 @@ class MSBuildingService:
                                     continue
                             elif not (min_lat <= h_lat <= max_lat and min_lon <= h_lon <= max_lon):
                                 continue
+
+                            # Skip if too close to river/water body (< 20 meters)
+                            if river_points:
+                                near_river = False
+                                for rlat, rlon in river_points:
+                                    dlat_m = (h_lat - rlat) * 111132.0
+                                    dlon_m = (h_lon - rlon) * 111132.0 * math.cos(math.radians(h_lat))
+                                    if dlat_m * dlat_m + dlon_m * dlon_m < 20.0 * 20.0:
+                                        near_river = True
+                                        break
+                                if near_river:
+                                    continue
+
+                            # Skip if overlapping another placed house (< 16 meters)
+                            cos_hlat = math.cos(math.radians(h_lat))
+                            if any(
+                                math.hypot((h_lat - plat) * 111132.0, (h_lon - plon) * 111132.0 * cos_hlat) < 16.0
+                                for plat, plon in placed_centers
+                            ):
+                                continue
+                            placed_centers.append((h_lat, h_lon))
 
                             bldg_idx += 1
                             # 10m x 12m house footprint polygon

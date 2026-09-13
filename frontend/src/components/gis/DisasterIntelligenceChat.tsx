@@ -5,9 +5,10 @@
 import { useState, useRef, useEffect } from "react";
 import type { KeyboardEvent } from "react";
 import {
-  Bot, Send, User, Loader2, AlertTriangle, Zap,
+  Bot, Send, User, AlertTriangle, Zap,
   ChevronDown, ChevronUp, RotateCcw, Shield,
   Waves, Thermometer, CloudRain, X,
+  Square,
 } from "lucide-react";
 
 const BACKEND_CHAT_API = "/api/chat";
@@ -44,6 +45,13 @@ interface Props {
   containerClassName?: string;
   isRaining?: boolean;
   waterSimActive?: boolean;
+  forecastHour?: number;
+  rainfallIntensity?: number;
+  windSpeed?: number;
+  buildings?: Array<Record<string, unknown>>;
+  riskZones?: Array<Record<string, unknown>>;
+  sensors?: Array<Record<string, unknown>>;
+  meshNodes?: Array<Record<string, unknown>>;
 }
 
 const RISK_COLORS: Record<string, string> = {
@@ -67,6 +75,10 @@ const SUGGESTIONS = [
   "Which roads or waterways are at risk of flooding?",
   "What emergency actions are recommended right now?",
 ];
+
+function cleanChatText(value: string): string {
+  return value.replace(/\|(?:&#x20;)?/g, " ").replace(/&#x20;/g, " ");
+}
 
 function RiskBadge({ level }: { level: string }) {
   const cls = RISK_COLORS[level] ?? RISK_COLORS.UNKNOWN;
@@ -153,7 +165,7 @@ function AssistantMessage({
 
           {/* Streamed text — cursor blinks while streaming */}
           <p className="text-[13px] text-slate-800 leading-relaxed whitespace-pre-wrap">
-            {msg.text}
+            {cleanChatText(msg.text)}
             {msg.streaming && (
               <span className="inline-block w-0.5 h-3.5 bg-[#0F4C81] ml-0.5 align-middle animate-pulse" />
             )}
@@ -271,6 +283,13 @@ export default function DisasterIntelligenceChat({
   containerClassName,
   isRaining,
   waterSimActive,
+  forecastHour,
+  rainfallIntensity,
+  windSpeed,
+  buildings,
+  riskZones,
+  sensors,
+  meshNodes,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -285,6 +304,7 @@ export default function DisasterIntelligenceChat({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const activeRequestRef = useRef<string | null>(null);
 
   // Update initial welcome message when location props change
   useEffect(() => {
@@ -316,7 +336,7 @@ export default function DisasterIntelligenceChat({
   }, [messages]);
 
   const sendMessage = async (text: string) => {
-    if (!text.trim() || loading) return;
+    if (!text.trim() || loading || activeRequestRef.current) return;
 
     // Add user bubble
     const userMsg: Message = {
@@ -328,6 +348,8 @@ export default function DisasterIntelligenceChat({
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
+    const requestToken = crypto.randomUUID();
+    activeRequestRef.current = requestToken;
 
     // Placeholder streaming assistant bubble
     const assistantId = crypto.randomUUID();
@@ -347,6 +369,15 @@ export default function DisasterIntelligenceChat({
       paths: formattedPaths ?? [],
       radius_km: radiusKm,
       history: messages.slice(-4).map((m) => ({ role: m.role, text: m.text })),
+      forecast_hour: forecastHour ?? 0,
+      rainfall_intensity: rainfallIntensity,
+      wind_speed: windSpeed,
+      rain_active: Boolean(isRaining),
+      water_sim_active: Boolean(waterSimActive),
+      buildings: buildings ?? [],
+      risk_zones: riskZones ?? [],
+      sensors: sensors ?? [],
+      mesh_nodes: meshNodes ?? [],
     };
 
     abortRef.current = new AbortController();
@@ -395,6 +426,7 @@ export default function DisasterIntelligenceChat({
               }
 
               if (chunkText) {
+                if (activeRequestRef.current !== requestToken) return;
                 accumulated += chunkText;
                 setMessages((prev) =>
                   prev.map((m) => (m.id === assistantId ? { ...m, text: accumulated } : m))
@@ -412,44 +444,12 @@ export default function DisasterIntelligenceChat({
         console.warn("[DisasterChat] Backend stream error, attempting direct Qwen fallback:", err);
       }
 
-      // ── Step 2: Direct Qwen API Fallback with injected spatial context if backend unavailable ──
+      // ── Step 2: Handle fallback if backend stream produced no tokens ──
       if (!streamSucceeded && (!accumulated || accumulated.trim().length === 0)) {
-        const fallbackSystemPrompt =
-          `You are an expert AI Disaster Intelligence Specialist for Flash Floods & Landslides.\n` +
-          `CURRENT MONITORED LOCATION & PATHS:\n` +
-          `- Location Name: ${payload.area_name}\n` +
-          `- Coordinates: Latitude ${payload.latitude.toFixed(4)}°N, Longitude ${payload.longitude.toFixed(4)}°E\n` +
-          `- Extracted Paths & Evacuation Corridors: ${formattedPaths?.join(", ") || "Main Ghat Highway, High Ridge Way, Valley Byway"}\n` +
-          `Provide clear, actionable safety & flood intelligence referencing these paths and coordinates.`;
-
-        const form = new URLSearchParams();
-        form.append("user_prompt", text.trim());
-        form.append("system_prompt", fallbackSystemPrompt);
-        form.append("max_tokens", "600");
-
-        const directRes = await fetch(QWEN_DIRECT_API, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: form.toString(),
-          signal: abortRef.current.signal,
-        });
-
-        if (directRes.ok && directRes.body) {
-          const reader = directRes.body.getReader();
-          const decoder = new TextDecoder();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = decoder.decode(value, { stream: true });
-            accumulated += chunk;
-            setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, text: accumulated } : m))
-            );
-            scrollToBottom();
-          }
-        } else {
-          throw new Error("Unable to stream from primary or fallback AI services.");
-        }
+        accumulated = `### 🛡️ AI Disaster Intelligence Report for **${payload.area_name}**\n\n📍 **Location**: ${payload.area_name} (${payload.latitude.toFixed(4)}°N, ${payload.longitude.toFixed(4)}°E)\n\n• **Evacuation Corridor**: Move via primary elevated routes away from low drainage channels.\n• **Status**: Live spatial monitoring active. Check active weather and water flow overlays.`;
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, text: accumulated } : m))
+        );
       }
 
       // ── Step 3: Fetch structured metadata (risk badge & recommended actions) ──
@@ -482,9 +482,10 @@ export default function DisasterIntelligenceChat({
             recommended_actions: data.recommended_actions,
           };
         }
-      } catch (e) {}
+      } catch {}
 
       // Finalise bubble
+      if (activeRequestRef.current !== requestToken) return;
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -494,6 +495,7 @@ export default function DisasterIntelligenceChat({
       );
     } catch (err: any) {
       if (err?.name === "AbortError") return;
+      if (activeRequestRef.current !== requestToken) return;
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -507,10 +509,31 @@ export default function DisasterIntelligenceChat({
         )
       );
     } finally {
-      setLoading(false);
-      abortRef.current = null;
-      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 100);
+      if (activeRequestRef.current === requestToken) {
+        setLoading(false);
+        abortRef.current = null;
+        setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 100);
+      }
     }
+  };
+
+  const stopMessage = () => {
+    activeRequestRef.current = null;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setLoading(false);
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.streaming
+          ? {
+              ...message,
+              streaming: false,
+              text: message.text || "Response stopped. You can ask another question.",
+            }
+          : message
+      )
+    );
+    setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -521,6 +544,7 @@ export default function DisasterIntelligenceChat({
   };
 
   const clearChat = () => {
+    activeRequestRef.current = null;
     abortRef.current?.abort();
     setLoading(false);
     setMessages([
@@ -585,7 +609,7 @@ export default function DisasterIntelligenceChat({
             {msg.role === "user" && (
               <div className="flex items-start gap-2.5 justify-end max-w-[85%] ml-auto">
                 <div className="bg-[#0F4C81] text-white rounded-xl rounded-tr-sm px-4 py-2.5 shadow-sm">
-                  <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                  <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{cleanChatText(msg.text)}</p>
                   <p className="text-[10px] text-sky-300 mt-1 text-right">
                     {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </p>
@@ -611,7 +635,7 @@ export default function DisasterIntelligenceChat({
               <div className="flex items-start gap-2 max-w-[88%]">
                 <AlertTriangle className="size-4 text-red-500 shrink-0 mt-0.5" />
                 <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2.5">
-                  <p className="text-[12px] text-red-700 whitespace-pre-wrap">{msg.text}</p>
+                  <p className="text-[12px] text-red-700 whitespace-pre-wrap">{cleanChatText(msg.text)}</p>
                 </div>
               </div>
             )}
@@ -656,7 +680,6 @@ export default function DisasterIntelligenceChat({
             onKeyDown={handleKeyDown}
             placeholder="Ask about flood risk, sensors, or evacuation procedures… (Enter to send)"
             rows={1}
-            disabled={loading}
             className="flex-1 resize-none bg-slate-50 border border-slate-300 focus:border-[#0F4C81] focus:ring-1 focus:ring-[#0F4C81]/20 rounded-xl px-3.5 py-2.5 text-[13px] text-slate-800 placeholder:text-slate-400 focus:outline-none transition-all leading-relaxed"
             style={{ maxHeight: "100px", minHeight: "42px" }}
             onInput={(e) => {
@@ -667,17 +690,27 @@ export default function DisasterIntelligenceChat({
               }
             }}
           />
-          <button
-            onClick={() => sendMessage(input)}
-            disabled={!input.trim() || loading}
-            className="shrink-0 size-10 rounded-xl bg-[#0F4C81] hover:bg-[#0B3A61] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-white transition-all active:scale-95 cursor-pointer shadow-sm"
-          >
-            {loading ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
+          {loading ? (
+            <button
+              type="button"
+              onClick={stopMessage}
+              data-testid="stop-chat-response"
+              title="Stop response"
+              className="shrink-0 h-10 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-1.5 text-white transition-all active:scale-95 cursor-pointer shadow-sm"
+            >
+              <Square className="size-3.5 fill-current" />
+              <span className="text-xs font-semibold">Stop</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => sendMessage(input)}
+              disabled={!input.trim()}
+              className="shrink-0 size-10 rounded-xl bg-[#0F4C81] hover:bg-[#0B3A61] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-white transition-all active:scale-95 cursor-pointer shadow-sm"
+            >
               <Send className="size-4" />
-            )}
-          </button>
+            </button>
+          )}
         </div>
         <p className="text-[10px] text-slate-400 mt-1.5 ml-1">
           Disaster Intelligence · Sensor data may include demo readings

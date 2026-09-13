@@ -3520,48 +3520,72 @@ export function CesiumDigitalTwinViewer({
           </span>
         </div>
 
-        <div className="grid grid-cols-2 gap-1.5 text-[10px] bg-slate-900 p-2 rounded-lg border border-slate-800">
-          <div>
-            <span className="text-slate-400 block text-[9px]">Condition</span>
-            <span className="font-semibold text-white truncate block">
-              {weatherDayTab === "1d"
-                ? "Moderate Rain"
-                : weatherDayTab === "2d"
-                ? "Heavy Rain"
-                : weatherDayTab === "3d"
-                ? "Storm Alert"
-                : weatherDayTab === "4d"
-                ? "Thunderstorm"
-                : weatherDayTab === "5d"
-                ? "Passing Showers"
-                : weatherDayTab === "6d"
-                ? "Light Drizzle"
-                : "Clear Sky"}
-            </span>
+        {/* Weather Metrics: Condition, Rainfall Rate, Temp, Humidity, Wind */}
+        <div className="space-y-1.5 bg-slate-900 p-2 rounded-lg border border-slate-800 text-[10px]">
+          <div className="grid grid-cols-2 gap-1.5 pb-1 border-b border-slate-800/80">
+            <div>
+              <span className="text-slate-400 block text-[9px]">Condition</span>
+              <span className="font-semibold text-white truncate block">
+                {weatherDayTab === "1d"
+                  ? "Moderate Rain"
+                  : weatherDayTab === "2d"
+                  ? "Heavy Rain"
+                  : weatherDayTab === "3d"
+                  ? "Storm Alert"
+                  : weatherDayTab === "4d"
+                  ? "Thunderstorm"
+                  : weatherDayTab === "5d"
+                  ? "Passing Showers"
+                  : weatherDayTab === "6d"
+                  ? "Light Drizzle"
+                  : "Clear Sky"}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[9px]">Rainfall Rate</span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {weatherDayTab === "1d"
+                  ? "12.4 mm/h"
+                  : weatherDayTab === "2d"
+                  ? "28.5 mm/h"
+                  : weatherDayTab === "3d"
+                  ? "54.2 mm/h"
+                  : weatherDayTab === "4d"
+                  ? "68.0 mm/h"
+                  : weatherDayTab === "5d"
+                  ? "18.3 mm/h"
+                  : weatherDayTab === "6d"
+                  ? "4.1 mm/h"
+                  : "0.0 mm/h"}
+              </span>
+            </div>
           </div>
-          <div>
-            <span className="text-slate-400 block text-[9px]">Rainfall Rate</span>
-            <span className="font-mono text-cyan-300 font-bold">
-              {weatherDayTab === "1d"
-                ? "12.4 mm/h"
-                : weatherDayTab === "2d"
-                ? "28.5 mm/h"
-                : weatherDayTab === "3d"
-                ? "54.2 mm/h"
-                : weatherDayTab === "4d"
-                ? "68.0 mm/h"
-                : weatherDayTab === "5d"
-                ? "18.3 mm/h"
-                : weatherDayTab === "6d"
-                ? "4.1 mm/h"
-                : "0.0 mm/h"}
-            </span>
+
+          <div className="grid grid-cols-3 gap-1 pt-0.5 text-center text-[9px]">
+            <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+              <span className="text-slate-400 block text-[8px]">Temp</span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {weatherDayTab === "1d" ? "27.4 °C" : weatherDayTab === "2d" ? "24.1 °C" : weatherDayTab === "3d" ? "23.0 °C" : "29.2 °C"}
+              </span>
+            </div>
+            <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+              <span className="text-slate-400 block text-[8px]">Humidity</span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {weatherDayTab === "1d" ? "82%" : weatherDayTab === "2d" ? "94%" : weatherDayTab === "3d" ? "98%" : "71%"}
+              </span>
+            </div>
+            <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+              <span className="text-slate-400 block text-[8px]">Wind</span>
+              <span className="font-mono text-cyan-300 font-bold">
+                {weatherDayTab === "1d" ? "14.2 km/h" : weatherDayTab === "2d" ? "28.0 km/h" : weatherDayTab === "3d" ? "36.5 km/h" : "10.1 km/h"}
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* 🌊 Forecast Heatmap Box (Positioned Just Below Weather Forecast: top-[215px], 100% Opacity) */}
-      <div className="absolute top-[215px] left-3 z-20 w-64 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2 animate-in fade-in slide-in-from-left-2 duration-200">
+      {/* 🌊 Forecast Heatmap Box (Spaced Below Weather Forecast: top-[255px], 100% Opacity) */}
+      <div className="absolute top-[255px] left-3 z-20 w-64 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2 animate-in fade-in slide-in-from-left-2 duration-200">
         <div
           onClick={() => {
             enterFullscreen();

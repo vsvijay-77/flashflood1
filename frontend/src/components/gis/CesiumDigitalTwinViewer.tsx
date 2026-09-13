@@ -3564,22 +3564,33 @@ export function CesiumDigitalTwinViewer({
 
         {/* DISTINCT SPACE & DIVIDER BETWEEN WEATHER AND FLOOD FORECAST */}
         <div className="border-t border-slate-800 pt-2.5 space-y-2">
-          {/* SECTION 2: FLOOD FORECAST */}
-          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5">
+          {/* SECTION 2: FLOOD FORECAST (Clicking triggers fullscreen mode) */}
+          <div
+            onClick={() => {
+              enterFullscreen();
+              if (!forecastActive) setForecastActive(true);
+            }}
+            className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5 cursor-pointer group hover:border-cyan-500/50 transition-colors"
+            title="Click to view Flood Forecast Heatmap in Fullscreen"
+          >
             <div className="flex items-center gap-1.5">
-              <Waves className="size-4 text-cyan-400" />
-              <span className="text-xs font-bold text-cyan-200">Flood Forecast</span>
+              <Waves className="size-4 text-cyan-400 group-hover:scale-110 transition-transform" />
+              <span className="text-xs font-bold text-cyan-200 group-hover:text-white">Flood Forecast</span>
             </div>
             <button
               type="button"
               aria-pressed={forecastActive}
-              onClick={() => setForecastActive((prev) => !prev)}
+              onClick={(e) => {
+                e.stopPropagation();
+                enterFullscreen();
+                setForecastActive((prev) => !prev);
+              }}
               className={`flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer shadow-sm ${
                 forecastActive
                   ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 ring-1 ring-cyan-300"
                   : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
               }`}
-              title={forecastActive ? "Flood Forecast Visible (Click to turn Off)" : "Flood Forecast Off (Click to turn Visible)"}
+              title={forecastActive ? "Flood Forecast Visible (Click to turn Off)" : "Flood Forecast Off (Click to turn Visible & Fullscreen)"}
             >
               {forecastActive ? (
                 <>
@@ -3607,8 +3618,10 @@ export function CesiumDigitalTwinViewer({
                   key={day}
                   type="button"
                   onClick={() => {
+                    enterFullscreen();
                     setWeatherDayTab(day);
                     setForecastHour(idx * 2);
+                    if (!forecastActive) setForecastActive(true);
                   }}
                   className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
                     weatherDayTab === day

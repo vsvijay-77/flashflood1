@@ -124,7 +124,7 @@ export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onS
   }, [opacity, viewer]);
 
   const frame = forecast?.frames[hour];
-  return <section className="absolute top-[385px] left-3 z-30 w-64 max-h-[calc(100%-25rem)] overflow-y-auto rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 text-xs text-slate-100 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-200 custom-dt-scrollbar" aria-label="Weather forecast surface heatmap" onKeyDown={e => e.stopPropagation()} onKeyUp={e => e.stopPropagation()}>
+  return <section className="absolute top-[405px] left-3 z-30 w-64 max-h-[calc(100%-26rem)] overflow-y-auto rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 text-xs text-slate-100 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-200 custom-dt-scrollbar" aria-label="Weather forecast surface heatmap" onKeyDown={e => e.stopPropagation()} onKeyUp={e => e.stopPropagation()}>
     <div className="flex items-center justify-between gap-2">
       <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={visible} onChange={e => setVisible(e.target.checked)} /> Forecast heatmap</label>
       <button className="text-cyan-300 disabled:opacity-50" disabled={loading} onClick={() => setRefresh(x => x + 1)}>Refresh</button>

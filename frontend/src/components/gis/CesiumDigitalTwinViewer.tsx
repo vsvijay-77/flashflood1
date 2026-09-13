@@ -56,6 +56,7 @@ import { buildFloodSamples, buildingFloodDepth, BUILDING_FLOOD_THRESHOLD_M, type
 import DisasterIntelligenceChat from "./DisasterIntelligenceChat";
 import { toast } from "sonner";
 import { generateCirclePolygon } from "@/lib/gisUtils";
+import { prepareBuildingFootprints } from "./buildingGeometry";
 import {
   extractNetworks,
   extractBuildings,
@@ -114,6 +115,7 @@ export interface UserActivityLog {
 }
 
 export interface CesiumDigitalTwinViewerProps {
+  areaId?: string;
   latitude: number;
   longitude: number;
   areaName?: string;
@@ -165,17 +167,8 @@ if (typeof window !== "undefined") {
   }, 100);
 }
 
-// ─── 🌐 GLOBAL NETWORK CACHE FOR DIGITAL TWIN AREAS (ROADS, RIVERS, BUILDINGS) ───
-const networkAreaCache: Record<string, {
-  roads: RoadFeature[];
-  rivers: RiverFeature[];
-  buildings?: any[];
-  bbox: BoundingBox;
-  osmTileStatus?: any;
-  timestamp: number;
-}> = {};
-
 export function CesiumDigitalTwinViewer({
+  areaId,
   latitude,
   longitude,
   areaName = "Pollachi Basin",
@@ -195,6 +188,8 @@ export function CesiumDigitalTwinViewer({
   const markerRef = useRef<any>(null);
   const maskEntitiesRef = useRef<any[]>([]);
   const srtmLayerRef = useRef<any>(null);
+  const activeLoadRef = useRef<string | null>(null);
+  const [layerLoadSeconds, setLayerLoadSeconds] = useState<{ networks?: number; buildings?: number }>({});
 
   // Rain simulation state
   const [internalRain, setInternalRain] = useState<boolean>(false);
@@ -313,7 +308,6 @@ export function CesiumDigitalTwinViewer({
   const activityStorageKey = `dt_user_activity_${safeName}`;
   // v6 invalidates center/viewport data saved by older viewers. Only complete
   // selected-polygon responses may be restored for an area.
-  const networksStorageKey = `dt_networks_v7_${safeName}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
 
   // Purge old v1/v2 cache entries for this area (stale data from old code)
   try {
@@ -1051,97 +1045,52 @@ export function CesiumDigitalTwinViewer({
     }
   };
 
-  // ─── 🌊 3D RIVER & WATER BODY RENDERING ───
+  // Render water surfaces as polygons and channels as continuous lines.
   const render3DRivers = (rivers: RiverFeature[], visible: boolean) => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
-
     viewer.entities.suspendEvents();
     try {
-      riverEntitiesRef.current.forEach((ent) => {
-        try { viewer.entities.remove(ent); } catch (e) {}
-      });
+      riverEntitiesRef.current.forEach(ent => viewer.entities.remove(ent));
       riverEntitiesRef.current = [];
-
-      if (!rivers || rivers.length === 0) {
-        console.log(`[DT] render3DRivers: skipped (count=${rivers?.length || 0})`);
-        return;
-      }
-
-      const activePoly = getActivePolygon();
-      rivers.forEach((river) => {
-        const coords = river.geometry?.coordinates;
-        if (!coords || coords.length < 2) return;
-
-        let clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
-        if (clippedSegments.length === 0) {
-          const anyInside = (coords as [number, number][]).some((p) => isPointInPolygon(p[1], p[0], activePoly));
-          if (anyInside) {
-            clippedSegments = [coords as [number, number][]];
-          }
-        }
-        if (clippedSegments.length === 0) return;
-
-        const props = (river.properties as any) || {};
-        const wType = (props.waterway_type || props.waterway || "stream").toLowerCase();
-        const isWaterBody = Boolean(
-          props.is_water_body ||
-          ["water", "lake", "reservoir", "pond", "basin", "riverbank", "lagoon", "oxbow"].includes(wType)
-        );
-        const isMainRiver = Boolean(props.is_main_river) || wType === "river" || wType === "canal";
-        const widthM = props.width_m;
-
-        let strokeColor: string;
-        let lineWidth: number;
-        let displayName: string;
-
-        if (isWaterBody) {
-          strokeColor = "#06b6d4";  // Cyan — lakes, reservoirs, ponds
-          lineWidth = Math.max(widthM ?? 9.0, 8.0);
-          displayName = `💧 ${props.name || "Water Body"}`;
-        } else if (wType === "river") {
-          strokeColor = "#0284c7";  // Vibrant sky/azure blue — main rivers
-          lineWidth = Math.max(widthM ?? 8.0, 7.5);
-          displayName = `🌊 River: ${props.name || "River Channel"}`;
-        } else if (wType === "canal") {
-          strokeColor = "#2563eb";  // Blue — canals
-          lineWidth = Math.max(widthM ?? 6.0, 5.5);
-          displayName = `🌊 Canal: ${props.name || "Canal"}`;
-        } else if (wType === "stream") {
-          strokeColor = "#38bdf8";  // Cyan-blue — streams
-          lineWidth = Math.max(widthM ?? 4.0, 3.5);
-          displayName = `〰️ Stream: ${props.name || "Stream"}`;
-        } else {
-          strokeColor = "#7dd3fc";  // Soft light blue — drains/ditches
-          lineWidth = Math.max(widthM ?? 2.5, 2.5);
-          displayName = `〰️ ${wType}: ${props.name || "Waterway"}`;
-        }
-
-        clippedSegments.forEach((seg) => {
-          const flatPositions = seg.flat();
-          if (flatPositions.length < 4) return;
-
-          const ent = viewer.entities.add({
-            name: displayName,
-            show: visible,
-            polyline: {
-              positions: Cesium.Cartesian3.fromDegreesArray(flatPositions),
-              width: lineWidth,
-              material: new Cesium.PolylineGlowMaterialProperty({
-                glowPower: 0.25,
-                taperPower: 1.0,
-                color: Cesium.Color.fromCssColorString(strokeColor),
-              }),
-              clampToGround: true,
+      rivers.forEach(river => {
+        const geom = river.geometry;
+        const props = river.properties;
+        const type = props?.waterway_type || "stream";
+        const polygons = geom.type === "Polygon" ? [geom.coordinates] : geom.type === "MultiPolygon" ? geom.coordinates : [];
+        for (const rings of polygons as number[][][][]) {
+          if (!rings[0] || rings[0].length < 4) continue;
+          riverEntitiesRef.current.push(viewer.entities.add({
+            name: props.name || "Water body", show: visible,
+            polygon: {
+              hierarchy: new Cesium.PolygonHierarchy(
+                Cesium.Cartesian3.fromDegreesArray(rings[0].flat()),
+                rings.slice(1).map(ring => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())))),
+              material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              classificationType: Cesium.ClassificationType.TERRAIN,
+              zIndex: 5,
             },
-          });
-          riverEntitiesRef.current.push(ent);
-        });
+          }));
+        }
+        const lines = geom.type === "LineString" ? [geom.coordinates] : geom.type === "MultiLineString" ? geom.coordinates : [];
+        for (const line of lines as [number, number][][]) {
+          if (line.length < 2) continue;
+          riverEntitiesRef.current.push(viewer.entities.add({
+            name: props.name || type, show: visible,
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray(line.flat()),
+              width: Math.max(3, Math.min(12, props.width_m || 4)),
+              material: Cesium.Color.fromCssColorString(type === "river" ? "#0284c7" : "#38bdf8"),
+              clampToGround: true, zIndex: 6,
+            },
+          }));
+        }
       });
     } finally {
       viewer.entities.resumeEvents();
       viewer.scene.requestRender();
-      console.log(`[DT] render3DRivers: added ${riverEntitiesRef.current.length} entities to viewer`);
+      console.log("[DT] Water entities:", riverEntitiesRef.current.length);
     }
   };
 
@@ -1201,7 +1150,7 @@ export function CesiumDigitalTwinViewer({
 
       const activePoly = getActivePolygon();
 
-      buildings.forEach((building, idx) => {
+      prepareBuildingFootprints(buildings, activePoly).forEach((building, idx) => {
         const source = building.geometry?.coordinates;
         if (!source) return;
         const polygons = building.geometry.type === "Polygon"
@@ -1221,7 +1170,7 @@ export function CesiumDigitalTwinViewer({
             : outer.reduce((sum, p) => sum + p[0], 0) / outer.length;
 
           // STRICT FILTER: Only render houses strictly inside the marked area
-          if (activePoly && !isPointInPolygon(cLat, cLon, activePoly)) return;
+          // Footprints have already been cut at the selected boundary by the API.
 
           const holes = rings.slice(1).map((ring) => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())));
 
@@ -1483,364 +1432,113 @@ export function CesiumDigitalTwinViewer({
     }
   };
 
-  // ─── 📡 DATA FETCHING: COMPLETE SELECTED-AREA ROAD & RIVER NETWORK ───
+  // Each layer loads independently from its area-owned Supabase snapshot.
   const handleExtractNetworks = async (
-    searchOverride?: string,
-    bboxOverride?: { north: number; south: number; east: number; west: number },
+    _searchOverride?: string,
+    _bboxOverride?: { north: number; south: number; east: number; west: number },
     polygonOverride?: [number, number][],
   ) => {
+    const selectedPolygon = polygonOverride || getActivePolygon();
+    const key = areaId || JSON.stringify(selectedPolygon);
+    if (activeLoadRef.current === key) return;
+    activeLoadRef.current = key;
     const requestId = ++networkRequestRef.current;
-    
-    // Safely abort previous in-flight requests without throwing uncaught errors
-    if (networkAbortRef.current) {
-      try { networkAbortRef.current.abort(); } catch (e) {}
-    }
-    if (buildingAbortRef.current) {
-      try { buildingAbortRef.current.abort(); } catch (e) {}
-    }
-
+    networkAbortRef.current?.abort();
+    buildingAbortRef.current?.abort();
     const controller = new AbortController();
     networkAbortRef.current = controller;
+    buildingAbortRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 90_000);
-
-    const viewportBbox = bboxOverride || getViewportBbox();
-    const activePoly = polygonOverride || (polygon && polygon.length >= 3 ? polygon : getActivePolygon());
-    const selectedPolygon = activePoly && activePoly.length >= 3 ? activePoly : undefined;
-
-    const areaCacheKey = selectedPolygon
-      ? `poly_${selectedPolygon.map(([pLat, pLng]) => `${pLat.toFixed(4)},${pLng.toFixed(4)}`).join(";")}`
-      : `coord_${latitude.toFixed(3)}_${longitude.toFixed(3)}`;
-
-    // STALE-WHILE-REVALIDATE: If cached, load and display INSTANTLY (0 ms)!
-    const cachedEntry = networkAreaCache[areaCacheKey];
-    if (cachedEntry && cachedEntry.roads.length > 0) {
-      networksLoadedRef.current = true;
-      setExtractedBbox(cachedEntry.bbox);
-      setRoadFeatures(cachedEntry.roads);
-      setRiverFeatures(cachedEntry.rivers);
-      render3DRoads(cachedEntry.roads, showRoads);
-      render3DRivers(cachedEntry.rivers, showRivers);
-      if (cachedEntry.buildings && cachedEntry.buildings.length > 0) {
-        setBuildingFeatures(cachedEntry.buildings);
-        render3DBuildings(cachedEntry.buildings);
-      }
-      if (cachedEntry.osmTileStatus) {
-        setOsmTileStatus(cachedEntry.osmTileStatus);
-      }
-      setIsExtractingNetworks(false);
-
-      // If cache is fresh (< 30 minutes old), skip refetching
-      if (Date.now() - cachedEntry.timestamp < 30 * 60 * 1000) {
-        window.clearTimeout(timeout);
-        return;
-      }
-    } else {
-      setIsExtractingNetworks(true);
-    }
-
-    try {
-      const params: Parameters<typeof extractNetworks>[0] = selectedPolygon
-        ? {
-            polygon: selectedPolygon,
-            lat: latitude,
-            lng: longitude,
-            radius_km: searchRadiusKm,
-            place_name: searchOverride || undefined,
-          }
-        : viewportBbox
-        ? {
-            north: viewportBbox.north,
-            south: viewportBbox.south,
-            east: viewportBbox.east,
-            west: viewportBbox.west,
-            lat: latitude,
-            lng: longitude,
-          }
-        : {
-            lat: latitude,
-            lng: longitude,
-            radius_km: searchRadiusKm,
-            place_name: searchOverride || undefined,
-          };
-
-      console.log(`[DT] Fetching complete selected-area network: ${selectedPolygon ? `${selectedPolygon.length} boundary points` : viewportBbox ? `${viewportBbox.south.toFixed(3)},${viewportBbox.west.toFixed(3)} → ${viewportBbox.north.toFixed(3)},${viewportBbox.east.toFixed(3)}` : `center ${latitude},${longitude} r=${searchRadiusKm}km`}`);
-
-      const res = await extractNetworks(params, controller.signal);
-
-      // Never let a late response from an older request clear the completed selected-area scene.
-      if (requestId !== networkRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) {
-        return;
-      }
-
-      if (res.status === "success") {
+    const started = performance.now();
+    const params = { area_id: areaId, polygon: selectedPolygon };
+    setLayerLoadSeconds({});
+    setIsExtractingNetworks(true);
+    setIsLoadingBuildings(false);
+    const current = () => requestId === networkRequestRef.current && !controller.signal.aborted
+      && viewerRef.current && !viewerRef.current.isDestroyed();
+    let complete = true;
+    const networkJob = async () => {
+      try {
+        const res = await extractNetworks(params, controller.signal);
+        if (!current()) return;
         const roads = res.roads.geojson?.features || [];
         const rivers = res.rivers.geojson?.features || [];
-        const tileStatus = res.osm_loading;
-        const statusObj = {
-          loaded: tileStatus?.loaded_tiles ?? 0,
-          total: tileStatus?.total_tiles ?? 0,
-          roads: roads.length,
-          rivers: rivers.length,
-          buildings: 0,
-        };
-        setOsmTileStatus(statusObj);
-
-        if (roads.length > 0 || rivers.length > 0) {
-          networksLoadedRef.current = true;
-          setExtractedBbox(res.bbox);
-
-          // Update in-memory cache
-          networkAreaCache[areaCacheKey] = {
-            roads,
-            rivers,
-            bbox: res.bbox,
-            osmTileStatus: statusObj,
-            timestamp: Date.now(),
-          };
-        }
-
         setRoadFeatures(roads);
         setRiverFeatures(rivers);
-
+        setExtractedBbox(res.bbox);
         render3DRoads(roads, showRoads);
         render3DRivers(rivers, showRivers);
-
-        // User feedback
-        if (roads.length > 0 || rivers.length > 0) {
-          const waterBodiesCount = rivers.filter((r: any) => {
-            const wt = ((r.properties?.waterway_type || r.properties?.waterway || "") as string).toLowerCase();
-            return r.properties?.is_water_body || ["water", "lake", "reservoir", "pond", "basin", "riverbank", "lagoon", "oxbow"].includes(wt);
-          }).length;
-          const riverCount = rivers.length - waterBodiesCount;
-          let desc = `Loaded ${roads.length} paths`;
-          if (riverCount > 0) desc += `, ${riverCount} rivers`;
-          if (waterBodiesCount > 0) desc += `, ${waterBodiesCount} water bodies`;
-          toast.success(desc);
-        } else {
-          toast.info("No roads, rivers, or water bodies found in this area from OpenStreetMap");
-        }
-
-        handlePredictRisk(res.bbox);
-        void loadBuildings(params, requestId, roads, rivers, res.bbox, areaCacheKey);
-      } else {
-        toast.error("Network extraction failed — check backend connection");
+        setOsmTileStatus(prev => ({ ...prev, loaded: res.osm_loading?.loaded_tiles ?? 0,
+          total: res.osm_loading?.total_tiles ?? 0, roads: roads.length, rivers: rivers.length }));
+        setLayerLoadSeconds(prev => ({ ...prev, networks: (performance.now() - started) / 1000 }));
+        if ((res as any).persistence?.saved === false) toast.warning("Layers loaded, but saving to Supabase failed. Retry loading to save them.");
+        void handlePredictRisk(res.bbox);
+      } catch (error: any) {
+        if (controller.signal.aborted || error?.name === "AbortError" || error?.name === "CanceledError") return;
+        complete = false;
+        if (current()) toast.error("Paths and water could not finish loading. Use Extract to retry.");
+      } finally {
+        if (current()) setIsExtractingNetworks(false);
       }
-    } catch (err: any) {
-      const isAbort =
-        err?.name === "AbortError" ||
-        err?.name === "CanceledError" ||
-        err?.code === 20 ||
-        controller.signal.aborted ||
-        String(err?.message || "").toLowerCase().includes("abort") ||
-        String(err || "").toLowerCase().includes("abort") ||
-        String(err?.message || "").toLowerCase().includes("canceled");
-      if (isAbort) {
-        return;
+    };
+    const buildingJob = async () => {
+      if (!current()) return;
+      setIsLoadingBuildings(true);
+      try {
+        const res = await extractBuildings(params, controller.signal);
+        if (!current()) return;
+        const buildings = prepareBuildingFootprints(res.buildings.geojson?.features || [], selectedPolygon);
+        setBuildingFeatures(buildings);
+        render3DBuildings(buildings);
+        const stats = { total: buildings.length, safe: 0, moderate: 0, high: 0, critical: 0 };
+        buildings.forEach(b => {
+          const risk = b.properties?.flood_risk || "SAFE";
+          if (risk === "CRITICAL") stats.critical++;
+          else if (risk === "HIGH") stats.high++;
+          else if (risk === "MODERATE") stats.moderate++;
+          else stats.safe++;
+        });
+        setBuildingStats(stats);
+        setOsmTileStatus(prev => ({ ...prev, buildings: buildings.length }));
+        setLayerLoadSeconds(prev => ({ ...prev, buildings: (performance.now() - started) / 1000 }));
+        if ((res as any).persistence?.saved === false) toast.warning("Buildings loaded, but saving to Supabase failed. Retry loading to save them.");
+      } catch (error: any) {
+        if (controller.signal.aborted || error?.name === "AbortError" || error?.name === "CanceledError") return;
+        complete = false;
+        if (current()) toast.error("Buildings could not finish loading. Use Extract to retry.");
+      } finally {
+        if (current()) setIsLoadingBuildings(false);
       }
-      console.error("Failed to extract road/river networks:", err);
-      toast.error("Could not load roads/rivers — check your internet connection or try a different area");
+    };
+    try {
+      // 1. FIRST load water bodies and paths, rendering them immediately
+      await networkJob();
+      // 2. THEN load building footprints after paths & water bodies are in place
+      if (current()) {
+        await buildingJob();
+      }
+      if (current()) networksLoadedRef.current = complete;
     } finally {
       window.clearTimeout(timeout);
       if (requestId === networkRequestRef.current) {
+        activeLoadRef.current = null;
         setIsExtractingNetworks(false);
+        setIsLoadingBuildings(false);
       }
     }
   };
 
-  const loadBuildings = async (
-    params: Parameters<typeof extractBuildings>[0],
-    requestId: number,
-    roads: RoadFeature[],
-    rivers: RiverFeature[],
-    bbox: BoundingBox,
-    areaCacheKey?: string,
-  ) => {
-    if (buildingAbortRef.current) {
-      try { buildingAbortRef.current.abort(); } catch (e) {}
-    }
-    const controller = new AbortController();
-    buildingAbortRef.current = controller;
-    const timeout = window.setTimeout(() => controller.abort(), 90_000);
-    setIsLoadingBuildings(true);
-    try {
-      // 🎯 STRICT MARKED AREA ONLY: Use the exact marked polygon
-      const activePoly = (params as any)?.polygon && (params as any).polygon.length >= 3
-        ? (params as any).polygon
-        : (polygon && polygon.length >= 3 ? polygon : getActivePolygon());
-
-      // Derive tight bounding box directly from the marked polygon
-      const polyLats = activePoly.map((p: [number, number]) => p[0]);
-      const polyLngs = activePoly.map((p: [number, number]) => p[1]);
-      const minLat = Math.min(...polyLats);
-      const maxLat = Math.max(...polyLats);
-      const minLon = Math.min(...polyLngs);
-      const maxLon = Math.max(...polyLngs);
-
-      let rawCandidates: BuildingFeature[] = [];
-
-      // 1. Fetch real Microsoft Global ML Building Footprints for the marked area
-      try {
-        const msRes = await fetchMicrosoftBuildings(
-          {
-            minLat,
-            minLon,
-            maxLat,
-            maxLon,
-            polygon: activePoly,
-            water_level_m: waterSimActive ? 2.5 : 0.0,
-            max_buildings: 3500,
-          },
-          controller.signal
-        );
-
-        if (msRes && msRes.features && msRes.features.length > 0) {
-          rawCandidates = msRes.features;
-        }
-      } catch (msErr: any) {
-        console.warn("Microsoft building footprints fetch error, checking OSM fallback:", msErr);
-      }
-
-      // 2. Fallback to OSM extraction if Microsoft dataset query returned 0 features
-      if (rawCandidates.length === 0) {
-        const res = await extractBuildings(
-          {
-            ...params,
-            polygon: activePoly,
-            north: maxLat,
-            south: minLat,
-            east: maxLon,
-            west: minLon,
-          },
-          controller.signal
-        );
-        rawCandidates = res.buildings.geojson?.features || [];
-      }
-
-      // 3. 🎯 STRICT FILTER: Keep houses ONLY inside the marked area polygon
-      let markedAreaBuildings = rawCandidates.filter((b) => {
-        const coords = b.geometry?.coordinates;
-        if (!coords) return false;
-        const ring = b.geometry.type === "Polygon"
-          ? (coords as number[][][])[0]
-          : (coords as number[][][][])[0]?.[0];
-        if (!ring || ring.length < 3) return false;
-
-        const cLat = typeof b.properties?.lat === "number" && !isNaN(b.properties.lat)
-          ? b.properties.lat
-          : ring.reduce((sum, p) => sum + p[1], 0) / ring.length;
-        const cLon = typeof b.properties?.lon === "number" && !isNaN(b.properties.lon)
-          ? b.properties.lon
-          : ring.reduce((sum, p) => sum + p[0], 0) / ring.length;
-
-        return isPointInPolygon(cLat, cLon, activePoly);
-      });
-
-      // Fallback: If strict polygon raycasting yielded 0 but raw candidates exist within bounding box
-      if (markedAreaBuildings.length === 0 && rawCandidates.length > 0) {
-        markedAreaBuildings = rawCandidates.filter((b) => {
-          const coords = b.geometry?.coordinates;
-          if (!coords) return false;
-          const ring = b.geometry.type === "Polygon"
-            ? (coords as number[][][])[0]
-            : (coords as number[][][][])[0]?.[0];
-          if (!ring || ring.length < 3) return false;
-          const cLat = typeof b.properties?.lat === "number" && !isNaN(b.properties.lat)
-            ? b.properties.lat
-            : ring.reduce((sum, p) => sum + p[1], 0) / ring.length;
-          const cLon = typeof b.properties?.lon === "number" && !isNaN(b.properties.lon)
-            ? b.properties.lon
-            : ring.reduce((sum, p) => sum + p[0], 0) / ring.length;
-          return cLat >= minLat && cLat <= maxLat && cLon >= minLon && cLon <= maxLon;
-        });
-      }
-
-      // 4. 📊 ACCURATE STATS: Calculate true values exclusively from the marked area houses
-      const stats = {
-        total: markedAreaBuildings.length,
-        safe: 0,
-        moderate: 0,
-        high: 0,
-        critical: 0,
-      };
-
-      markedAreaBuildings.forEach((b) => {
-        const r = b.properties?.flood_risk || "SAFE";
-        if (r === "CRITICAL") stats.critical++;
-        else if (r === "HIGH") stats.high++;
-        else if (r === "MODERATE") stats.moderate++;
-        else stats.safe++;
-      });
-
-      if (requestId !== networkRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) {
-        return;
-      }
-
-      setBuildingFeatures(markedAreaBuildings);
-      setBuildingStats(stats);
-      setOsmTileStatus((prev) => ({
-        ...prev,
-        buildings: markedAreaBuildings.length,
-      }));
-      render3DBuildings(markedAreaBuildings);
-
-
-      if (areaCacheKey) {
-        const entry = networkAreaCache[areaCacheKey];
-        if (entry) {
-          entry.buildings = markedAreaBuildings;
-        }
-      }
-      try {
-        const cacheKey = `dt_networks_${areaName || `${latitude.toFixed(3)}_${longitude.toFixed(3)}`}`;
-        localStorage.setItem(cacheKey, JSON.stringify({
-          roads,
-          rivers,
-          buildings: markedAreaBuildings,
-          bbox,
-          timestamp: Date.now(),
-        }));
-      } catch (e) {}
-
-    } catch (err: any) {
-      const isAbort =
-        err?.name === "AbortError" ||
-        err?.name === "CanceledError" ||
-        err?.code === 20 ||
-        controller.signal.aborted ||
-        String(err?.message || "").toLowerCase().includes("abort") ||
-        String(err || "").toLowerCase().includes("abort") ||
-        String(err?.message || "").toLowerCase().includes("canceled");
-      if (isAbort) {
-        return;
-      }
-      console.error("Failed to extract building footprints:", err);
-      toast.warning("Paths and waterways are ready; building detail is still unavailable");
-    } finally {
-      window.clearTimeout(timeout);
-      if (requestId === networkRequestRef.current) setIsLoadingBuildings(false);
-    }
-  };
-
-
-  // ─── 📐 SELECTED-AREA NETWORK LOADING ───
-  // Load concurrently with camera movements or when area selection changes.
   const scheduleSelectedAreaLoad = (polygonOverride?: [number, number][], forceImmediate = false) => {
     if (viewportDebounceRef.current) clearTimeout(viewportDebounceRef.current);
     const trigger = () => {
-      const selectedPolygon = polygonOverride || (polygon && polygon.length >= 3 ? polygon : getActivePolygon());
-      const areaKey = selectedPolygon && selectedPolygon.length >= 3
-        ? selectedPolygon.map(([pLat, pLng]) => `${pLat.toFixed(5)},${pLng.toFixed(5)}`).join(";")
-        : `${latitude.toFixed(4)},${longitude.toFixed(4)}`;
-      if (areaKey === lastViewportBboxRef.current && networksLoadedRef.current && roadEntitiesRef.current.length > 0 && buildingEntitiesRef.current.length > 0) return;
-      lastViewportBboxRef.current = areaKey;
-      handleExtractNetworks(undefined, undefined, selectedPolygon);
+      const selectedPolygon = polygonOverride || getActivePolygon();
+      const key = areaId || JSON.stringify(selectedPolygon);
+      if (activeLoadRef.current === key || (lastViewportBboxRef.current === key && networksLoadedRef.current)) return;
+      lastViewportBboxRef.current = key;
+      void handleExtractNetworks(undefined, undefined, selectedPolygon);
     };
-
-    if (forceImmediate) {
-      trigger();
-    } else {
-      viewportDebounceRef.current = setTimeout(trigger, 250);
-    }
+    if (forceImmediate) trigger();
+    else viewportDebounceRef.current = setTimeout(trigger, 250);
   };
 
   const handlePredictRisk = async (bbox?: BoundingBox | null) => {
@@ -2330,7 +2028,19 @@ export function CesiumDigitalTwinViewer({
   };
 
 
-  // ─── AREA CLIPPING: Restrict globe strictly to monitored polygon (removes everything outside) ───
+  const flyToSelectedArea = (duration = 1.5, complete?: () => void) => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    const points = getActivePolygon();
+    const ground = viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(longitude, latitude)) || 0;
+    const sphere = Cesium.BoundingSphere.fromPoints(points.map(([lat, lng]) => Cesium.Cartesian3.fromDegrees(lng, lat, ground)));
+    viewer.camera.flyToBoundingSphere(sphere, {
+      offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-55), Math.max(700, sphere.radius * 3.2)),
+      duration, complete, cancel: complete,
+    });
+  };
+
+  // Keep the selected polygon visible and hide its surroundings.
   const updateWhiteMask = (polyCoords: [number, number][], _centerLon: number, _centerLat: number) => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
@@ -2376,51 +2086,23 @@ export function CesiumDigitalTwinViewer({
       cleanCoords.pop();
     }
 
-    // Ensure CCW winding order so Cesium does not invert clipping and clip the inside terrain!
-    const ccwCoords = ensureCounterClockwise(cleanCoords);
-
-    // 1. Precise 3D Terrain & Satellite Imagery clipping using Cesium's ClippingPolygonCollection.
-    //    inverse = true clips away all terrain and imagery OUTSIDE the selected polygon!
-    let clippingApplied = false;
-    if (
-      typeof Cesium !== "undefined" &&
-      Cesium.ClippingPolygonCollection &&
-      Cesium.ClippingPolygon &&
-      (!Cesium.ClippingPolygonCollection.isSupported || Cesium.ClippingPolygonCollection.isSupported(viewer.scene))
-    ) {
-      try {
-        const cartesianPositions = ccwCoords.map(([lat, lng]) =>
-          Cesium.Cartesian3.fromDegrees(lng, lat)
-        );
-        const clipPoly = new Cesium.ClippingPolygon({
-          positions: cartesianPositions,
-        });
-        const clipColl = new Cesium.ClippingPolygonCollection({
-          polygons: [clipPoly],
-          enabled: true,
-          inverse: true, // CLIPS AWAY EVERYTHING OUTSIDE THE SELECTED POLYGON!
-        });
-        viewer.scene.globe.clippingPolygons = clipColl;
-        clippingApplied = true;
-      } catch (e) {
-        console.warn("[DT] ClippingPolygonCollection error:", e);
-      }
-    }
-
-    // 2. Set cartographicLimitRectangle around the polygon with generous padding for 3D oblique tilt perspective
-    const lats = cleanCoords.map(([la]) => la);
-    const lngs = cleanCoords.map(([, lo]) => lo);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
-    const pad = 0.035; // ~3.8km padding so 3D tilted camera angles never cull the terrain tiles
-
-    try {
-      viewer.scene.globe.cartographicLimitRectangle = Cesium.Rectangle.fromDegrees(
-        minLng - pad, minLat - pad, maxLng + pad, maxLat + pad
-      );
-    } catch (e) {}
+    // A ground mask with a polygon hole keeps only the selected terrain visible.
+    // Unlike inverse GPU clipping in Cesium 1.125 this stays stable while zooming.
+    const lats = cleanCoords.map(([lat]) => lat), lngs = cleanCoords.map(([, lng]) => lng);
+    const west = Math.min(...lngs) - 0.25, east = Math.max(...lngs) + 0.25;
+    const south = Math.min(...lats) - 0.25, north = Math.max(...lats) + 0.25;
+    viewer.scene.globe.cartographicLimitRectangle = Cesium.Rectangle.fromDegrees(west, south, east, north);
+    maskEntitiesRef.current.push(viewer.entities.add({
+      name: "Outside selected area",
+      polygon: {
+        hierarchy: new Cesium.PolygonHierarchy(
+          Cesium.Cartesian3.fromDegreesArray([west, south, east, south, east, north, west, north]),
+          [new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(cleanCoords.flatMap(([lat, lng]) => [lng, lat])))]),
+        material: Cesium.Color.BLACK,
+        classificationType: Cesium.ClassificationType.TERRAIN,
+        zIndex: 100,
+      },
+    }));
 
     // 3. Crisp border polyline around the exact boundary of the selected area
     const borderPositions: number[] = [];
@@ -2639,24 +2321,7 @@ export function CesiumDigitalTwinViewer({
             scheduleSelectedAreaLoad(polyCoords, true);
 
             // 3. Single continuous, uninterrupted cinematic flight into high-resolution 3D oblique perspective (6,500m at -45° tilt)
-            viewerRef.current.camera.flyTo({
-              destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.045, 6500),
-              orientation: {
-                heading: Cesium.Math.toRadians(0),
-                pitch: Cesium.Math.toRadians(-45),
-                roll: 0.0,
-              },
-              duration: 3.2,
-              easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
-              complete: () => {
-                isInFlightRef.current = false;
-                scheduleSelectedAreaLoad(polyCoords, true);
-              },
-              cancel: () => {
-                isInFlightRef.current = false;
-                scheduleSelectedAreaLoad(polyCoords, true);
-              },
-            });
+            flyToSelectedArea(1.5, () => { isInFlightRef.current = false; });
           }, 120);
         });
 
@@ -3048,31 +2713,16 @@ export function CesiumDigitalTwinViewer({
     setDeployedSensors(loadedSensors);
     render3DMeshNodes(loadedNodes);
 
-    const areaCacheKey = polyCoords && polyCoords.length >= 3
-      ? `poly_${polyCoords.map(([pLat, pLng]) => `${pLat.toFixed(4)},${pLng.toFixed(4)}`).join(";")}`
-      : `coord_${latitude.toFixed(3)}_${longitude.toFixed(3)}`;
-    const cached = networkAreaCache[areaCacheKey];
-
-    if (cached) {
-      // Instant restore from cache: render immediately!
-      setRoadFeatures(cached.roads);
-      setRiverFeatures(cached.rivers);
-      render3DRoads(cached.roads, showRoads);
-      render3DRivers(cached.rivers, showRivers);
-      if (cached.buildings) {
-        setBuildingFeatures(cached.buildings);
-        render3DBuildings(cached.buildings);
-      }
-      setExtractedBbox(cached.bbox);
-      networksLoadedRef.current = true;
-    } else {
-      // Clear previous entities while flying to the unvisited area
-      setRoadFeatures([]);
-      setRiverFeatures([]);
-      setBuildingFeatures([]);
-      setEvacuationRoute(null);
-      networksLoadedRef.current = false;
-    }
+    ++networkRequestRef.current;
+    activeLoadRef.current = null;
+    networksLoadedRef.current = false;
+    setRoadFeatures([]);
+    setRiverFeatures([]);
+    setBuildingFeatures([]);
+    render3DRoads([], showRoads);
+    render3DRivers([], showRivers);
+    render3DBuildings([]);
+    setEvacuationRoute(null);
     lastViewportBboxRef.current = "";
 
     // Start loading the new area networks concurrently in parallel with camera flight
@@ -3098,17 +2748,7 @@ export function CesiumDigitalTwinViewer({
         cancel: onFlyComplete,
       });
     } else {
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.045, 6500),
-        orientation: {
-          heading: Cesium.Math.toRadians(0),
-          pitch: Cesium.Math.toRadians(-45),
-          roll: 0.0,
-        },
-        duration: 1.8,
-        complete: onFlyComplete,
-        cancel: onFlyComplete,
-      });
+      flyToSelectedArea(1.5, onFlyComplete);
     }
   }, [latitude, longitude, areaName, polygon]);
 
@@ -3144,15 +2784,7 @@ export function CesiumDigitalTwinViewer({
     setViewMode("3d");
     applyControllerSettings("3d");
 
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.045, 6500),
-      orientation: {
-        heading: Cesium.Math.toRadians(0),
-        pitch: Cesium.Math.toRadians(-45),
-        roll: 0.0,
-      },
-      duration: 1.5,
-    });
+    flyToSelectedArea();
   };
 
   // 🛰️ TOP-DOWN SATELLITE (Nadir perspective with Google Maps controls)
@@ -3286,53 +2918,13 @@ export function CesiumDigitalTwinViewer({
     }
   }, [meshNodes, showMeshNodes, deployedSensors]);
 
-  // Initial load of road & river networks — use localStorage cache if < 24h old
+  // Always validate a selection against Supabase; no browser feature snapshots.
   useEffect(() => {
     if (!loading && viewerRef.current && !viewerRef.current.isDestroyed()) {
-      // Small delay to ensure terrain tiles are loaded before rendering ground-clamped polylines
-      const timer = setTimeout(() => {
-        if (!viewerRef.current || viewerRef.current.isDestroyed()) return;
-        try {
-          const raw = localStorage.getItem(networksStorageKey);
-          if (raw) {
-            const cached = JSON.parse(raw);
-            const ageMs = Date.now() - (cached.timestamp || 0);
-            const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-            const hasData = Array.isArray(cached.roads) && Array.isArray(cached.rivers) && Array.isArray(cached.buildings);
-            if (ageMs < MAX_AGE_MS && hasData) {
-              // Use cached data — skip API call
-              console.log(`[DT] Using cached networks: ${cached.roads.length} roads, ${cached.rivers.length} rivers`);
-              networksLoadedRef.current = true;
-              setRoadFeatures(cached.roads);
-              setRiverFeatures(cached.rivers);
-              setBuildingFeatures(cached.buildings);
-              setOsmTileStatus({ loaded: 0, total: 0, roads: cached.roads.length, rivers: cached.rivers.length, buildings: cached.buildings.length });
-              if (cached.bbox) setExtractedBbox(cached.bbox);
-              render3DRoads(cached.roads, showRoads);
-              render3DRivers(cached.rivers, showRivers);
-              render3DBuildings(cached.buildings);
-              lastViewportBboxRef.current = getActivePolygon()
-                .map(([areaLat, areaLng]) => `${areaLat.toFixed(5)},${areaLng.toFixed(5)}`)
-                .join(";");
-              if (cached.bbox) handlePredictRisk(cached.bbox);
-              return;
-            }
-            // Stale cache — purge it so fresh API call is made
-            localStorage.removeItem(networksStorageKey);
-          }
-        } catch (e) {}
-        // No valid cache: if the intro flight already completed (or no flight is
-        // in progress), trigger a fresh load now. The intro flight's complete
-        // callback also calls scheduleSelectedAreaLoad, but if the component
-        // mounts after an area change or the flight has already finished, this
-        // fallback ensures networks are always loaded.
-        if (!networksLoadedRef.current && !isInFlightRef.current) {
-          scheduleSelectedAreaLoad();
-        }
-      }, 800);
+      const timer = setTimeout(() => scheduleSelectedAreaLoad(), 100);
       return () => clearTimeout(timer);
     }
-  }, [loading, latitude, longitude, areaName]);
+  }, [loading, latitude, longitude, areaId]);
 
   // Toggle Roads visibility without re-creating entities
   useEffect(() => {
@@ -4310,7 +3902,7 @@ export function CesiumDigitalTwinViewer({
                 <div className="flex items-center justify-between text-[10px] text-slate-400">
                   <span>{isExtractingNetworks ? "Loading priority OSM data…" : isLoadingBuildings ? "Loading building detail…" : "OSM data complete"}</span>
                   <span className="text-sky-300 font-mono">
-                    {isExtractingNetworks || isLoadingBuildings ? "Fetching tiles" : osmTileStatus.total ? `${osmTileStatus.loaded}/${osmTileStatus.total} tiles` : "Cached"}
+                    {isExtractingNetworks || isLoadingBuildings ? "Loading area" : `Loaded in ${Math.max(layerLoadSeconds.networks || 0, layerLoadSeconds.buildings || 0).toFixed(1)}s`}
                   </span>
                 </div>
                 <div className="mt-1 h-1 rounded bg-slate-800 overflow-hidden">

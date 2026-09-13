@@ -1,8 +1,11 @@
 """Routing & Rivers API Router: Real OSM road and river extraction, GNN spatial graph, risk inference, and evacuation routing."""
 import asyncio
+import time
+from uuid import UUID
 import networkx as nx
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
+from lib.auth import current_user
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +14,9 @@ from services.osm_road_service import OSMRoadService
 from services.osm_river_service import OSMRiverService
 from services.osm_building_service import OSMBuildingService
 from services.osm_tile_loader import OSMTileLoader, OSMTileLoadError
+from services.supabase_network_store import supabase_network_store
+from services.supabase_building_store import supabase_building_store
+from services.selected_area_store import selected_area_store, area_polygon, tight_bbox, clip_features
 from services.graph_builder import UnifiedGraphBuilder
 from services.routing_service import EvacuationRoutingService
 
@@ -35,6 +41,7 @@ def get_risk_engine():
 
 # ─── Pydantic Request & Response Schemas ─────────────────────────────────────
 class LocationRequest(BaseModel):
+    area_id: Optional[UUID] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     radius_km: Optional[float] = 5.0
@@ -101,6 +108,30 @@ class WaterBounds(BaseModel):
     east: float = Field(ge=-180, le=180)
 
 
+class AreaDeleteRequest(BaseModel):
+    area_id: UUID
+
+
+@router.post("/area-data/delete")
+async def delete_area_data(payload: AreaDeleteRequest, user: dict = Depends(current_user)):
+    return await selected_area_store.delete(str(payload.area_id), user)
+
+
+async def _selected_location(payload: LocationRequest):
+    area_id = str(payload.area_id) if payload.area_id else None
+    if area_id:
+        try:
+            area = await selected_area_store.get_area(area_id)
+            if area and (not payload.polygon or len(payload.polygon) < 3):
+                payload.polygon = area_polygon(area)
+        except Exception:
+            pass
+    bbox = tight_bbox(payload.polygon) if payload.polygon and len(payload.polygon) >= 3 else _derive_bbox(payload)
+    key = f"dt-area-{area_id}" if area_id else supabase_network_store.area_key(
+        bbox["north"], bbox["south"], bbox["east"], bbox["west"], payload.polygon)
+    return area_id, bbox, key
+
+
 @router.post("/water-bodies")
 async def water_bodies(payload: WaterBounds):
     from services.water_surface_service import load_water_elements
@@ -118,34 +149,35 @@ async def extract_networks(payload: LocationRequest = Body(...)):
     Extracts real-world OpenStreetMap road network and river/waterway channels for any selected location.
     Accepts place name, polygon, or coordinates + radius.
     """
-    # 1. Prioritize explicit polygon, viewport bbox, or coordinates
-    if payload.polygon and len(payload.polygon) >= 3:
-        bbox = bbox_from_polygon(payload.polygon)
-    elif payload.north is not None and payload.south is not None and payload.east is not None and payload.west is not None:
-        bbox = _derive_bbox(payload)
-    elif payload.lat is not None and payload.lng is not None:
-        bbox = _derive_bbox(payload)
-    elif payload.place_name:
+    started = time.perf_counter()
+    if payload.place_name and not payload.area_id and not payload.polygon and payload.lat is None and payload.north is None:
         geocoded = await geocode_place_name(payload.place_name)
         if geocoded:
-            bbox = {
-                "north": geocoded["north"],
-                "south": geocoded["south"],
-                "east": geocoded["east"],
-                "west": geocoded["west"],
-                "center_lat": geocoded["lat"],
-                "center_lng": geocoded["lng"],
-                "place_name": geocoded["name"],
-            }
-        else:
-            bbox = _derive_bbox(payload)
-    else:
-        bbox = _derive_bbox(payload)
-
+            payload.north, payload.south = geocoded["north"], geocoded["south"]
+            payload.east, payload.west = geocoded["east"], geocoded["west"]
+    area_id, bbox, area_key = await _selected_location(payload)
     north = bbox["north"]
     south = bbox["south"]
     east = bbox["east"]
     west = bbox["west"]
+
+    db_started = time.perf_counter()
+    state, stored = await asyncio.gather(
+        selected_area_store.network_state(area_key),
+        supabase_network_store.load(area_key, bbox=bbox, polygon=payload.polygon),
+    )
+    db_read_ms = round((time.perf_counter() - db_started) * 1000)
+    if state and state.get("complete") and state.get("polygon") == payload.polygon:
+        roads, rivers = (stored or {}).get("roads", []), (stored or {}).get("rivers", [])
+        if len(roads) == state["roads"] and len(rivers) == state["rivers"]:
+            return {
+                "status": "success", "bbox": bbox, "area_id": area_id,
+                "timing_ms": {"db_read": db_read_ms, "total": round((time.perf_counter() - started) * 1000)},
+                "persistence": {"saved": True},
+                "osm_loading": {"complete": True, "source": "Supabase", "total_tiles": 0, "loaded_tiles": 0, "failed_tiles": []},
+                "roads": {"geojson": {"type": "FeatureCollection", "features": roads}, "total_nodes": 0, "total_edges": len(roads)},
+                "rivers": {"geojson": {"type": "FeatureCollection", "features": rivers}, "total_nodes": 0, "total_edges": len(rivers)},
+            }
 
     road_res, river_res = await asyncio.gather(
         road_service.get_road_network(north, south, east, west, polygon=payload.polygon),
@@ -153,25 +185,25 @@ async def extract_networks(payload: LocationRequest = Body(...)):
         return_exceptions=True,
     )
 
-    if isinstance(road_res, Exception):
-        print(f"[routing_and_rivers] Road extraction warning: {road_res}")
-        road_G = nx.DiGraph()
-        road_geojson = {"type": "FeatureCollection", "features": [], "metadata": {"total_nodes": 0, "total_edges": 0}}
-    else:
-        road_G, road_geojson = road_res
-
-    if isinstance(river_res, Exception):
-        print(f"[routing_and_rivers] River extraction warning: {river_res}")
-        river_G = nx.DiGraph()
-        river_geojson = {"type": "FeatureCollection", "features": [], "metadata": {"total_nodes": 0, "total_edges": 0}}
-    else:
-        river_G, river_geojson = river_res
-
-    center_lat = bbox.get("center_lat", (north + south) / 2.0)
-    center_lng = bbox.get("center_lng", (east + west) / 2.0)
+    failures = [name for name, result in (("paths", road_res), ("water", river_res)) if isinstance(result, Exception)]
+    if failures:
+        raise HTTPException(503, {"message": "Could not finish loading " + ", ".join(failures), "complete": False})
+    road_G, road_geojson = road_res
+    river_G, river_geojson = river_res
+    road_geojson = {**road_geojson, "features": clip_features(road_geojson.get("features", []), bbox, payload.polygon)}
+    river_geojson = {**river_geojson, "features": clip_features(river_geojson.get("features", []), bbox, payload.polygon)}
+    db_started = time.perf_counter()
+    async with selected_area_store.writing(area_key, area_id):
+        saved = await supabase_network_store.save(area_key, bbox, road_geojson["features"], river_geojson["features"], payload.polygon, replace_all=True)
+        if saved:
+            await selected_area_store.save_network_state(area_key, area_id, len(road_geojson["features"]), len(river_geojson["features"]), payload.polygon)
+    db_write_ms = round((time.perf_counter() - db_started) * 1000)
 
     return {
         "status": "success",
+        "area_id": area_id,
+        "persistence": {"saved": saved},
+        "timing_ms": {"db_read": db_read_ms, "db_write": db_write_ms, "total": round((time.perf_counter() - started) * 1000)},
         "bbox": bbox,
         "osm_loading": {
             "complete": True,
@@ -198,7 +230,17 @@ async def extract_networks(payload: LocationRequest = Body(...)):
 @router.post("/extract-buildings")
 async def extract_buildings(payload: LocationRequest = Body(...)):
     """Load complete OSM building footprints after the priority network layers."""
-    bbox = _derive_bbox(payload)
+    started = time.perf_counter()
+    area_id, bbox, area_key = await _selected_location(payload)
+    row_id = f"{area_key}:buildings"
+    db_started = time.perf_counter()
+    stored = await supabase_building_store.load(row_id)
+    db_read_ms = round((time.perf_counter() - db_started) * 1000)
+    if stored is not None and stored.get("metadata", {}).get("selection_polygon") == payload.polygon:
+        return {"status": "success", "bbox": bbox, "area_id": area_id,
+                "buildings": {"geojson": stored, "total_features": len(stored["features"])},
+                "osm_loading": {"complete": True, "source": "Supabase"}, "persistence": {"saved": True},
+                "timing_ms": {"db_read": db_read_ms, "total": round((time.perf_counter() - started) * 1000)}}
     try:
         geojson, tile_status = await building_service.get_buildings(
             bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
@@ -208,8 +250,17 @@ async def extract_buildings(payload: LocationRequest = Body(...)):
             status_code=503,
             detail={"message": "Building data is incomplete.", "failed_tiles": exc.failures},
         ) from exc
+    geojson = {**geojson, "features": clip_features(geojson.get("features", []), bbox, payload.polygon)}
+    geojson["metadata"] = {**geojson.get("metadata", {}), "selection_polygon": payload.polygon}
+    db_started = time.perf_counter()
+    async with selected_area_store.writing(area_key, area_id):
+        saved = await supabase_building_store.save(row_id, geojson, area_id)
+    db_write_ms = round((time.perf_counter() - db_started) * 1000)
     return {
         "status": "success",
+        "area_id": area_id,
+        "persistence": {"saved": saved},
+        "timing_ms": {"db_read": db_read_ms, "db_write": db_write_ms, "total": round((time.perf_counter() - started) * 1000)},
         "bbox": bbox,
         "buildings": {"geojson": geojson, "total_features": len(geojson.get("features", []))},
         "osm_loading": tile_status,

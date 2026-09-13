@@ -1,0 +1,4 @@
+# Optional neural inference runtime for TWIN_GNN_CHECKPOINT.
+-r requirements.txt
+torch>=2.6.0
+networkx>=3.0

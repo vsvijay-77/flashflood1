@@ -13,7 +13,7 @@ import httpx
 
 router = APIRouter(prefix="/digital-twin", tags=["digital-twin"])
 
-GEOJSON_PATH = Path("/Users/vijay/Documents/flash_flood/backend/pollachi_buildings.geojson")
+GEOJSON_PATH = Path(__file__).parent.parent / "pollachi_buildings.geojson"
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371000  # radius of Earth in meters

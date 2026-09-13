@@ -82,9 +82,17 @@ class GNNTransformerFloodModel(nn.Module):
         h = self.gnn1(x, adj)
         h = self.gnn2(h, adj)
 
-        # Reshape for temporal sequence: batch of nodes as sequences
-        h_seq = h.unsqueeze(1)  # (N, 1, hidden_dim)
-        h_trans = self.transformer(h_seq).squeeze(1)
+        # Accept legacy (nodes, features) and real (time, nodes, features) input.
+        h_seq = h.unsqueeze(1) if h.ndim == 2 else h.transpose(0, 1)
+        if h_seq.shape[1] > 1:
+            position = torch.arange(h_seq.shape[1], device=h.device, dtype=h.dtype).unsqueeze(1)
+            frequency = torch.exp(torch.arange(0, h_seq.shape[-1], 2, device=h.device, dtype=h.dtype)
+                                  * (-math.log(10000.0) / h_seq.shape[-1]))
+            encoding = torch.zeros_like(h_seq[0])
+            encoding[:, 0::2] = torch.sin(position * frequency)
+            encoding[:, 1::2] = torch.cos(position * frequency)
+            h_seq = h_seq + encoding.unsqueeze(0)
+        h_trans = self.transformer(h_seq)[:, -1]
 
         flood_prob = self.flood_prob_head(h_trans)
         severity_logits = self.severity_head(h_trans)

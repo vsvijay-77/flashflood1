@@ -301,7 +301,7 @@ export function CesiumDigitalTwinViewer({
   // ─── 📡 3D IOT MESH NODES (MASTER & SLAVE SENSORS) ───
   const meshNodeEntitiesRef = useRef<any[]>([]);
   const [weatherDayTab, setWeatherDayTab] = useState<"1d" | "2d" | "3d" | "4d" | "5d" | "6d" | "7d">("1d");
-  const [showMeshNodes, setShowMeshNodes] = useState<boolean>(false);
+  const [showMeshNodes, setShowMeshNodes] = useState<boolean>(true);
   const [showMeshPanel, setShowMeshPanel] = useState<boolean>(false);
   const [showRainPanel, setShowRainPanel] = useState<boolean>(false);
   const [isPickingLocation, setIsPickingLocation] = useState<"master" | "slave" | SensorType | null>(null);
@@ -482,6 +482,7 @@ export function CesiumDigitalTwinViewer({
     };
 
     setDeployedSensors((prev) => [...prev, newSensor]);
+    setShowMeshNodes(true);
     toast.success(`Connected ${newSensor.name} to ${targetSlave.name}`);
     logUserActivity("Connected Sensor to Slave", `Attached ${newSensor.name} to ${targetSlave.name} [Slave ID: ${targetSlave.id}]`);
     return true;
@@ -1890,56 +1891,57 @@ export function CesiumDigitalTwinViewer({
     });
     meshNodeEntitiesRef.current = [];
 
-    const activePoly = getActivePolygon();
-    const validNodes = nodes.filter((n) => isPointInPolygon(n.lat, n.lng, activePoly));
-    if (!showMeshNodes || validNodes.length === 0) return;
+    if (!showMeshNodes) return;
+    if (nodes.length === 0 && deployedSensors.length === 0) return;
 
-    const master = validNodes.find((n) => n.type === "master") || validNodes[0];
-    if (!master) return;
+    const master = nodes.find((n) => n.type === "master");
 
-    // 1. Render Master Node (Golden Amber Mast + Radar Footprint)
-    const masterMast = viewer.entities.add({
-      id: `mesh-node-${master.id}`,
-      name: `📡 MASTER GATEWAY: ${master.name}`,
-      position: Cesium.Cartesian3.fromDegrees(master.lng, master.lat, 20),
-      cylinder: {
-        length: 40.0,
-        topRadius: 2.5,
-        bottomRadius: 4.5,
-        material: Cesium.Color.fromCssColorString("#f59e0b").withAlpha(0.95),
-        outline: true,
-        outlineColor: Cesium.Color.fromCssColorString("#fef08a"),
-        heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-      },
-      point: {
-        pixelSize: 15,
-        color: Cesium.Color.fromCssColorString("#f59e0b"),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 3,
-        heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-      },
-      label: {
-        text: "Master Node • Connected",
-        font: "bold 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-        scale: 0.5,
-        fillColor: Cesium.Color.fromCssColorString("#fef08a"),
-        outlineColor: Cesium.Color.BLACK,
-        outlineWidth: 4,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString("#451a03").withAlpha(0.92),
-        backgroundPadding: new Cesium.Cartesian2(8, 4),
-        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -32),
-        heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-    });
-    (masterMast as any)._nodeId = master.id;
-    meshNodeEntitiesRef.current.push(masterMast);
+    // 1. Render Master Node (Golden Amber Mast + Radar Footprint) if deployed
+    if (master) {
+      const masterMast = viewer.entities.add({
+        id: `mesh-node-${master.id}`,
+        name: `📡 MASTER GATEWAY: ${master.name}`,
+        position: Cesium.Cartesian3.fromDegrees(master.lng, master.lat, 20),
+        cylinder: {
+          length: 40.0,
+          topRadius: 2.5,
+          bottomRadius: 4.5,
+          material: Cesium.Color.fromCssColorString("#f59e0b").withAlpha(0.95),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString("#fef08a"),
+          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+        },
+        point: {
+          pixelSize: 16,
+          color: Cesium.Color.fromCssColorString("#f59e0b"),
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 3,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text: `📡 ${master.name} • Master Gateway`,
+          font: "bold 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          scale: 0.5,
+          fillColor: Cesium.Color.fromCssColorString("#fef08a"),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 4,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString("#451a03").withAlpha(0.92),
+          backgroundPadding: new Cesium.Cartesian2(8, 4),
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -32),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      (masterMast as any)._nodeId = master.id;
+      meshNodeEntitiesRef.current.push(masterMast);
+    }
 
-    // 2. Render Slave Nodes & Continuous 3D Connection Lines
-    const slaves = validNodes.filter((n) => n.id !== master.id);
+    // 2. Render Slave Nodes & Connection Lines
+    const slaves = nodes.filter((n) => n.type === "slave");
 
     slaves.forEach((slave, idx) => {
       // 3D Slave Telemetry Station (Electric Cyan)
@@ -1957,14 +1959,15 @@ export function CesiumDigitalTwinViewer({
           heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
         },
         point: {
-          pixelSize: 12,
+          pixelSize: 14,
           color: Cesium.Color.fromCssColorString("#06b6d4"),
           outlineColor: Cesium.Color.WHITE,
-          outlineWidth: 2,
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          outlineWidth: 2.5,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
-          text: `Slave Node #${idx + 1} • Connected`,
+          text: `⚡ ${slave.name} • Slave Sentry`,
           font: "bold 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
           scale: 0.5,
           fillColor: Cesium.Color.fromCssColorString("#67e8f9"),
@@ -1976,68 +1979,68 @@ export function CesiumDigitalTwinViewer({
           backgroundPadding: new Cesium.Cartesian2(8, 4),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
           pixelOffset: new Cesium.Cartesian2(0, -26),
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
       (slaveMast as any)._nodeId = slave.id;
       meshNodeEntitiesRef.current.push(slaveMast);
 
-      // ALWAYS-ON 3D CONNECTION LINK (MASTER ↔ SLAVE)
-      // Clamped glow polyline draped over 3D terrain
-      const linkLine = viewer.entities.add({
-        id: `link-${master.id}-${slave.id}`,
-        name: `Mesh RF Link: ${master.name} ↔ ${slave.name}`,
-        polyline: {
-          positions: Cesium.Cartesian3.fromDegreesArray([
-            master.lng, master.lat,
-            slave.lng, slave.lat,
-          ]),
-          width: 3.5,
-          clampToGround: true,
-          material: new Cesium.PolylineGlowMaterialProperty({
-            glowPower: 0.35,
-            taperPower: 0.8,
-            color: Cesium.Color.fromCssColorString("#22c55e"), // Vibrant RF link green (Master ↔ Slave)
-          }),
-        },
-      });
-      (linkLine as any)._nodeId = slave.id;
-      meshNodeEntitiesRef.current.push(linkLine);
+      // Render link to Master if master is available
+      if (master) {
+        const linkLine = viewer.entities.add({
+          id: `link-${master.id}-${slave.id}`,
+          name: `Mesh RF Link: ${master.name} ↔ ${slave.name}`,
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray([
+              master.lng, master.lat,
+              slave.lng, slave.lat,
+            ]),
+            width: 3.5,
+            clampToGround: true,
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.35,
+              taperPower: 0.8,
+              color: Cesium.Color.fromCssColorString("#22c55e"),
+            }),
+          },
+        });
+        (linkLine as any)._nodeId = slave.id;
+        meshNodeEntitiesRef.current.push(linkLine);
 
-      // Midpoint RF Telemetry Badge
-      const midLat = (master.lat + slave.lat) / 2;
-      const midLng = (master.lng + slave.lng) / 2;
-      const distKm = calculateDistanceKm(master.lat, master.lng, slave.lat, slave.lng);
-      const midBadge = viewer.entities.add({
-        id: `badge-${slave.id}`,
-        name: `Link Status: ${master.name} ↔ ${slave.name}`,
-        position: Cesium.Cartesian3.fromDegrees(midLng, midLat),
-        label: {
-          text: `Connected • ${distKm.toFixed(2)} km`,
-          font: "bold 22px monospace",
-          scale: 0.5,
-          fillColor: Cesium.Color.fromCssColorString("#a5f3fc"),
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 3,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          showBackground: true,
-          backgroundColor: Cesium.Color.fromCssColorString("#042f2e").withAlpha(0.95),
-          backgroundPadding: new Cesium.Cartesian2(8, 4),
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      });
-      (midBadge as any)._nodeId = slave.id;
-      meshNodeEntitiesRef.current.push(midBadge);
+        // Midpoint RF Telemetry Badge
+        const midLat = (master.lat + slave.lat) / 2;
+        const midLng = (master.lng + slave.lng) / 2;
+        const distKm = calculateDistanceKm(master.lat, master.lng, slave.lat, slave.lng);
+        const midBadge = viewer.entities.add({
+          id: `badge-${slave.id}`,
+          name: `Link Status: ${master.name} ↔ ${slave.name}`,
+          position: Cesium.Cartesian3.fromDegrees(midLng, midLat),
+          label: {
+            text: `Connected • ${distKm.toFixed(2)} km`,
+            font: "bold 22px monospace",
+            scale: 0.5,
+            fillColor: Cesium.Color.fromCssColorString("#a5f3fc"),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString("#042f2e").withAlpha(0.95),
+            backgroundPadding: new Cesium.Cartesian2(8, 4),
+            verticalOrigin: Cesium.VerticalOrigin.CENTER,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+        (midBadge as any)._nodeId = slave.id;
+        meshNodeEntitiesRef.current.push(midBadge);
+      }
     });
 
-    // 3. Render Deployed Sensors (Connected to their respective Slave node)
+    // 3. Render Deployed Sensors (Always visible with high-contrast beacon & clamp to ground)
     deployedSensors.forEach((sensor) => {
       if (sensor.lat === undefined || sensor.lng === undefined) return;
-      const parentSlave = slaves.find((s) => s.id === sensor.slaveId);
-      if (!parentSlave) return;
+      const parentSlave = nodes.find((s) => s.id === sensor.slaveId);
 
       const sensorColorMap: Record<SensorType, string> = {
         water_level: "#38bdf8",
@@ -2048,31 +2051,32 @@ export function CesiumDigitalTwinViewer({
       };
       const hexColor = sensorColorMap[sensor.type] || "#38bdf8";
 
-      // 3D Sensor Node Marker
+      // 3D Sensor Node Marker (Clamp to ground + infinite depth test = never clipped by terrain)
       const sensorEntity = viewer.entities.add({
         id: `mesh-sensor-${sensor.id}`,
-        name: `📡 ${sensor.name} (Slave: ${parentSlave.name})`,
-        position: Cesium.Cartesian3.fromDegrees(sensor.lng, sensor.lat, 8),
+        name: `📡 ${sensor.name}${parentSlave ? ` (Slave: ${parentSlave.name})` : ""}`,
+        position: Cesium.Cartesian3.fromDegrees(sensor.lng, sensor.lat, 10),
         cylinder: {
-          length: 14.0,
-          topRadius: 1.2,
-          bottomRadius: 2.0,
+          length: 16.0,
+          topRadius: 1.5,
+          bottomRadius: 2.5,
           material: Cesium.Color.fromCssColorString(hexColor).withAlpha(0.95),
           outline: true,
           outlineColor: Cesium.Color.WHITE,
           heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
         },
         point: {
-          pixelSize: 10,
+          pixelSize: 14,
           color: Cesium.Color.fromCssColorString(hexColor),
           outlineColor: Cesium.Color.WHITE,
-          outlineWidth: 2,
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          outlineWidth: 3,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
-          text: `${sensor.name} • Connected`,
-          font: "bold 22px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-          scale: 0.48,
+          text: `📡 ${sensor.name} • Active`,
+          font: "bold 20px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          scale: 0.5,
           fillColor: Cesium.Color.fromCssColorString(hexColor),
           outlineColor: Cesium.Color.BLACK,
           outlineWidth: 3,
@@ -2081,34 +2085,36 @@ export function CesiumDigitalTwinViewer({
           backgroundColor: Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.92),
           backgroundPadding: new Cesium.Cartesian2(6, 3),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -20),
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          pixelOffset: new Cesium.Cartesian2(0, -22),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
       (sensorEntity as any)._sensorId = sensor.id;
       meshNodeEntitiesRef.current.push(sensorEntity);
 
-      // Clamped glow polyline connecting Sensor to its parent Slave node
-      const sensorLinkLine = viewer.entities.add({
-        id: `sensor-link-${sensor.id}`,
-        name: `Sensor Link: ${sensor.name} ↔ ${parentSlave.name}`,
-        polyline: {
-          positions: Cesium.Cartesian3.fromDegreesArray([
-            sensor.lng, sensor.lat,
-            parentSlave.lng, parentSlave.lat,
-          ]),
-          width: 2.5,
-          clampToGround: true,
-          material: new Cesium.PolylineGlowMaterialProperty({
-            glowPower: 0.3,
-            taperPower: 0.8,
-            color: Cesium.Color.fromCssColorString("#f97316"), // Vibrant sensor link orange (Sensor ↔ Slave)
-          }),
-        },
-      });
-      (sensorLinkLine as any)._sensorId = sensor.id;
-      meshNodeEntitiesRef.current.push(sensorLinkLine);
+      // Clamped glow polyline connecting Sensor to its parent Slave node if slave exists
+      if (parentSlave) {
+        const sensorLinkLine = viewer.entities.add({
+          id: `sensor-link-${sensor.id}`,
+          name: `Sensor Link: ${sensor.name} ↔ ${parentSlave.name}`,
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray([
+              sensor.lng, sensor.lat,
+              parentSlave.lng, parentSlave.lat,
+            ]),
+            width: 3.0,
+            clampToGround: true,
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.35,
+              taperPower: 0.8,
+              color: Cesium.Color.fromCssColorString("#f97316"), // Vibrant sensor link orange (Sensor ↔ Slave)
+            }),
+          },
+        });
+        (sensorLinkLine as any)._sensorId = sensor.id;
+        meshNodeEntitiesRef.current.push(sensorLinkLine);
+      }
     });
   };
 
@@ -2139,6 +2145,7 @@ export function CesiumDigitalTwinViewer({
       status: "online",
     };
     setMeshNodes((prev) => [master, ...prev.filter((n) => n.type !== "master")]);
+    setShowMeshNodes(true);
     logUserActivity("Added Master Gateway", `Placed at center coords (${latitude.toFixed(5)}° N, ${longitude.toFixed(5)}° E)`, master);
   };
 
@@ -2214,6 +2221,7 @@ export function CesiumDigitalTwinViewer({
         connectedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       },
     ]);
+    setShowMeshNodes(true);
     logUserActivity("Added Preset Slave", `Added ${newSlave.name} with ${sensorNameMap[presetType]}`, newSlave);
   };
 
@@ -3402,6 +3410,7 @@ export function CesiumDigitalTwinViewer({
               status: "online",
             };
             setMeshNodes((prev) => [...prev, newSlave]);
+            setShowMeshNodes(true);
             setSelectedNodeId(newSlave.id);
             logUserActivity(
               "Added Slave Node",
@@ -3451,6 +3460,7 @@ export function CesiumDigitalTwinViewer({
               };
 
               setDeployedSensors((prev) => [...prev, newSensor]);
+              setShowMeshNodes(true);
               toast.success(`Placed ${newSensor.name} • Connected to ${closestSlave.name}`);
               logUserActivity(
                 "Placed Sensor",
@@ -4733,9 +4743,18 @@ export function CesiumDigitalTwinViewer({
             <div className="space-y-1.5">
               <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
                 <span>Deployed Mesh Nodes ({meshNodes.length})</span>
-                <span className="text-[9px] text-slate-400 font-mono">
-                  {showMeshNodes ? "Visible on 3D Map" : "Hidden"}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowMeshNodes((prev) => !prev)}
+                  className={`text-[9px] px-2 py-0.5 rounded font-mono border transition-all cursor-pointer flex items-center gap-1 ${
+                    showMeshNodes
+                      ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30"
+                      : "bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200"
+                  }`}
+                  title="Toggle visibility of nodes and sensors on 3D map"
+                >
+                  <span>{showMeshNodes ? "👁️ Visible on 3D Map" : "👁️‍🗨️ Hidden"}</span>
+                </button>
               </div>
 
               {meshNodes.length === 0 ? (
@@ -4743,7 +4762,7 @@ export function CesiumDigitalTwinViewer({
                   No mesh nodes deployed yet. Click "+ Drop Master" or "+ Drop Slave" above to place anywhere on the 3D viewer!
                 </div>
               ) : (
-                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
+                <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
                   {meshNodes.map((node) => {
                     const isMaster = node.type === "master";
                     const nodeSensors = deployedSensors.filter((s) => s.slaveId === node.id);
@@ -4777,6 +4796,69 @@ export function CesiumDigitalTwinViewer({
                           title="Remove node"
                         >
                           <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Deployed Connected Sensors List */}
+            <div className="space-y-1.5 border-t border-slate-800/80 pt-2">
+              <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                <span>Active Deployed Sensors ({deployedSensors.length})</span>
+                <span className="text-[9px] text-emerald-400 font-mono">
+                  {deployedSensors.length > 0 ? "● Rendered on 3D Map" : "None Deployed"}
+                </span>
+              </div>
+
+              {deployedSensors.length === 0 ? (
+                <div className="text-center py-3 bg-slate-950/40 rounded-xl border border-dashed border-slate-800/80 text-slate-500 text-[11px]">
+                  No active sensors attached yet. Use the sensor drop buttons above to attach sensors to slave nodes.
+                </div>
+              ) : (
+                <div className="max-h-36 overflow-y-auto space-y-1 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
+                  {deployedSensors.map((sensor) => {
+                    const parentSlave = meshNodes.find((n) => n.id === sensor.slaveId);
+                    const sensorColorMap: Record<SensorType, string> = {
+                      water_level: "#38bdf8",
+                      soil_moisture: "#34d399",
+                      imu: "#c084fc",
+                      tilt: "#fbbf24",
+                      raindrop: "#60a5fa",
+                    };
+                    const sensorColor = sensorColorMap[sensor.type] || "#38bdf8";
+                    return (
+                      <div
+                        key={sensor.id}
+                        className="p-1.5 rounded-lg border border-slate-800/90 bg-slate-950/90 flex items-center justify-between text-xs hover:border-slate-700 transition-all"
+                      >
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="size-2 rounded-full inline-block shrink-0 shadow-[0_0_8px]"
+                              style={{ backgroundColor: sensorColor, boxShadow: `0 0 8px ${sensorColor}` }}
+                            />
+                            <span className="font-semibold text-slate-200 text-[11px]">
+                              {sensor.name}
+                            </span>
+                            <span className="text-[9px] font-mono px-1 py-0.2 bg-slate-900 rounded text-slate-400">
+                              {sensor.lat !== undefined ? sensor.lat.toFixed(4) : "—"}°, {sensor.lng !== undefined ? sensor.lng.toFixed(4) : "—"}°
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 flex items-center gap-2">
+                            <span>Slave: <strong className="text-amber-400">{parentSlave ? parentSlave.name : "Unlinked"}</strong></span>
+                            <span className="text-slate-500 font-mono">{sensor.connectedAt}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => deleteDeployedSensor(sensor.id)}
+                          className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded transition-colors cursor-pointer"
+                          title="Remove sensor"
+                        >
+                          <Trash2 className="size-3" />
                         </button>
                       </div>
                     );

@@ -1223,9 +1223,9 @@ export function CesiumDigitalTwinViewer({
             show: showBuildings && (buildingRiskFilter === "ALL" || risk === buildingRiskFilter),
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flat()), holes),
-              material: Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.85),
+              material: Cesium.Color.fromCssColorString("#facc15").withAlpha(0.85),
               outline: true,
-              outlineColor: Cesium.Color.fromCssColorString("#7dd3fc"),
+              outlineColor: Cesium.Color.fromCssColorString("#fde047"),
               outlineWidth: 1.5,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               extrudedHeight: height,

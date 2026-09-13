@@ -92,6 +92,7 @@ from routers.digital_twin import router as digital_twin_router  # noqa: E402
 from routers.routing_and_rivers import router as routing_and_rivers_router  # noqa: E402
 from routers.buildings import router as buildings_router  # noqa: E402
 from routers.chat import router as chat_router  # noqa: E402
+from routers.sensor_data import router as sensor_data_router  # noqa: E402
 
 api_router.include_router(auth_router)
 api_router.include_router(network_router)
@@ -104,6 +105,7 @@ api_router.include_router(digital_twin_router)
 api_router.include_router(routing_and_rivers_router)
 api_router.include_router(buildings_router)
 api_router.include_router(chat_router)
+api_router.include_router(sensor_data_router)
 
 
 # Include the router in the main app

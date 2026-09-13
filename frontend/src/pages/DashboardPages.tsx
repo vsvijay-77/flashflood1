@@ -15,7 +15,7 @@ import { EmptyState, LoadingRows, LoadingSymbol, PageHeader, RiskIndicator, Sect
 import { apiGet, apiPatch } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { MobileSosRequest } from "@/components/dashboard/BatteryAndAlerts";
-import { HAZARD_LABELS, SENSOR_LABELS, type Alert, type NetworkStats, type Sensor, type Zone } from "@/lib/types";
+import { HAZARD_LABELS, SENSOR_LABELS, type Alert, type NetworkStats, type Sensor, type Zone, type SensorDataRecord, type LiveWeatherData } from "@/lib/types";
 
 // New Dashboard Components
 import { SystemStatusHeader } from "@/components/dashboard/SystemStatusHeader";
@@ -38,73 +38,207 @@ function useNetwork() {
 }
 
 export function EnvironmentalMonitoringSection() {
-  const { sensors, zones } = useNetwork();
-  const [zoneId, setZoneId] = useState<string>("");
-  const list = useMemo(
-    () => (sensors.data ?? []).filter((s) => !zoneId || s.zone_id === zoneId),
-    [sensors.data, zoneId],
-  );
+  const [deviceFilter, setDeviceFilter] = useState<string>("");
+
+  // Live telemetry records from PostgreSQL sensor_data
+  const { data: dbRecords = [], isLoading: isRecordsLoading, refetch: refetchSensors, isRefetching } = useQuery<SensorDataRecord[]>({
+    queryKey: ["all_sensor_data_records", deviceFilter],
+    queryFn: () => apiGet<SensorDataRecord[]>(`/sensor-data?limit=100${deviceFilter ? `&device_id=${deviceFilter}` : ""}`),
+    refetchInterval: 6000,
+  });
+
+  // Reliable real-time weather from Open-Meteo
+  const { data: weather } = useQuery<LiveWeatherData>({
+    queryKey: ["live_weather_openmeteo_env"],
+    queryFn: () => apiGet<LiveWeatherData>("/sensor-data/weather"),
+    refetchInterval: 30000,
+  });
+
+  // Unique devices
+  const devices = useMemo(() => {
+    return Array.from(new Set(dbRecords.map((r) => r.device_id).filter(Boolean)));
+  }, [dbRecords]);
+
+  const latest = dbRecords[0];
 
   return (
     <div className="space-y-4" data-testid="dashboard-environmental-section">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h3 className="text-lg font-bold text-slate-900">Environmental Sensor Monitoring</h3>
-          <p className="text-xs text-slate-500">Live LoRa uplink telemetry readings from all deployed field nodes.</p>
+          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            Environmental Data & Real-Time Sensor Telemetry
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
+              <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
+              PostgreSQL sensor_data
+            </span>
+          </h3>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Real-time IoT data stream from physical LoRa nodes (<code className="font-mono text-[11px] text-slate-700 bg-slate-100 px-1 py-0.5 rounded">sensor_data</code>: soil moisture, water level, rainfall, tilt, IMU X/Y/Z, RSSI, SNR, status) with reliable weather API observations.
+          </p>
         </div>
-        <div className="flex flex-wrap gap-2" data-testid="environmental-zone-filters">
+
+        <div className="flex items-center gap-2">
+          {devices.length > 0 && (
+            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 text-xs">
+              <button
+                onClick={() => setDeviceFilter("")}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                  deviceFilter === "" ? "bg-[#0F4C81] text-white" : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                All Devices ({dbRecords.length})
+              </button>
+              {devices.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDeviceFilter(d)}
+                  className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                    deviceFilter === d ? "bg-[#0F4C81] text-white" : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          )}
           <button
-            onClick={() => setZoneId("")}
-            className={`rounded-full border px-3 py-1 text-xs font-semibold cursor-pointer transition-colors ${
-              zoneId === "" ? "border-[#0F4C81] bg-[#0F4C81] text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-            }`}
+            onClick={() => refetchSensors()}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 cursor-pointer shadow-xs"
+            title="Refresh database records"
           >
-            All Zones
+            <RefreshCw className={`size-3.5 ${isRefetching ? "animate-spin" : ""}`} />
+            Refresh
           </button>
-          {(zones.data ?? []).map((z) => (
-            <button
-              key={z.id}
-              onClick={() => setZoneId(z.id)}
-              className={`rounded-full border px-3 py-1 text-xs font-semibold cursor-pointer transition-colors ${
-                zoneId === z.id ? "border-[#0F4C81] bg-[#0F4C81] text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              {z.name}
-            </button>
-          ))}
         </div>
       </div>
 
-      <SectionCard testId="dashboard-environmental-readings-card" title="Live Field Telemetry" description={`${list.length} sensor nodes reporting in real time`}>
-        {sensors.isLoading ? (
-          <LoadingRows rows={5} />
-        ) : list.length === 0 ? (
-          <EmptyState testId="environmental-empty" title="No sensor readings" description="No nodes are registered for this zone yet." />
+      {/* Atmospheric & Weather Environment Overview Banner */}
+      {weather && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div className="rounded-xl border border-orange-200 bg-orange-50/50 p-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-orange-700">Temperature (Weather API)</span>
+            <div className="text-xl font-black text-orange-950 mt-1">{weather.temperature != null ? `${weather.temperature.toFixed(1)}°C` : "—"}</div>
+            <span className="text-[11px] text-orange-700 font-medium">Feels like {weather.apparent_temperature ?? weather.temperature}°C</span>
+          </div>
+
+          <div className="rounded-xl border border-sky-200 bg-sky-50/50 p-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700">Weather Condition</span>
+            <div className="text-base font-black text-sky-950 mt-1 truncate">{weather.condition}</div>
+            <span className="text-[11px] text-sky-700 font-medium">{weather.source} Reliable</span>
+          </div>
+
+          <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Relative Humidity</span>
+            <div className="text-xl font-black text-blue-950 mt-1">{weather.humidity}%</div>
+            <span className="text-[11px] text-blue-700 font-medium">Atmospheric moisture</span>
+          </div>
+
+          <div className="rounded-xl border border-cyan-200 bg-cyan-50/50 p-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-700">Wind Speed</span>
+            <div className="text-xl font-black text-cyan-950 mt-1">{weather.wind_speed} km/h</div>
+            <span className="text-[11px] text-cyan-700 font-medium">Dir: {weather.wind_direction ?? 0}°</span>
+          </div>
+
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">Surface Pressure</span>
+            <div className="text-xl font-black text-indigo-950 mt-1">{weather.pressure ?? 1012} hPa</div>
+            <span className="text-[11px] text-indigo-700 font-medium">Barometric station</span>
+          </div>
+
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Active Node Radio</span>
+            <div className="text-xl font-black text-emerald-950 mt-1">{latest?.rssi != null ? `${latest.rssi} dBm` : "—"}</div>
+            <span className="text-[11px] text-emerald-700 font-medium">SNR: {latest?.snr ?? "—"} dB</span>
+          </div>
+        </div>
+      )}
+
+      {/* Main Environmental Sensor Data Table */}
+      <SectionCard
+        testId="dashboard-environmental-readings-card"
+        title="Live PostgreSQL Sensor Telemetry"
+        description={`${dbRecords.length} records fetched from db.nishanth.qzz.io:5432/sensor_db (sensor_data table)`}
+      >
+        {isRecordsLoading ? (
+          <LoadingRows rows={6} />
+        ) : dbRecords.length === 0 ? (
+          <EmptyState
+            testId="environmental-empty"
+            title="No sensor readings found"
+            description="Could not connect to sensor database or table is currently empty."
+          />
         ) : (
-          <Table data-testid="dashboard-environmental-readings-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Node Code</TableHead>
-                <TableHead>Sensor Type</TableHead>
-                <TableHead>Monitored Zone</TableHead>
-                <TableHead>Telemetry Reading</TableHead>
-                <TableHead>Battery Level</TableHead>
-                <TableHead>Connection Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((s) => (
-                <TableRow key={s.id} data-testid={`sensor-row-${s.code}`}>
-                  <TableCell className="font-mono text-xs font-semibold">{s.code}</TableCell>
-                  <TableCell>{SENSOR_LABELS[s.sensor_type] ?? s.sensor_type}</TableCell>
-                  <TableCell className="text-xs text-slate-500">{s.zone_name}</TableCell>
-                  <TableCell className="font-mono font-semibold">{s.last_value} {s.unit}</TableCell>
-                  <TableCell className="font-mono text-xs">{s.battery}%</TableCell>
-                  <TableCell><StatusPill status={s.status} testId={`sensor-status-${s.code}`} /></TableCell>
+          <div className="overflow-x-auto">
+            <Table data-testid="dashboard-environmental-readings-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">ID</TableHead>
+                  <TableHead>Device ID</TableHead>
+                  <TableHead>Soil Moisture</TableHead>
+                  <TableHead>Water Level</TableHead>
+                  <TableHead>Rainfall</TableHead>
+                  <TableHead>Tilt Angle</TableHead>
+                  <TableHead>IMU (X | Y | Z)</TableHead>
+                  <TableHead>Radio Signal</TableHead>
+                  <TableHead>Status Message</TableHead>
+                  <TableHead>Timestamp</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {dbRecords.map((r) => {
+                  const isHealthy = (r.txt || "").toLowerCase().includes("working") || (r.txt || "").toLowerCase().includes("active");
+                  return (
+                    <TableRow key={r.id} data-testid={`sensor-data-row-${r.id}`}>
+                      <TableCell className="font-mono text-xs font-bold text-slate-500">#{r.id}</TableCell>
+                      <TableCell className="font-semibold text-slate-900">
+                        <span className="inline-flex items-center gap-1.5 font-mono text-xs bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                          <Radio className="size-3 text-sky-600" />
+                          {r.device_id}
+                        </span>
+                      </TableCell>
+                      <TableCell className="font-mono font-semibold text-emerald-700">
+                        {r.soil_moisture != null ? `${Number(r.soil_moisture).toFixed(1)}%` : "0.0%"}
+                      </TableCell>
+                      <TableCell className="font-mono font-semibold text-amber-700">
+                        {r.water_level != null ? `${Number(r.water_level).toFixed(1)} m` : "0.0 m"}
+                      </TableCell>
+                      <TableCell className="font-mono font-semibold text-blue-700">
+                        {r.rainfall != null ? `${Number(r.rainfall).toFixed(1)} mm/h` : "0.0 mm/h"}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs font-semibold text-purple-700">
+                        {r.tilt != null ? `${Number(r.tilt).toFixed(1)}°` : "0.0°"}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs whitespace-nowrap text-slate-600">
+                        <span className="text-blue-600 font-semibold">{Number(r.imu_x ?? 0).toFixed(2)}</span>
+                        {" | "}
+                        <span className="text-emerald-600 font-semibold">{Number(r.imu_y ?? 0).toFixed(2)}</span>
+                        {" | "}
+                        <span className="text-rose-600 font-semibold">{Number(r.imu_z ?? 0).toFixed(2)}</span>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">
+                        <span className="font-mono font-bold text-slate-700">{r.rssi} dBm</span>
+                        <span className="text-slate-400 text-[11px] ml-1">({r.snr} SNR)</span>
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                            isHealthy
+                              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                              : "bg-slate-100 text-slate-700 border border-slate-200"
+                          }`}
+                        >
+                          {r.txt || "active"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-slate-500 whitespace-nowrap">
+                        {r.created_at ? new Date(r.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </SectionCard>
     </div>
@@ -1193,8 +1327,16 @@ export function SosAlertsPage() {
   );
 }
 
+export function EnvironmentalDataPage() {
+  return (
+    <div data-testid="environmental-data-page" className="space-y-6">
+      <EnvironmentalMonitoringSection />
+    </div>
+  );
+}
+
 // Backward compatibility export
-export const EnvironmentalMonitoringPage = SosAlertsPage;
+export const EnvironmentalMonitoringPage = EnvironmentalDataPage;
 
 export function AnalyticsPage() {
   const { zones, sensors } = useNetwork();

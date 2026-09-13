@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, AlertTriangle, BarChart3, Bell, Boxes, ChevronLeft, FileText, Gauge, LayoutDashboard,
-  LogOut, Map, Menu, Search, Settings, ShieldAlert, ShieldCheck, User as UserIcon, Users, Radio,
+  LogOut, Map, Menu, Search, Settings, ShieldAlert, ShieldCheck, User as UserIcon, Users, Radio, Leaf,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,7 @@ interface NavItem {
 
 const MAIN_NAV: NavItem[] = [
   { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
+  { label: "Environmental Data", to: "/environmental", icon: Leaf, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
   { label: "GIS Monitoring", to: "/gis", icon: Map, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
   { label: "Digital Twin", to: "/digital-twin", icon: Boxes, allow: ["admin", "gov_officer"] },
   { label: "SOS Alerts", to: "/sos-alerts", icon: ShieldAlert, allow: ["admin", "gov_officer", "field_officer", "viewer"] },

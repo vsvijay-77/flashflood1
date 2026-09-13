@@ -18,6 +18,7 @@ const OAuthConsentPage = lazy(() => import("@/pages/OAuthConsentPage"));
 const DashboardPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.DashboardPage })));
 const GISMonitoringPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.GISMonitoringPage })));
 const SosAlertsPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.SosAlertsPage })));
+const EnvironmentalDataPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.EnvironmentalDataPage })));
 const AnalyticsPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.AnalyticsPage })));
 const AreaDetailsPage = lazy(() => import("@/pages/DashboardPages").then(m => ({ default: m.AreaDetailsPage })));
 
@@ -54,7 +55,7 @@ export default function App() {
             <Route path="/gis" element={<GISMonitoringPage />} />
             <Route path="/digital-twin" element={<RoleBasedRoute allow={["admin", "gov_officer"]}><DigitalTwinPage /></RoleBasedRoute>} />
             <Route path="/sos-alerts" element={<SosAlertsPage />} />
-            <Route path="/environmental" element={<Navigate to="/sos-alerts" replace />} />
+            <Route path="/environmental" element={<EnvironmentalDataPage />} />
             <Route path="/area" element={<AreaDetailsPage />} />
             <Route path="/risk" element={<RoleBasedRoute allow={["admin", "gov_officer"]}><RiskAssessmentPage /></RoleBasedRoute>} />
             <Route path="/alerts" element={<RoleBasedRoute allow={["admin", "gov_officer", "field_officer"]}><AlertsPage /></RoleBasedRoute>} />

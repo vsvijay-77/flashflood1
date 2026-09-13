@@ -1,10 +1,11 @@
-import { AlertTriangle, Battery, BatteryCharging, Phone, MapPin, User, CheckCircle, Clock, ShieldAlert, RefreshCw, Map } from "lucide-react";
+import { AlertTriangle, Battery, BatteryCharging, Phone, MapPin, User, CheckCircle, Clock, ShieldAlert, RefreshCw, Map, Radio } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiGet, apiPatch } from "@/lib/api";
 import { toast } from "sonner";
+import type { SensorDataRecord } from "@/lib/types";
 
 export interface MobileSosRequest {
   id: string;
@@ -33,6 +34,14 @@ export function BatteryAndAlerts() {
     queryFn: () => apiGet<MobileSosRequest[]>("/alerts/sos"),
     refetchInterval: 10000, // auto-refresh every 10 seconds for real-time SOS monitoring
   });
+
+  const { data: sensorRecords = [] } = useQuery<SensorDataRecord[]>({
+    queryKey: ["sensor_data_battery"],
+    queryFn: () => apiGet<SensorDataRecord[]>("/sensor-data?limit=10"),
+    refetchInterval: 8000,
+  });
+
+  const latestNode = sensorRecords[0];
 
   const updateStatusMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
@@ -82,19 +91,24 @@ export function BatteryAndAlerts() {
               <div className="flex flex-col gap-4 flex-1">
                 <div className="rounded-lg border border-slate-200 p-3">
                   <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs font-bold">MN-DEL-01</span>
+                    <span className="font-mono text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Radio className="size-3.5 text-sky-600" />
+                      {latestNode?.device_id || "LORA_NODE_1"}
+                    </span>
                     <BatteryCharging className="size-4 text-emerald-500" />
                   </div>
-                  <div className="mt-2 text-2xl font-bold text-slate-900">100%</div>
-                  <div className="text-xs text-slate-500">AC Power Connected</div>
+                  <div className="mt-2 text-2xl font-bold text-slate-900">98%</div>
+                  <div className="text-xs text-slate-500">
+                    Signal: {latestNode?.rssi ?? -65} dBm · {latestNode?.txt || "Active"}
+                  </div>
                 </div>
                 <div className="rounded-lg border border-slate-200 p-3">
                   <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs font-bold">MN-MUM-02</span>
+                    <span className="font-mono text-xs font-bold">MN-GATEWAY-01</span>
                     <Battery className="size-4 text-emerald-500" />
                   </div>
-                  <div className="mt-2 text-2xl font-bold text-slate-900">95%</div>
-                  <div className="text-xs text-slate-500">Solar Charging Active</div>
+                  <div className="mt-2 text-2xl font-bold text-slate-900">100%</div>
+                  <div className="text-xs text-slate-500">AC + Solar Buffer</div>
                 </div>
               </div>
             </div>

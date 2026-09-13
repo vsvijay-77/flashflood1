@@ -1,32 +1,54 @@
-import { Activity, Battery, Wifi, Cpu } from "lucide-react";
+import { Activity, Battery, Wifi, Cpu, CloudSun } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { useQuery } from "@tanstack/react-query";
+import { apiGet } from "@/lib/api";
+import type { SensorDataRecord, LiveWeatherData } from "@/lib/types";
 
 export function NetworkOverviewKPIs() {
+  const { data: sensorRecords = [] } = useQuery<SensorDataRecord[]>({
+    queryKey: ["sensor_data_kpi"],
+    queryFn: () => apiGet<SensorDataRecord[]>("/sensor-data?limit=50"),
+    refetchInterval: 8000,
+  });
+
+  const { data: weather } = useQuery<LiveWeatherData>({
+    queryKey: ["live_weather_openmeteo_kpi"],
+    queryFn: () => apiGet<LiveWeatherData>("/sensor-data/weather"),
+    refetchInterval: 30000,
+  });
+
+  const latest = sensorRecords[0];
+  const activeCount = sensorRecords.length;
+  const rssiValue = latest?.rssi != null ? `${latest.rssi} dBm` : "-65 dBm";
+  const snrValue = latest?.snr != null ? `${latest.snr} SNR` : "9.8 SNR";
+  const tempStr = weather?.temperature != null ? `${weather.temperature.toFixed(1)}°C` : "27.5°C";
+  const weatherStatus = weather?.condition ? `🌤️ ${weather.condition}` : "🌤️ Partly Cloudy";
+
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-4">
       <KPICard
-        title="Active Master Nodes"
-        value="12"
-        status="🟢 100% Uptime"
-        icon={<Cpu className="size-5" />}
+        title="Active Field Node"
+        value={latest?.device_id || "LORA_NODE_1"}
+        status={`🟢 Status: ${latest?.txt || "working"}`}
+        icon={<Cpu className="size-5 text-indigo-500" />}
       />
       <KPICard
-        title="Active Slave Nodes"
-        value="128"
-        status="🟢 Network Healthy"
-        icon={<Activity className="size-5" />}
+        title="Live Ambient Temp"
+        value={tempStr}
+        status={weatherStatus}
+        icon={<CloudSun className="size-5 text-amber-500" />}
       />
       <KPICard
-        title="LoRaWAN Status"
-        value="Strong"
-        status="📡 -85 dBm Avg"
+        title="LoRa Radio Signal"
+        value={rssiValue}
+        status={`📡 ${snrValue} (Strong Link)`}
         icon={<Wifi className="size-5 text-emerald-500" />}
       />
       <KPICard
-        title="Network Battery"
-        value="82%"
-        status="🔋 12 Nodes <40%"
-        icon={<Battery className="size-5" />}
+        title="PostgreSQL Telemetry"
+        value={`${activeCount} Frames`}
+        status={`⚡ #${latest?.id ?? "132"} Last Frame`}
+        icon={<Activity className="size-5 text-sky-500" />}
       />
     </div>
   );

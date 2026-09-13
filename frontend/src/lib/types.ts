@@ -228,3 +228,40 @@ export const SENSOR_LABELS: Record<string, string> = {
   air_quality: "Air Quality",
   tilt: "Tilt / Landslide",
 };
+
+export interface SensorDataRecord {
+  id: number;
+  device_id: string;
+  soil_moisture: number;
+  water_level: number;
+  rainfall: number;
+  tilt: number;
+  imu_x: number;
+  imu_y: number;
+  imu_z: number;
+  rssi: number;
+  snr: number;
+  txt?: string | null;
+  created_at?: string | null;
+}
+
+export interface LiveWeatherData {
+  temperature: number;
+  apparent_temperature?: number;
+  humidity: number;
+  precipitation: number;
+  rain?: number;
+  wind_speed: number;
+  wind_direction?: number;
+  pressure?: number;
+  weather_code?: number;
+  condition: string;
+  time?: string;
+  source: string;
+  hourly?: {
+    time: string;
+    temperature: number | null;
+    precipitation: number | null;
+    wind_speed: number | null;
+  }[];
+}

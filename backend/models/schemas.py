@@ -284,3 +284,20 @@ class ReportCreate(BaseModel):
     report_type: str
     period: str
     zone_name: str = ""
+
+
+# ---------- PostgreSQL sensor_data telemetry ----------
+class SensorDataRecord(BaseModel):
+    id: int
+    device_id: str
+    soil_moisture: float = 0.0
+    water_level: float = 0.0
+    rainfall: float = 0.0
+    tilt: float = 0.0
+    imu_x: float = 0.0
+    imu_y: float = 0.0
+    imu_z: float = 0.0
+    rssi: float = 0.0
+    snr: float = 0.0
+    txt: Optional[str] = None
+    created_at: Optional[datetime] = None

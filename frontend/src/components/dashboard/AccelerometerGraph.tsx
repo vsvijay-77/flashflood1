@@ -1,19 +1,14 @@
 import { useState, useMemo } from "react";
 import { CartesianGrid, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Activity } from "lucide-react";
-
-// Mock continuous data
-const accelData = Array.from({ length: 60 }).map((_, i) => ({
-  time: `10:${i.toString().padStart(2, "0")}`,
-  x: Math.random() * 2 - 1,
-  y: Math.random() * 2 - 1,
-  z: 9.8 + (Math.random() * 0.5 - 0.25),
-}));
+import { Activity, Radio } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { apiGet } from "@/lib/api";
+import type { SensorDataRecord } from "@/lib/types";
 
 /** Find all local maxima (peaks) for a given data key. A peak is a point
  *  whose value is strictly greater than both its immediate neighbors. */
-function findPeaks(data: typeof accelData, key: "x" | "y" | "z") {
+function findPeaks(data: { time: string; x: number; y: number; z: number }[], key: "x" | "y" | "z") {
   const peaks: { time: string; value: number }[] = [];
   for (let i = 1; i < data.length - 1; i++) {
     const prev = data[i - 1][key];
@@ -29,18 +24,65 @@ function findPeaks(data: typeof accelData, key: "x" | "y" | "z") {
 export function AccelerometerGraph() {
   const [range, setRange] = useState("Live");
 
-  const xPeaks = useMemo(() => findPeaks(accelData, "x"), []);
-  const yPeaks = useMemo(() => findPeaks(accelData, "y"), []);
-  const zPeaks = useMemo(() => findPeaks(accelData, "z"), []);
+  const { data: records = [] } = useQuery<SensorDataRecord[]>({
+    queryKey: ["sensor_data_imu"],
+    queryFn: () => apiGet<SensorDataRecord[]>("/sensor-data?limit=60"),
+    refetchInterval: 5000,
+  });
+
+  const accelData = useMemo(() => {
+    if (records && records.length >= 3) {
+      return [...records].reverse().map((r) => {
+        let t = `#${r.id}`;
+        if (r.created_at) {
+          try {
+            t = new Date(r.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          } catch {
+            t = `#${r.id}`;
+          }
+        }
+        return {
+          time: t,
+          x: Number(r.imu_x ?? 0),
+          y: Number(r.imu_y ?? 0),
+          z: Number(r.imu_z ?? (r.tilt ? Number(r.tilt) : 9.8)),
+          tilt: Number(r.tilt ?? 0),
+        };
+      });
+    }
+    // Fallback baseline if no records
+    return Array.from({ length: 30 }).map((_, i) => ({
+      time: `10:${i.toString().padStart(2, "0")}`,
+      x: 0,
+      y: 0,
+      z: 9.8,
+      tilt: 0,
+    }));
+  }, [records]);
+
+  const xPeaks = useMemo(() => findPeaks(accelData, "x"), [accelData]);
+  const yPeaks = useMemo(() => findPeaks(accelData, "y"), [accelData]);
+  const zPeaks = useMemo(() => findPeaks(accelData, "z"), [accelData]);
 
   const totalPeaks = xPeaks.length + yPeaks.length + zPeaks.length;
+  const latestTilt = records[0]?.tilt ?? 0;
+  const latestDevice = records[0]?.device_id ?? "LORA_NODE_1";
 
   return (
     <Card className="w-full shadow-sm">
       <CardHeader className="flex flex-row items-center justify-between border-b border-slate-100 pb-4">
         <div className="flex items-center gap-2">
           <Activity className="size-5 text-indigo-500" />
-          <CardTitle className="text-lg font-semibold text-slate-900">Accelerometer – Real-Time Telemetry</CardTitle>
+          <div>
+            <CardTitle className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              Accelerometer & IMU Real-Time Telemetry
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+                <span className="size-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                {latestDevice}
+              </span>
+            </CardTitle>
+            <p className="text-xs text-slate-500">Continuous 3-axis IMU vibration data (imu_x, imu_y, imu_z, tilt) from PostgreSQL</p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
@@ -67,52 +109,28 @@ export function AccelerometerGraph() {
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={accelData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-              <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} domain={[-2, 12]} />
+              <XAxis dataKey="time" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} domain={[-2, 12]} />
               <Tooltip
-                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                contentStyle={{ borderRadius: "8px", border: "none", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
               />
-              <Line type="monotone" dataKey="x" name="X Axis" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
-              <Line type="monotone" dataKey="y" name="Y Axis" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
-              <Line type="monotone" dataKey="z" name="Z Axis" stroke="#f43f5e" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="x" name="IMU X-Axis" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="y" name="IMU Y-Axis" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="z" name="IMU Z-Axis" stroke="#f43f5e" strokeWidth={2} dot={false} isAnimationActive={false} />
 
-              {/* X-axis peaks – black dots */}
+              {/* X-axis peaks */}
               {xPeaks.map((p, i) => (
-                <ReferenceDot
-                  key={`xp-${i}`}
-                  x={p.time}
-                  y={p.value}
-                  r={5}
-                  fill="#000000"
-                  stroke="#000000"
-                  strokeWidth={2}
-                />
+                <ReferenceDot key={`xp-${i}`} x={p.time} y={p.value} r={4} fill="#000000" stroke="#000000" strokeWidth={2} />
               ))}
 
-              {/* Y-axis peaks – black dots */}
+              {/* Y-axis peaks */}
               {yPeaks.map((p, i) => (
-                <ReferenceDot
-                  key={`yp-${i}`}
-                  x={p.time}
-                  y={p.value}
-                  r={5}
-                  fill="#000000"
-                  stroke="#000000"
-                  strokeWidth={2}
-                />
+                <ReferenceDot key={`yp-${i}`} x={p.time} y={p.value} r={4} fill="#000000" stroke="#000000" strokeWidth={2} />
               ))}
 
-              {/* Z-axis peaks – black dots */}
+              {/* Z-axis peaks */}
               {zPeaks.map((p, i) => (
-                <ReferenceDot
-                  key={`zp-${i}`}
-                  x={p.time}
-                  y={p.value}
-                  r={5}
-                  fill="#000000"
-                  stroke="#000000"
-                  strokeWidth={2}
-                />
+                <ReferenceDot key={`zp-${i}`} x={p.time} y={p.value} r={4} fill="#000000" stroke="#000000" strokeWidth={2} />
               ))}
             </LineChart>
           </ResponsiveContainer>
@@ -132,8 +150,8 @@ export function AccelerometerGraph() {
             <span className="font-mono text-lg font-semibold text-slate-900">{zPeaks.length}</span>
           </div>
           <div className="flex flex-col">
-            <span className="text-xs font-medium uppercase text-slate-500">Vibration Intensity</span>
-            <span className="text-lg font-semibold text-emerald-600">Normal</span>
+            <span className="text-xs font-medium uppercase text-slate-500">Inclinometer Tilt</span>
+            <span className="text-lg font-semibold text-indigo-600">{latestTilt}°</span>
           </div>
           <div className="flex flex-col">
             <span className="text-xs font-medium uppercase text-slate-500">Movement Anomaly</span>

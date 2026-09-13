@@ -198,8 +198,10 @@ def compute_building_risk(
     min_dist_m = float("inf")
     if river_coords and len(river_coords) > 0:
         for rlat, rlon in river_coords:
-            dlat = (centroid_lat - rlat) * 111132.0
-            dlon = (centroid_lon - rlon) * 111132.0 * math.cos(math.radians(centroid_lat))
+            if not isinstance(rlat, (int, float)) or not isinstance(rlon, (int, float)):
+                continue
+            dlat = (centroid_lat - float(rlat)) * 111132.0
+            dlon = (centroid_lon - float(rlon)) * 111132.0 * math.cos(math.radians(centroid_lat))
             dist = math.hypot(dlat, dlon)
             if dist < min_dist_m:
                 min_dist_m = dist
@@ -300,8 +302,27 @@ class MSBuildingService:
             _, geo = await river_svc.get_river_network(max_lat, min_lat, max_lon, min_lon)
             pts: List[Tuple[float, float]] = []
             for f in geo.get("features", []):
-                for c in f.get("geometry", {}).get("coordinates", []):
-                    pts.append((c[1], c[0]))
+                geom = f.get("geometry") or {}
+                g_type = geom.get("type")
+                coords = geom.get("coordinates") or []
+                if g_type == "LineString":
+                    for pt in coords:
+                        if isinstance(pt, (list, tuple)) and len(pt) >= 2 and isinstance(pt[0], (int, float)) and isinstance(pt[1], (int, float)):
+                            pts.append((float(pt[1]), float(pt[0])))
+                elif g_type in ("MultiLineString", "Polygon"):
+                    for part in coords:
+                        if isinstance(part, list):
+                            for pt in part:
+                                if isinstance(pt, (list, tuple)) and len(pt) >= 2 and isinstance(pt[0], (int, float)) and isinstance(pt[1], (int, float)):
+                                    pts.append((float(pt[1]), float(pt[0])))
+                elif g_type == "MultiPolygon":
+                    for poly in coords:
+                        if isinstance(poly, list):
+                            for part in poly:
+                                if isinstance(part, list):
+                                    for pt in part:
+                                        if isinstance(pt, (list, tuple)) and len(pt) >= 2 and isinstance(pt[0], (int, float)) and isinstance(pt[1], (int, float)):
+                                            pts.append((float(pt[1]), float(pt[0])))
             return pts
         except Exception as exc:
             logger.debug(f"Could not load river network: {exc}")

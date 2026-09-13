@@ -280,3 +280,23 @@ describe("WaterPhysicsSimulation Engine", () => {
     }
   });
 });
+
+describe("water volume regression", () => {
+  it("keeps explicit dry sources dry and includes shallow water in volume", () => {
+    const sim = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 10 }, [0, 0], undefined,
+      new Uint8Array([1, 0]), [0, 0.01]);
+    expect(Array.from(sim.state.depth)).toEqual([0, Math.fround(0.01)]);
+    expect(sim.state.totalVolumeM3).toBe(1);
+    expect(sim.state.floodedAreaHectares).toBe(0);
+  });
+  it("conserves water when one wet cell feeds four dry neighbours", () => {
+    const sim = new WaterPhysicsSimulation({ cols: 3, rows: 3, dx: 1 }, new Float32Array(9),
+      undefined, undefined, [0, 0, 0, 0, 2, 0, 0, 0, 0]);
+    for (let i = 0; i < 60; i++) sim.advance(1 / 30, 1, 0);
+    expect(Array.from(sim.state.depth).reduce((a, b) => a + b, 0)).toBeCloseTo(2, 5);
+    expect(Array.from(sim.state.depth).every(d => Number.isFinite(d) && d >= 0)).toBe(true);
+    sim.reset();
+    expect(sim.state.depth[4]).toBe(2);
+    expect(sim.state.edges.every(e => e.discharge === 0)).toBe(true);
+  });
+});

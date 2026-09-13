@@ -52,6 +52,9 @@ export interface WaterPhysicsState {
 }
 
 export class WaterPhysicsSimulation {
+  private totalOutflow: Float32Array;
+  private countX: Uint8Array;
+  private countY: Uint8Array;
   public config: Required<SimulationConfig>;
   public state: WaterPhysicsState;
 
@@ -73,6 +76,9 @@ export class WaterPhysicsSimulation {
     };
 
     const totalCells = this.config.cols * this.config.rows;
+    this.totalOutflow = new Float32Array(totalCells);
+    this.countX = new Uint8Array(totalCells);
+    this.countY = new Uint8Array(totalCells);
     const bed = new Float32Array(totalCells);
     const depth = new Float32Array(totalCells);
     const initialDepth = new Float32Array(totalCells);
@@ -89,7 +95,7 @@ export class WaterPhysicsSimulation {
       inside[i] = insideMask ? (insideMask[i] ? 1 : 0) : 1;
       const isSrc = sourceMask ? (sourceMask[i] ? 1 : 0) : 0;
       isSource[i] = isSrc;
-      const d = isSrc && inside[i] ? (initialDepths ? (initialDepths[i] || 1.8) : 1.8) : 0.0;
+      const d = inside[i] ? Math.max(0, initialDepths?.[i] ?? (isSrc ? 1.8 : 0)) : 0;
       depth[i] = d;
       initialDepth[i] = d;
       initialSourceDepth[i] = d;
@@ -172,7 +178,7 @@ export class WaterPhysicsSimulation {
   public injectSourceRise(sourceRiseM: number, dt: number): void {
     const { totalCells, depth, isSource, initialSourceDepth, dx, insideMask } = this.state;
     const cellArea = dx * dx;
-    const effectiveRise = Math.max(0.5, sourceRiseM);
+    const effectiveRise = Math.max(0, sourceRiseM);
 
     for (let i = 0; i < totalCells; i++) {
       if (insideMask[i] && isSource[i]) {
@@ -260,7 +266,8 @@ export class WaterPhysicsSimulation {
 
     // Accumulate net depth changes for all cells
     const totalCells = this.state.totalCells;
-    const totalOutflow = new Float32Array(totalCells);
+    const totalOutflow = this.totalOutflow;
+    totalOutflow.fill(0);
 
     for (const edge of edges) {
       if (edge.discharge > 0) {
@@ -287,6 +294,7 @@ export class WaterPhysicsSimulation {
         }
       }
 
+      edge.discharge = flow / dt;
       delta[edge.from] -= flow / dx;
       delta[edge.to] += flow / dx;
     }
@@ -331,8 +339,8 @@ export class WaterPhysicsSimulation {
 
     velocityX.fill(0);
     velocityY.fill(0);
-    const countX = new Uint8Array(this.state.totalCells);
-    const countY = new Uint8Array(this.state.totalCells);
+    const countX = this.countX, countY = this.countY;
+    countX.fill(0); countY.fill(0);
 
     for (const edge of edges) {
       const a = edge.from;
@@ -370,8 +378,8 @@ export class WaterPhysicsSimulation {
     let totalVol = 0;
 
     for (let i = 0; i < totalCells; i++) {
-      if (insideMask[i] && depth[i] > 0.05) {
-        floodedCount++;
+      if (insideMask[i]) {
+        if (depth[i] > 0.05) floodedCount++;
         totalVol += depth[i] * cellAreaM2;
         if (depth[i] > maxD) maxD = depth[i];
       }

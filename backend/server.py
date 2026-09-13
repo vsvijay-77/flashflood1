@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing import List
 import uuid
 from datetime import datetime
+import asyncio
 
 
 ROOT_DIR = Path(__file__).parent
@@ -21,6 +22,14 @@ from lib.db import db
 # Startup runs before the yield, shutdown after it. Add your own setup/teardown here.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    async def _seed_chat_knowledge():
+        try:
+            from services.qdrant_service import knowledge_store
+            await knowledge_store.seed_defaults()
+        except Exception as exc:
+            logger.warning("Qdrant knowledge seed skipped (non-fatal): %s", exc)
+
+    asyncio.create_task(_seed_chat_knowledge())
     # Pre-warm GEE tile cache in a background daemon thread on startup.
     # Daemon thread ensures Uvicorn reload / shutdown is never blocked.
     def _warm_gee_target():

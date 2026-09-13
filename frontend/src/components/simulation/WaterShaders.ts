@@ -9,7 +9,7 @@
  * - GGX / Blinn-Phong specular sun highlights
  * - Depth-based Beer-Lambert absorption
  * - Screen-space refraction using live Cesium canvas texture
- * - Terrain/bank reflections using heightfield ray marching
+ * - Procedural sky reflection and sampled-terrain depth occlusion
  * - Differential-area caustic brightness on shallow beds
  * - Shoreline foam at water margins
  * - Froude-number-based whitewater for fast shallow rapids
@@ -65,7 +65,7 @@ export const WaterVertexShader = /* glsl */ `
   void main() {
     vUv = uv;
     vDepth = aDepth;
-    vVelocity = aVelocity;
+    vVelocity = vec2(aVelocity.x, -aVelocity.y);
     vBedElevation = aBedElevation;
     vInside = aInside;
     vIsWaterBody = aIsWaterBody;
@@ -75,7 +75,7 @@ export const WaterVertexShader = /* glsl */ `
     // Only apply wave motion where there is appreciable water
     if (aDepth > 0.005) {
       vec2 p = position.xz;
-      float waveScale = uWaveHeight * clamp(aDepth / 1.5, 0.15, 1.0);
+      float waveScale = uWaveHeight * smoothstep(0.02, 1.5, aDepth) * 0.35;
 
       // Layer 1: Long primary swell
       vec3 w1 = gerstnerWave(p, vec2(0.8, 0.6), 0.18 * waveScale, 18.0, 1.0);
@@ -143,42 +143,17 @@ export const WaterFragmentShader = /* glsl */ `
     return direction * cos(phase) * amplitude * filtered;
   }
 
-  // Differential-area caustic pattern on shallow beds (gentle slow pace)
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x),
+      mix(hash(i + vec2(0, 1)), hash(i + 1.0), f.x), f.y);
+  }
   float computeCaustics(vec2 p, float depth) {
-    if (depth > 2.5 || depth <= 0.02) return 0.0;
-    vec2 p1 = p * 1.5 + vec2(uTime * 0.12, uTime * 0.09);
-    vec2 p2 = p * 2.2 - vec2(uTime * 0.10, uTime * 0.14);
-    float c1 = sin(p1.x + sin(p1.y * 1.4));
-    float c2 = cos(p2.y + cos(p2.x * 1.3));
-    float pattern = pow(max(0.0, c1 + c2), 2.8) * 0.4;
-    return pattern * (1.0 - smoothstep(0.05, 2.5, depth));
-  }
-
-  // Heightfield ray marching against local terrain for bank reflections
-  vec3 marchTerrainReflection(vec3 origin, vec3 rayDir) {
-    if (rayDir.y <= 0.01) return uSkyColor;
-    float t = 0.5;
-    for (int i = 0; i < 5; i++) {
-      vec3 pos = origin + rayDir * t;
-      vec2 uvCoord = fract(pos.xz * 0.005);
-      float h = texture2D(uTerrainHeight, uvCoord).r * 50.0;
-      if (pos.y < h) {
-        // Hit terrain bank: blend with earthy/foliage bank color
-        return vec3(0.18, 0.24, 0.16);
-      }
-      t += 2.0;
-    }
-    return uSkyColor;
-  }
-
-  // ACES filmic tone mapping curve
-  vec3 ACESFilm(vec3 x) {
-    float a = 2.51;
-    float b = 0.03;
-    float c = 2.43;
-    float d = 0.59;
-    float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    vec2 q = p * 0.6 + vec2(uTime * 0.08, -uTime * 0.06);
+    float pattern = noise(q + noise(q * 0.7)) * noise(q * 1.8 + 9.0);
+    float filtered = exp(-length(fwidth(q)));
+    return smoothstep(0.35, 0.7, pattern) * 0.16 * filtered * exp(-depth);
   }
 
   void main() {
@@ -193,6 +168,7 @@ export const WaterFragmentShader = /* glsl */ `
     // Current-advected surface coordinates: ripples travel along simulated hydrodynamic velocity
     vec2 flowOffset = vVelocity * uTime * 0.35;
     vec2 p = vWorldPosition.xz - flowOffset;
+    p += vec2(noise(p * 0.045), noise(p * 0.039 + 17.0)) * 5.0;
 
     // Multi-frequency ripple slope with fwidth derivative anti-shimmering
     vec2 slope = vec2(0.0);
@@ -203,12 +179,14 @@ export const WaterFragmentShader = /* glsl */ `
     slope += ripple(p, vec2(0.6, -0.8), 2.0, 0.03 * scale);
 
     // Dynamic perturbed surface normal
-    vec3 normal = normalize(vec3(-slope.x, 1.0, -slope.y));
-    vec3 viewDir = normalize(vViewPosition);
+    vec3 geometric = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
+    if (geometric.y < 0.0) geometric = -geometric;
+    vec3 normal = normalize(geometric + vec3(-slope.x, 0.0, -slope.y));
+    vec3 viewDir = normalize(cameraPosition - vWorldPosition);
 
-    // Subtle Fresnel reflectance (greatly reduced to eliminate bright shiny white glaze)
+    // Air/water Fresnel reflectance, evaluated entirely in world coordinates.
     float cosTheta = clamp(dot(normal, viewDir), 0.0, 1.0);
-    float fresnel = 0.01 + 0.30 * pow(1.0 - cosTheta, 5.0);
+    float fresnel = 0.02037 + 0.97963 * pow(1.0 - cosTheta, 5.0);
 
     // Tight pinpoint specular sunlight highlight with very low intensity (eliminates wide shiny glare)
     vec3 sunDir = normalize(uSunDirection);
@@ -219,7 +197,7 @@ export const WaterFragmentShader = /* glsl */ `
 
     // Screen-space refraction: samples live Cesium canvas with normal distortion
     vec2 screenUv = gl_FragCoord.xy / max(uResolution, vec2(1.0, 1.0));
-    vec2 refractOffset = normal.xz * (0.015 / (1.0 + vDepth * 0.5));
+    vec2 refractOffset = (mat3(viewMatrix) * normal).xy * min(vDepth, 2.0) * 6.0 / uResolution;
     vec2 refractUv = clamp(screenUv + refractOffset, vec2(0.001), vec2(0.999));
 
     vec3 refractedGround;
@@ -238,15 +216,16 @@ export const WaterFragmentShader = /* glsl */ `
     float caustics = computeCaustics(vWorldPosition.xz, vDepth);
     transmitted += vec3(caustics * 0.18);
 
-    // Reflection: heightfield ray marched terrain or deep atmospheric sky
+    // Horizon-to-zenith sky reflection.
     vec3 reflDir = reflect(-viewDir, normal);
-    vec3 reflectedColor = marchTerrainReflection(vWorldPosition, reflDir);
+    vec3 reflectedColor = mix(vec3(0.56, 0.69, 0.76), uSkyColor, sqrt(clamp(reflDir.y, 0.0, 1.0)));
 
-    // ─── 🌊 VIBRANT BLUE WATER (RICH AZURE BODY WITH MINIMAL SHINE) ───────
+    // Depth-dependent absorption and in-scattering.
     float depthFactor = clamp(vDepth / 2.0, 0.0, 1.0);
     vec3 deepOceanBlue = mix(uWaterColorShallow, uWaterColorDeep, depthFactor);
-    // Subtle Fresnel blend (fresnel * 0.10) keeps water deep and richly colored without shiny film
-    vec3 blueWater = mix(mix(transmitted, deepOceanBlue, 0.90), reflectedColor, fresnel * 0.10) + specHighlight;
+    // Shallow water reveals the bed; deep water absorbs transmitted light.
+    vec3 underwater = transmitted + deepOceanBlue * (1.0 - absorption);
+    vec3 blueWater = mix(underwater, reflectedColor, fresnel) + specHighlight;
 
     // ─── ❄️ SUBTLE, MINIMAL WHITE CRESTS (LESS SPREAD & LESS SHINE) ────────
     vec3 whiteWater = mix(blueWater, vec3(0.92, 0.95, 0.98), 0.45);
@@ -257,7 +236,7 @@ export const WaterFragmentShader = /* glsl */ `
     // Froude-number-based whitewater rapids
     float speed = length(vVelocity);
     float froude = speed / sqrt(9.81 * max(vDepth, 0.04));
-    float whitewater = smoothstep(1.0, 1.6, froude) * 0.35;
+    float whitewater = smoothstep(1.0, 1.6, froude) * smoothstep(0.6, 0.85, noise(p * 0.8)) * 0.35;
 
     // Wave crests: restricted strictly to the sharpest wave crest tips (calm, slow movement)
     vec2 rc = p * 0.35;
@@ -266,7 +245,7 @@ export const WaterFragmentShader = /* glsl */ `
     float crestValue = vWaveDisplacement * 5.0 + wavePattern * 0.25 + slopeSteepness;
 
     // High threshold (0.45 to 0.85) ensures minimal white coverage
-    float crestFoam = smoothstep(0.45, 0.85, crestValue) * 0.22;
+    float crestFoam = smoothstep(0.65, 0.95, crestValue) * smoothstep(0.65, 0.9, noise(p * 0.5)) * 0.15;
 
     // Final white ratio capped at a low value (max 0.25) so the shiny white is minimal
     float whiteRatio = clamp(max(crestFoam, max(shoreFoam, whitewater)), 0.0, 0.25);
@@ -275,12 +254,14 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 blendedWater = mix(blueWater, whiteWater, whiteRatio);
 
     // ACES Filmic Tone Mapping
-    vec3 finalColor = ACESFilm(blendedWater);
+    vec3 finalColor = blendedWater;
 
     // Opacity: high clarity with deep presence
-    float alpha = clamp(0.72 + whiteRatio * 0.15, 0.70, 0.92);
+    float alpha = smoothstep(0.02, 0.12, vDepth);
 
     gl_FragColor = vec4(finalColor, alpha);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
   }
 `;
 
@@ -301,8 +282,8 @@ export function createWaterShaderMaterial(
       uTerrainHeight: { value: terrainHeightTexture },
       uSunDirection: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
       uSunColor: { value: new THREE.Color(0.85, 0.88, 0.90) },
-      uWaterColorDeep: { value: new THREE.Color(0.01, 0.22, 0.62) },
-      uWaterColorShallow: { value: new THREE.Color(0.05, 0.52, 0.88) },
+      uWaterColorDeep: { value: new THREE.Color(0.014, 0.135, 0.155) },
+      uWaterColorShallow: { value: new THREE.Color(0.06, 0.24, 0.22) },
       uSkyColor: { value: new THREE.Color(0.12, 0.28, 0.48) },
       uHasSceneColor: { value: sceneColorTexture ? 1.0 : 0.0 },
     },

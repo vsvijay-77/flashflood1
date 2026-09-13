@@ -96,3 +96,22 @@ def test_weather_failure_has_no_fake_forecast(api, monkeypatch):
     response = api.post("/digital-twin/surface-forecast", json=payload())
     assert response.status_code == 503
     assert "frames" not in response.json()
+
+
+def test_causal_sequence_matches_prefixes_and_cannot_see_future():
+    import torch
+    from services.risk_model import GNNTransformerFloodModel
+    torch.manual_seed(11)
+    model = GNNTransformerFloodModel().eval()
+    x = torch.randn(4, 9, 8)
+    adjacency = torch.eye(9)
+    with torch.inference_mode():
+        sequence, severity = model(x, adjacency, return_sequence=True)
+        for t in range(4):
+            prefix, _ = model(x[:t + 1], adjacency)
+            assert torch.allclose(sequence[t], prefix, atol=1e-6)
+        changed = x.clone()
+        changed[2:] += 100
+        other, _ = model(changed, adjacency, return_sequence=True)
+    assert severity.shape == (4, 9, 4)
+    assert torch.allclose(sequence[:2], other[:2], atol=1e-6)

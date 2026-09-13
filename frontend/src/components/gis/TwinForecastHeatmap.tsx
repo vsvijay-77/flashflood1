@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiPost, ApiError } from "@/lib/api";
 
 declare const Cesium: any;
 type Frame = { time: string; precipitation: number; temperature_2m: number; relative_humidity_2m: number; wind_speed_10m: number; scores: number[] };
 type Forecast = { mode: string; source: string; fetched_at: string; frames: Frame[]; size: number };
-type Props = { viewer: any; polygon: [number, number][] };
+type Props = {
+  viewer: any;
+  polygon: [number, number][];
+  selectedHour?: number;
+  onSelectedHourChange?: (hour: number) => void;
+};
 
 // Rows run south to north; the image runs north to south.
 export function surfaceImage(polygon: [number, number][], bounds: number[], scores: number[], size: number) {
@@ -37,7 +42,7 @@ export function surfaceImage(polygon: [number, number][], bounds: number[], scor
   return canvas.toDataURL("image/png");
 }
 
-export default function TwinForecastHeatmap({ viewer, polygon }: Props) {
+export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onSelectedHourChange }: Props) {
   const areaKey = JSON.stringify(polygon);
   const area = useMemo<[number, number][]>(() => JSON.parse(areaKey), [areaKey]);
   const bounds = useMemo(() => [Math.min(...area.map(p => p[0])), Math.max(...area.map(p => p[0])),
@@ -45,9 +50,17 @@ export default function TwinForecastHeatmap({ viewer, polygon }: Props) {
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [hour, setHour] = useState(0);
+  const [localHour, setLocalHour] = useState(0);
+  const hour = selectedHour ?? localHour;
+  const setHour = (next: number) => {
+    setLocalHour(next);
+    onSelectedHourChange?.(next);
+  };
   const [visible, setVisible] = useState(true);
   const [opacity, setOpacity] = useState(0.6);
+  const layerRef = useRef<any>(null);
+  const opacityRef = useRef(opacity);
+  opacityRef.current = opacity;
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     setForecast(null); setError(""); setHour(0);
@@ -92,14 +105,23 @@ export default function TwinForecastHeatmap({ viewer, polygon }: Props) {
     }).then((provider: any) => {
       if (disposed || viewer.isDestroyed()) return;
       layer = viewer.imageryLayers.addImageryProvider(provider);
-      layer.alpha = opacity;
+      layerRef.current = layer;
+      layer.alpha = opacityRef.current;
       viewer.scene.requestRender();
     }).catch(() => { if (!disposed) setError("Unable to render the surface heatmap."); });
     return () => {
       disposed = true;
+      if (layerRef.current === layer) layerRef.current = null;
       if (layer && !viewer.isDestroyed()) { viewer.imageryLayers.remove(layer, true); viewer.scene.requestRender(); }
     };
-  }, [viewer, forecast, hour, visible, opacity, area, bounds]);
+  }, [viewer, forecast, hour, visible, area, bounds]);
+
+  useEffect(() => {
+    if (layerRef.current && viewer && !viewer.isDestroyed()) {
+      layerRef.current.alpha = opacity;
+      viewer.scene.requestRender();
+    }
+  }, [opacity, viewer]);
 
   const frame = forecast?.frames[hour];
   return <section className="absolute bottom-4 left-40 z-30 w-72 max-w-[calc(100%-11rem)] max-h-[calc(100%-5rem)] overflow-y-auto rounded-xl border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-100 shadow-xl" aria-label="Weather forecast surface heatmap" onKeyDown={e => e.stopPropagation()} onKeyUp={e => e.stopPropagation()}>

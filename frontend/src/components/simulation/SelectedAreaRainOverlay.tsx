@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
 
 interface SelectedAreaRainOverlayProps {
@@ -35,6 +35,9 @@ export default function SelectedAreaRainOverlay({
   windSpeedKmh = 20,
   className = "",
 }: SelectedAreaRainOverlayProps) {
+  const polygonKey = JSON.stringify(polygonCoords);
+  const stablePolygon = useMemo<[number, number][] | null>(() => JSON.parse(polygonKey), [polygonKey]);
+  polygonCoords = stablePolygon;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
   const dropsRef = useRef<Drop[]>([]);
@@ -42,7 +45,7 @@ export default function SelectedAreaRainOverlay({
 
   // Initialize drops once with normalized positions
   useEffect(() => {
-    const totalDrops = Math.max(160, Math.min(500, Math.round(intensityMm * 4)));
+    const totalDrops = Math.max(0, Math.min(300, Math.round(intensityMm * 3)));
     const drops: Drop[] = [];
     for (let i = 0; i < totalDrops; i++) {
       drops.push({
@@ -75,10 +78,16 @@ export default function SelectedAreaRainOverlay({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    let w = 0, h = 0;
+    let projected: L.Point[] = [];
+    let projectionDirty = true;
+    const markProjectionDirty = () => { projectionDirty = true; };
     // Synchronize canvas resolution with device pixel ratio
     const updateCanvasSize = () => {
       const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = 1;
+      w = rect.width; h = rect.height;
+      projectionDirty = true;
       if (rect.width > 0 && rect.height > 0) {
         canvas.width = rect.width * dpr;
         canvas.height = rect.height * dpr;
@@ -91,35 +100,25 @@ export default function SelectedAreaRainOverlay({
     // Wind drift offset in pixels
     const windX = (windSpeedKmh / 20.0) * 3.5;
 
-    const render = () => {
+    let lastFrame = performance.now();
+    const render = (now: number) => {
       animFrameIdRef.current = requestAnimationFrame(render);
-
-      const rect = canvas.getBoundingClientRect();
-      const w = rect.width;
-      const h = rect.height;
+      if (document.hidden) { lastFrame = now; return; }
+      const elapsed = now - lastFrame;
+      if (elapsed < 1000 / 60 - 1) return;
+      const step = Math.min(elapsed, 50) / (1000 / 60);
+      lastFrame = now;
       if (w <= 0 || h <= 0) return;
-
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const targetW = Math.round(w * dpr);
-      const targetH = Math.round(h * dpr);
-      if (canvas.width !== targetW || canvas.height !== targetH) {
-        canvas.width = targetW;
-        canvas.height = targetH;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      }
 
       ctx.clearRect(0, 0, w, h);
 
-      // Convert geographical coordinates [lat, lng] to container screen points
-      const pts: L.Point[] = [];
-      try {
-        for (let i = 0; i < polygonCoords.length; i++) {
-          const [lat, lng] = polygonCoords[i];
-          pts.push(map.latLngToContainerPoint(L.latLng(lat, lng)));
-        }
-      } catch (e) {
-        return;
+      if (projectionDirty) {
+        try {
+          projected = polygonCoords.map(([lat, lng]) => map.latLngToContainerPoint(L.latLng(lat, lng)));
+          projectionDirty = false;
+        } catch { return; }
       }
+      const pts = projected;
 
       if (pts.length < 3) return;
 
@@ -164,22 +163,14 @@ export default function SelectedAreaRainOverlay({
       ctx.closePath();
       ctx.clip();
 
-      // ─── 2. Atmospheric stormy precipitation wash over enclosed area ─────────
-      ctx.fillStyle = "rgba(14, 116, 144, 0.22)";
-      ctx.fill();
-
-      // Glowing stormy area boundary edge
-      ctx.lineWidth = 2.0;
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.6)";
-      ctx.stroke();
-
       // ─── 3. Falling rain streaks (Normalized coords locked to polygon) ────────
       const drops = dropsRef.current;
+      ctx.beginPath();
       for (let i = 0; i < drops.length; i++) {
         const d = drops[i];
 
         // Increment vertical progress
-        d.v += d.speed;
+        d.v += d.speed * step;
         if (d.v >= 1.0) {
           // Spawn impact ripple at current surface position
           if (ripplesRef.current.length < 40 && Math.random() < 0.4) {
@@ -203,26 +194,20 @@ export default function SelectedAreaRainOverlay({
         const endX = dropX + windX;
         const endY = dropY + d.length;
 
-        const grad = ctx.createLinearGradient(dropX, dropY, endX, endY);
-        grad.addColorStop(0, "rgba(255, 255, 255, 0.1)");
-        grad.addColorStop(0.5, `rgba(224, 242, 254, ${d.alpha * 0.85})`);
-        grad.addColorStop(1, `rgba(56, 189, 248, ${d.alpha})`);
-
-        ctx.beginPath();
         ctx.moveTo(dropX, dropY);
         ctx.lineTo(endX, endY);
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = d.thickness;
-        ctx.lineCap = "round";
-        ctx.stroke();
       }
+      ctx.strokeStyle = "rgba(224, 242, 254, 0.65)";
+      ctx.lineWidth = 1.4;
+      ctx.lineCap = "round";
+      ctx.stroke();
 
       // ─── 4. Water impact splash ripples ─────────────────────────────────────
       const ripples = ripplesRef.current;
       for (let i = ripples.length - 1; i >= 0; i--) {
         const r = ripples[i];
-        r.radius += 0.5;
-        r.alpha -= 0.04;
+        r.radius += 0.5 * step;
+        r.alpha -= 0.04 * step;
 
         if (r.alpha <= 0 || r.radius >= r.maxRadius) {
           ripples.splice(i, 1);
@@ -242,16 +227,14 @@ export default function SelectedAreaRainOverlay({
       ctx.restore();
     };
 
-    render();
-
-    const handleResize = () => {
-      updateCanvasSize();
-    };
-
-    window.addEventListener("resize", handleResize);
+    animFrameIdRef.current = requestAnimationFrame(render);
+    const observer = new ResizeObserver(updateCanvasSize);
+    observer.observe(canvas);
+    map.on("move zoom resize", markProjectionDirty);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      observer.disconnect();
+      map.off("move zoom resize", markProjectionDirty);
       if (animFrameIdRef.current) {
         cancelAnimationFrame(animFrameIdRef.current);
         animFrameIdRef.current = null;

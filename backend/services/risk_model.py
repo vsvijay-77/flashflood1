@@ -43,8 +43,9 @@ class TemporalTransformerBlock(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(0.1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        attn_out, _ = self.self_attn(x, x, x)
+    def forward(self, x: torch.Tensor, causal: bool = False) -> torch.Tensor:
+        mask = torch.ones(x.shape[1], x.shape[1], device=x.device, dtype=torch.bool).triu(1) if causal else None
+        attn_out, _ = self.self_attn(x, x, x, attn_mask=mask, need_weights=False)
         x = self.norm1(x + self.dropout(attn_out))
         ff_out = self.linear2(F.relu(self.linear1(x)))
         x = self.norm2(x + self.dropout(ff_out))
@@ -77,14 +78,14 @@ class GNNTransformerFloodModel(nn.Module):
             nn.Linear(16, 4),  # 4 classes: Low, Medium, High, Critical
         )
 
-    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, adj: torch.Tensor, return_sequence: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         # Spatial propagation
         h = self.gnn1(x, adj)
         h = self.gnn2(h, adj)
 
         # Accept legacy (nodes, features) and real (time, nodes, features) input.
         h_seq = h.unsqueeze(1) if h.ndim == 2 else h.transpose(0, 1)
-        if h_seq.shape[1] > 1:
+        if x.ndim == 3:
             position = torch.arange(h_seq.shape[1], device=h.device, dtype=h.dtype).unsqueeze(1)
             frequency = torch.exp(torch.arange(0, h_seq.shape[-1], 2, device=h.device, dtype=h.dtype)
                                   * (-math.log(10000.0) / h_seq.shape[-1]))
@@ -92,7 +93,8 @@ class GNNTransformerFloodModel(nn.Module):
             encoding[:, 0::2] = torch.sin(position * frequency)
             encoding[:, 1::2] = torch.cos(position * frequency)
             h_seq = h_seq + encoding.unsqueeze(0)
-        h_trans = self.transformer(h_seq)[:, -1]
+        h_all = self.transformer(h_seq, causal=True)
+        h_trans = h_all.transpose(0, 1) if return_sequence else h_all[:, -1]
 
         flood_prob = self.flood_prob_head(h_trans)
         severity_logits = self.severity_head(h_trans)

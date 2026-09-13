@@ -86,8 +86,7 @@ def predict_surface(elevations, south, north, west, east, frames, size):
         model = trained_model(path)
         x = torch.from_numpy(np.stack(sequences))  # time, nodes, features
         with torch.inference_mode():
-            scores = [model(x[:t + 1], torch.from_numpy(adjacency))[0].squeeze(-1).numpy()
-                      for t in range(len(frames))]
+            scores = model(x, torch.from_numpy(adjacency), return_sequence=True)[0].squeeze(-1).numpy()
         mode = "gnn_transformer"
     return {
         "mode": mode, "feature_schema": FEATURE_SCHEMA,

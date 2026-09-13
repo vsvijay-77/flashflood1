@@ -818,3 +818,29 @@ async def get_digital_twin_model(task_id: str):
         raise HTTPException(status_code=502, detail=f"Failed to retrieve 3D GLB model: {exc}")
 
 
+
+
+class SurfaceForecastRequest(BaseModel):
+    south: float = Field(ge=-85, le=85, allow_inf_nan=False)
+    north: float = Field(ge=-85, le=85, allow_inf_nan=False)
+    west: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    east: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    size: int = Field(ge=3, le=21)
+    elevations: List[float] = Field(min_length=9, max_length=441)
+
+
+@router.post("/surface-forecast")
+async def surface_forecast(request: SurfaceForecastRequest):
+    from services import twin_forecast
+    if not (0 < request.north - request.south <= 0.5 and 0 < request.east - request.west <= 0.5):
+        raise HTTPException(status_code=422, detail="Select an area smaller than 0.5 degrees with valid bounds.")
+    if len(request.elevations) != request.size ** 2 or any(
+        not math.isfinite(h) or not -500 <= h <= 9000 for h in request.elevations
+    ):
+        raise HTTPException(status_code=422, detail="Provide a complete finite terrain grid between -500 and 9000 metres.")
+    try:
+        frames = await twin_forecast.fetch_weather((request.south + request.north) / 2, (request.west + request.east) / 2)
+        return await asyncio.to_thread(twin_forecast.predict_surface, request.elevations,
+            request.south, request.north, request.west, request.east, frames, request.size)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Forecast unavailable. Check weather access and the configured model checkpoint, then retry.") from exc

@@ -9,6 +9,7 @@ import {
   Pause,
   Mountain,
   Eye,
+  EyeOff,
   Compass,
   Loader2,
   PersonStanding,
@@ -3506,21 +3507,53 @@ export function CesiumDigitalTwinViewer({
       {/* Cesium WebGL Viewport */}
       <div ref={cesiumContainerRef} className="w-full h-full bg-black" />
 
-      {/* Forecast controls stay on the map's left rail so they are easy to find
-          above the weather and precipitation panels. */}
-      <div className="absolute top-14 left-3 z-20 w-52 rounded-xl border border-cyan-500/50 bg-slate-950/90 p-2.5 shadow-xl backdrop-blur-md">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-bold text-cyan-200">Forecast heatmap</span>
-          <button type="button" aria-pressed={forecastActive}
-            onClick={() => setForecastActive(value => !value)}
-            className={`rounded-md px-2 py-1 text-[10px] font-bold ${forecastActive ? "bg-cyan-600 text-white" : "bg-slate-800 text-slate-300"}`}>
-            {forecastActive ? "On" : "Off"}
+      {/* 🌊 Flood Heatmap Controls on Map's Left Rail with Eye / EyeOff Visibility Toggle */}
+      <div className="absolute top-14 left-3 z-20 w-56 rounded-xl border border-cyan-500/50 bg-slate-950/95 p-3 shadow-2xl backdrop-blur-md text-white animate-in fade-in slide-in-from-left-2 duration-200">
+        <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-2">
+          <div className="flex items-center gap-1.5">
+            <Waves className="size-4 text-cyan-400" />
+            <span className="text-xs font-bold text-cyan-200">Flood Heatmap</span>
+          </div>
+          <button
+            type="button"
+            aria-pressed={forecastActive}
+            onClick={() => setForecastActive((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer shadow-sm ${
+              forecastActive
+                ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 ring-1 ring-cyan-300"
+                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+            }`}
+            title={forecastActive ? "Click to turn Flood Heatmap Invisible (Off)" : "Click to turn Flood Heatmap Visible (On)"}
+          >
+            {forecastActive ? (
+              <>
+                <Eye className="size-3.5 text-slate-950" />
+                <span>Visible</span>
+              </>
+            ) : (
+              <>
+                <EyeOff className="size-3.5 text-slate-400" />
+                <span>Invisible</span>
+              </>
+            )}
           </button>
         </div>
-        <label className="mt-2 block text-[10px] text-slate-300">
-          Common forecast time · +{forecastHour}h
-          <input aria-label="Common forecast time" className="mt-1 w-full accent-cyan-400" type="range"
-            min={0} max={11} step={1} value={forecastHour} onChange={event => setForecastHour(Number(event.target.value))} />
+
+        <label className="mt-2.5 block space-y-1">
+          <div className="flex items-center justify-between text-[10px] text-slate-300 font-semibold">
+            <span>Forecast Window</span>
+            <span className="font-mono text-cyan-300 font-bold">+{forecastHour}h</span>
+          </div>
+          <input
+            aria-label="Common forecast time"
+            className="w-full accent-cyan-400 cursor-pointer h-1.5 rounded-lg bg-slate-800"
+            type="range"
+            min={0}
+            max={11}
+            step={1}
+            value={forecastHour}
+            onChange={(e) => setForecastHour(Number(e.target.value))}
+          />
         </label>
       </div>
 

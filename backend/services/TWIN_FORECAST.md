@@ -29,7 +29,17 @@ cumulative forecast rain/150, humidity/100, temperature Celsius/50,
 wind km/h/100, clipped volumetric soil moisture/0.5. Inputs are time × nodes × 8;
 the undirected four-neighbour graph includes self-loops. Spatial convolutions
 run for every hour; sinusoidal positions and temporal self-attention process
-only the prefix through the requested forecast hour. The last temporal token
-feeds the existing prediction heads. Existing single-time callers still work.
+each hour with a causal attention mask. One forward pass emits every hourly
+head; future weather tokens cannot influence earlier predictions. This replaces
+12 repeated prefix passes. Existing single-time callers still work.
 
 Validation: `../.venv/bin/python -m pytest tests/test_twin_forecast.py` from backend.
+
+Open the viewer simulation menu and choose **GNN–Transformer heatmap** to show
+the hourly surface overlay. Opacity changes update the existing imagery layer.
+
+The disaster-intelligence chat writes the complete selected-area context,
+simulation state, buildings, sensors, mesh nodes, and risk zones to the
+configured Qdrant collection and retrieves matching knowledge for each answer.
+Set `QDRANT_URL`, `QDRANT_API_KEY`, and `QDRANT_COLLECTION` in `backend/.env`;
+the key is server-only and is never sent to the frontend.

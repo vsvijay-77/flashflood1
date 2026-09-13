@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 
 interface CesiumSelectedAreaRainOverlayProps {
   viewer: any; // Cesium.Viewer
@@ -29,20 +29,6 @@ interface Ripple {
   alpha: number;
 }
 
-function isPointInPoly(lat: number, lng: number, poly: [number, number][]): boolean {
-  if (!poly || poly.length < 3) return true;
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i][1], yi = poly[i][0];
-    const xj = poly[j][1], yj = poly[j][0];
-    const intersect =
-      yi > lat !== yj > lat &&
-      lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
 export default function CesiumSelectedAreaRainOverlay({
   viewer,
   polygonCoords,
@@ -53,6 +39,9 @@ export default function CesiumSelectedAreaRainOverlay({
   isFlatView = false,
   className = "",
 }: CesiumSelectedAreaRainOverlayProps) {
+  const polygonKey = JSON.stringify(polygonCoords);
+  const stablePolygon = useMemo<[number, number][] | null>(() => JSON.parse(polygonKey), [polygonKey]);
+  polygonCoords = stablePolygon;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
   const dropsRef = useRef<Drop[]>([]);
@@ -68,7 +57,7 @@ export default function CesiumSelectedAreaRainOverlay({
 
   // Initialize drops - optimized lightweight pool (120 to 220 drops is plenty for high density)
   useEffect(() => {
-    const totalDrops = Math.max(100, Math.min(240, Math.round(intensityMm * 2.2)));
+    const totalDrops = Math.max(0, Math.min(240, Math.round(intensityMm * 2.2)));
     const drops: Drop[] = [];
     for (let i = 0; i < totalDrops; i++) {
       drops.push({
@@ -105,19 +94,27 @@ export default function CesiumSelectedAreaRainOverlay({
     // Wind drift offset in horizontal pixels per frame
     const windX = (windSpeedKmh / 20.0) * 3.2;
 
-    const render = () => {
-      animFrameIdRef.current = requestAnimationFrame(render);
-
+    let w = 0, h = 0;
+    const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      const w = rect.width;
-      const h = rect.height;
+      w = Math.round(rect.width); h = Math.round(rect.height);
+      canvas.width = w; canvas.height = h;
+      lastProjectTimeRef.current = 0;
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas); resize();
+    projectedPtsRef.current = [];
+    const C = (window as any).Cesium;
+    const positions = polygonCoords?.map(([lat, lng]) => C.Cartesian3.fromDegrees(lng, lat, groundHeight)) ?? [];
+    let lastFrame = performance.now();
+    const render = (now: number) => {
+      animFrameIdRef.current = requestAnimationFrame(render);
+      if (document.hidden) { lastFrame = now; return; }
+      const elapsed = now - lastFrame;
+      if (elapsed < 1000 / 60 - 1) return;
+      const step = Math.min(elapsed, 50) / (1000 / 60);
+      lastFrame = now;
       if (w <= 0 || h <= 0) return;
-
-      // Use standard 1x pixel ratio for rain overlay to save massive GPU fillrate
-      if (canvas.width !== Math.round(w) || canvas.height !== Math.round(h)) {
-        canvas.width = Math.round(w);
-        canvas.height = Math.round(h);
-      }
 
       ctx.clearRect(0, 0, w, h);
 
@@ -126,8 +123,7 @@ export default function CesiumSelectedAreaRainOverlay({
       const scene = hasViewer ? viewer.scene : null;
 
       // Throttled boundary projection: reproject at most every 60ms or when camera moves
-      const now = performance.now();
-      let standingInsideArea = isFlatView;
+      const standingInsideArea = isFlatView;
 
       if (now - lastProjectTimeRef.current > 60 && hasViewer && polygonCoords && polygonCoords.length >= 3) {
         lastProjectTimeRef.current = now;
@@ -139,9 +135,8 @@ export default function CesiumSelectedAreaRainOverlay({
         if (toWindowCoords) {
           const pts: { x: number; y: number }[] = [];
           for (let i = 0; i < polygonCoords.length; i++) {
-            const [lat, lng] = polygonCoords[i];
             try {
-              const cart3 = Cesium.Cartesian3.fromDegrees(Number(lng), Number(lat), groundHeight);
+              const cart3 = positions[i];
               const win = toWindowCoords.call(Cesium.SceneTransforms, scene, cart3);
               if (win && !isNaN(win.x) && !isNaN(win.y)) {
                 pts.push({ x: win.x, y: win.y });
@@ -172,35 +167,14 @@ export default function CesiumSelectedAreaRainOverlay({
       const { minX, maxX, minY, maxY } = boundsRef.current;
       const spanX = Math.max(40, maxX - minX);
 
-      // ─── 1. ATMOSPHERIC TINT & PRECIPITATION CONE (NO shadowBlur, ultra-fast) ──
-      if (pts.length >= 3 && !standingInsideArea) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; i++) {
-          ctx.lineTo(pts[i].x, pts[i].y);
-        }
-        ctx.closePath();
-
-        // Atmospheric precipitation tint on the ground boundary
-        ctx.fillStyle = "rgba(14, 116, 144, 0.12)";
-        ctx.fill();
-
-        ctx.lineWidth = 1.8;
-        ctx.strokeStyle = "rgba(56, 189, 248, 0.65)";
-        ctx.stroke();
-
-        ctx.restore();
-      }
-
       // ─── 2. GROUND SPLASH RIPPLES (Batched in 1 path) ──────────────────────
       const ripples = ripplesRef.current;
       if (ripples.length > 0) {
         ctx.beginPath();
         for (let i = ripples.length - 1; i >= 0; i--) {
           const r = ripples[i];
-          r.radius += 0.8;
-          r.alpha -= 0.04;
+          r.radius += 0.8 * step;
+          r.alpha -= 0.04 * step;
           if (r.alpha <= 0 || r.radius >= r.maxRadius) {
             ripples.splice(i, 1);
             continue;
@@ -220,7 +194,7 @@ export default function CesiumSelectedAreaRainOverlay({
       ctx.beginPath();
       for (let i = 0; i < drops.length; i++) {
         const d = drops[i];
-        d.y += d.speed;
+        d.y += d.speed * step;
 
         if (d.y >= groundImpactY || d.y >= h + 20) {
           if (ripples.length < 35 && Math.random() < 0.3) {
@@ -253,9 +227,10 @@ export default function CesiumSelectedAreaRainOverlay({
       ctx.stroke();
     };
 
-    render();
+    animFrameIdRef.current = requestAnimationFrame(render);
 
     return () => {
+      observer.disconnect();
       if (animFrameIdRef.current) {
         cancelAnimationFrame(animFrameIdRef.current);
         animFrameIdRef.current = null;

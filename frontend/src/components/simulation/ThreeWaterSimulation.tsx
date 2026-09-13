@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef } from "react";
+import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwardRef } from "react";
 import * as THREE from "three";
 import { WaterPhysicsSimulation } from "./waterPhysics";
 import { createWaterShaderMaterial } from "./WaterShaders";
@@ -42,10 +42,14 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     },
     ref
   ) => {
+    const polygonKey = JSON.stringify(polygonCoords ?? null);
+    const stablePolygon = useMemo<[number, number][] | null>(() => JSON.parse(polygonKey), [polygonKey]);
+    polygonCoords = stablePolygon;
     const canvasContainerRef = useRef<HTMLDivElement | null>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+    const terrainMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
     const sceneColorTextureRef = useRef<THREE.CanvasTexture | null>(null);
@@ -110,6 +114,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
       const abortController = new AbortController();
       let isMounted = true;
+      setIsRunning(false);
+      setIsPaused(false);
+      physicsSimRef.current = null;
 
       const setupSimulation = async () => {
         setStatusText("Sampling Cesium high-resolution DEM…");
@@ -156,8 +163,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const totalWidthM = (east - west) * metersPerLng;
         const totalHeightM = (north - south) * metersPerLat;
 
-        const COLS = Math.max(48, Math.min(96, Math.round(totalWidthM / 12)));
-        const ROWS = Math.max(48, Math.min(96, Math.round(totalHeightM / 12)));
+        const spacing = Math.max(12, totalWidthM / 95, totalHeightM / 95);
+        const COLS = Math.max(2, Math.round(totalWidthM / spacing) + 1);
+        const ROWS = Math.max(2, Math.round(totalHeightM / spacing) + 1);
         const dx = totalWidthM / (COLS - 1);
 
         setGridResolutionText(`${COLS} × ${ROWS} (${dx.toFixed(1)}m)`);
@@ -181,10 +189,13 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         let sampledElevations = new Float32Array(COLS * ROWS);
         try {
           if (cesiumViewer.terrainProvider) {
-            const results = await Cesium.sampleTerrainMostDetailed(
-              cesiumViewer.terrainProvider,
-              cartographics
-            );
+            const terrainSignal = AbortSignal.any([abortController.signal, AbortSignal.timeout(30000)]);
+            const results: any[] = await new Promise((resolve, reject) => {
+              const abort = () => reject(new Error("Terrain sampling timed out"));
+              terrainSignal.addEventListener("abort", abort, { once: true });
+              Promise.resolve(Cesium.sampleTerrainMostDetailed(cesiumViewer.terrainProvider, cartographics))
+                .then(resolve, reject).finally(() => terrainSignal.removeEventListener("abort", abort));
+            });
             for (let i = 0; i < results.length; i++) {
               const h = results[i]?.height;
               sampledElevations[i] = h !== undefined && !isNaN(h) && h > -50 ? h : centerElev;
@@ -196,6 +207,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             }
           }
         } catch (e) {
+          if (!isMounted) return;
           console.warn("[WaterSim] Falling back to globe height:", e);
           for (let i = 0; i < cartographics.length; i++) {
             const h = cesiumViewer.scene.globe.getHeight(cartographics[i]);
@@ -291,45 +303,23 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           }
         }
 
-        // 4. Identify High-Terrain Water Sources: water originates at the top and cascades downhill
-        // Seed top elevation zones inside the polygon as source inflows
-        const highElevThreshold = relief >= 2.0 ? minElev + relief * 0.65 : minElev;
+        // OSM sources take precedence; an unmapped area gets a small scenario
+        // inflow near its highest terrain, rather than flooding every hilltop.
         let highSourceCount = 0;
-
-        for (let i = 0; i < totalCells; i++) {
-          if (insideMask[i]) {
-            const h = sampledElevations[i];
-            if (h >= highElevThreshold) {
-              sourceMask[i] = 1;
-              initialDepths[i] = Math.max(initialDepths[i], 1.5);
-              highSourceCount++;
-            }
-          } else {
-            sourceMask[i] = 0;
-            initialDepths[i] = 0;
-          }
-        }
-
-        // If highSourceCount is 0 for any reason, pick the top 20% highest elevation cells
-        if (highSourceCount === 0 && insideCellsCount > 0) {
-          const sortedElevs: number[] = [];
-          for (let i = 0; i < totalCells; i++) {
-            if (insideMask[i]) sortedElevs.push(sampledElevations[i]);
-          }
-          sortedElevs.sort((a, b) => b - a);
-          const cutoff = sortedElevs[Math.min(sortedElevs.length - 1, Math.floor(sortedElevs.length * 0.25))];
-          for (let i = 0; i < totalCells; i++) {
-            if (insideMask[i] && sampledElevations[i] >= cutoff) {
-              sourceMask[i] = 1;
-              initialDepths[i] = 1.5;
-              highSourceCount++;
-            }
+        if (waterFeatureCount === 0 && insideCellsCount > 0) {
+          const candidates = Array.from({ length: totalCells }, (_, i) => i)
+            .filter(i => insideMask[i]).sort((a, b) => sampledElevations[b] - sampledElevations[a]);
+          const count = Math.max(1, Math.ceil(candidates.length * 0.01));
+          for (const i of candidates.slice(0, count)) {
+            sourceMask[i] = 1;
+            initialDepths[i] = 1.5;
+            highSourceCount++;
           }
         }
 
         waterBodyMaskRef.current = sourceMask;
         setIsFallbackSource(waterFeatureCount === 0);
-        setOsmFeatureCount(waterFeatureCount);
+        setOsmFeatureCount(waterFeatureCount || highSourceCount);
 
         // 5. Initialize Physics Simulation Engine with High-to-Low Momentum
         const physics = new WaterPhysicsSimulation(
@@ -380,7 +370,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         );
       };
 
-      setupSimulation();
+      setupSimulation().catch(error => {
+        if (isMounted) setStatusText(`Unable to initialize water: ${error.message}`);
+      });
 
       return () => {
         isMounted = false;
@@ -401,10 +393,17 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       const scene = sceneRef.current;
       if (!scene) return;
 
+      if (terrainMeshRef.current) {
+        scene.remove(terrainMeshRef.current);
+        terrainMeshRef.current.geometry.dispose();
+        (terrainMeshRef.current.material as THREE.Material).dispose();
+        terrainMeshRef.current = null;
+      }
       // Remove existing mesh
       if (waterMeshRef.current) {
         scene.remove(waterMeshRef.current);
         waterMeshRef.current.geometry.dispose();
+        waterMaterialRef.current?.dispose();
         waterMeshRef.current = null;
       }
 
@@ -440,13 +439,32 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       geometry.setAttribute("aInside", new THREE.BufferAttribute(new Float32Array(insideMask), 1));
       geometry.setAttribute("aIsWaterBody", new THREE.BufferAttribute(new Float32Array(waterBodyMask), 1));
       geometry.setIndex(indices);
-      geometry.computeVertexNormals();
+      // Lighting normals are reconstructed in the fragment shader.
+      for (const name of ["position", "aDepth", "aVelocity"]) (geometry.attributes[name] as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
+
+      // Depth-only terrain occludes water behind sampled ridges in the overlay.
+      const terrainGeometry = new THREE.BufferGeometry();
+      const terrainPositions = new Float32Array(positions);
+      for (let i = 0; i < totalCells; i++) terrainPositions[i * 3 + 1] -= 0.12;
+      terrainGeometry.setAttribute("position", new THREE.BufferAttribute(terrainPositions, 3));
+      const terrainIndices: number[] = [];
+      for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols - 1; c++) {
+        const a = r * cols + c, b = a + 1, d = a + cols;
+        terrainIndices.push(a, d, b, b, d, d + 1);
+      }
+      terrainGeometry.setIndex(terrainIndices);
+      const terrainMesh = new THREE.Mesh(terrainGeometry, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }));
+      terrainMesh.frustumCulled = false;
+      scene.add(terrainMesh);
+      terrainMeshRef.current = terrainMesh;
 
       // Live Cesium canvas texture for screen-space refraction
       if (cesiumViewer?.scene?.canvas && !sceneColorTextureRef.current) {
         const tex = new THREE.CanvasTexture(cesiumViewer.scene.canvas);
         tex.minFilter = THREE.LinearFilter;
         tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = false;
+        tex.colorSpace = THREE.SRGBColorSpace;
         sceneColorTextureRef.current = tex;
       }
 
@@ -460,6 +478,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       mesh.name = "RealisticWaterSurface";
       mesh.frustumCulled = false;
       scene.add(mesh);
+      waterMeshRef.current = mesh;
+      handleReset();
+      cesiumViewer.scene.requestRender();
     };
 
     // ─── 3. THREE.JS RENDERER & CESIUM POST-RENDER SYNCHRONIZATION ───────────
@@ -527,37 +548,61 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           camPosENU.z + camDirENU.z,
           -(camPosENU.y + camDirENU.y)
         );
-        camera.lookAt(lookTarget);
         camera.up.set(camUpENU.x, camUpENU.z, -camUpENU.y);
+        camera.lookAt(lookTarget);
 
-        // Projection Matrix
-        const fov = Cesium.Math.toDegrees(cCamera.frustum.fovy || 0.785);
-        camera.fov = fov;
-        camera.aspect = container.clientWidth / Math.max(1, container.clientHeight);
-        camera.near = Math.max(0.5, cCamera.frustum.near || 1);
-        camera.far = Math.min(100000, cCamera.frustum.far || 50000);
-        camera.updateProjectionMatrix();
-
-        renderer.setSize(container.clientWidth, container.clientHeight);
+        camera.projectionMatrix.fromArray(Array.from(cCamera.frustum.projectionMatrix) as number[]);
+        camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
       };
+
+      const resize = new ResizeObserver(() => {
+        renderer.setSize(Math.max(1, container.clientWidth), Math.max(1, container.clientHeight));
+        cesiumViewer.scene.requestRender();
+      });
+      resize.observe(container);
+      // Share Cesium's update clock; no second animation loop for water.
+      let requestedAt = 0;
+      const removeFrameRequest = cesiumViewer.scene.preUpdate.addEventListener(() => {
+        const now = performance.now();
+        if (document.hidden || !waterMeshRef.current || now - requestedAt < 1000 / 60 - 1) return;
+        if (showWaterRef.current || (isRunningRef.current && !isPausedRef.current)) {
+          requestedAt = now;
+          cesiumViewer.scene.requestRender();
+        }
+      });
 
       // 4. Cesium postRender callback: updates physics and renders overlay
       let lastTime = performance.now();
       let lastTelemetryTime = 0;
+      let textureTime = 0;
+      let physicsTime = 0;
+      let frameTime = 16.7;
+      let qualityCheck = performance.now();
 
       const onPostRender = () => {
         const now = performance.now();
-        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        if (document.hidden) { lastTime = now; return; }
+        const frameMs = now - lastTime;
+        if (frameMs < 250) frameTime = frameTime * 0.95 + frameMs * 0.05;
+        if (now - qualityCheck > 3000 && !document.hidden) {
+          qualityCheck = now;
+          const ratio = renderer.getPixelRatio();
+          const next = frameTime > 28 ? Math.max(0.75, ratio - 0.25)
+            : frameTime < 18 ? Math.min(window.devicePixelRatio, 1.5, ratio + 0.25) : ratio;
+          if (next !== ratio) renderer.setPixelRatio(next);
+        }
+        const dt = Math.min(frameMs / 1000, 0.1);
         lastTime = now;
 
         const mat = waterMaterialRef.current;
         if (mat) {
           mat.uniforms.uTime.value += dt * 0.4;
           mat.uniforms.uWaveHeight.value = waveIntensityRef.current;
-          mat.uniforms.uResolution.value.set(container.clientWidth, container.clientHeight);
+          renderer.getDrawingBufferSize(mat.uniforms.uResolution.value);
 
           // Update Cesium canvas texture for screen-space refraction
-          if (sceneColorTextureRef.current) {
+          if (sceneColorTextureRef.current && showWaterRef.current && now - textureTime >= 1000 / 30) {
+            textureTime = now;
             sceneColorTextureRef.current.needsUpdate = true;
           }
         }
@@ -567,8 +612,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const mesh = waterMeshRef.current;
         const gridMeta = gridMetaRef.current;
 
-        if (physics && mesh && gridMeta && isRunningRef.current && !isPausedRef.current) {
-          physics.advance(dt, speedRef.current, sourceRiseRef.current);
+        if (isRunningRef.current && !isPausedRef.current) physicsTime += dt;
+        else physicsTime = 0;
+        if (physics && mesh && gridMeta && isRunningRef.current && !isPausedRef.current && physicsTime >= 1 / 30) {
+          physics.advance(physicsTime, speedRef.current, sourceRiseRef.current);
+          physicsTime = 0;
 
           // Update Geometry Buffers
           const geo = mesh.geometry as THREE.BufferGeometry;
@@ -593,7 +641,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           posAttr.needsUpdate = true;
           depthAttr.needsUpdate = true;
           velAttr.needsUpdate = true;
-          geo.computeVertexNormals();
+
 
           // Throttle React state telemetry updates to ~4 Hz
           if (now - lastTelemetryTime > 250) {
@@ -609,6 +657,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           mesh.visible = showWaterRef.current;
         }
 
+        if (!showWaterRef.current) { renderer.clear(); return; }
         // Sync camera and render
         syncCamera();
         renderer.render(scene, camera);
@@ -617,6 +666,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       const removePostRenderListener = cesiumViewer.scene.postRender.addEventListener(onPostRender);
 
       return () => {
+        removeFrameRequest();
+        resize.disconnect();
         try {
           removePostRenderListener();
         } catch (e) {}
@@ -625,6 +676,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           physicsSimRef.current.reset();
         }
 
+        if (terrainMeshRef.current) {
+          terrainMeshRef.current.geometry.dispose();
+          (terrainMeshRef.current.material as THREE.Material).dispose();
+          terrainMeshRef.current = null;
+        }
         if (waterMeshRef.current) {
           if (sceneRef.current) {
             sceneRef.current.remove(waterMeshRef.current);
@@ -661,8 +717,13 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       };
     }, [active, cesiumViewer]);
 
+    useEffect(() => {
+      if (cesiumViewer && !cesiumViewer.isDestroyed()) cesiumViewer.scene.requestRender();
+    }, [cesiumViewer, showWater, isRunning, isPaused, waveIntensity]);
+
     // ─── 4. IMPERATIVE CONTROLS ──────────────────────────────────────────────
     const handleStart = () => {
+      if (!physicsSimRef.current || !waterMeshRef.current) return;
       setIsRunning(true);
       setIsPaused(false);
       setStatusText(isFallbackSource ? "Simulating (Fallback Source)" : "Simulating (OSM Water Sources)");
@@ -704,7 +765,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           posAttr.needsUpdate = true;
           depthAttr.needsUpdate = true;
           velAttr.needsUpdate = true;
-          geo.computeVertexNormals();
+
         }
       }
       setIsRunning(false);

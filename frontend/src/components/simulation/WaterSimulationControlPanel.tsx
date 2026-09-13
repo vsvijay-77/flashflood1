@@ -284,7 +284,7 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
         <div className="p-1.5 bg-slate-900/60 rounded border border-slate-800">
           <div className="text-slate-400">OSM Features</div>
           <div className="font-mono font-bold text-white truncate">
-            {osmFeatureCount > 0 ? `${osmFeatureCount} water bodies` : "1 Fallback cell"}
+            {isFallbackSource ? `${osmFeatureCount} inflow cells` : `${osmFeatureCount} mapped cells`}
           </div>
         </div>
         <div className="p-1.5 bg-slate-900/60 rounded border border-slate-800">

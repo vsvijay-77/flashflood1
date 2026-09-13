@@ -1,4 +1,4 @@
-import { Activity, Battery, Wifi, Cpu, CloudSun } from "lucide-react";
+import { Battery, Wifi, Cpu, CloudSun } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "@/lib/api";
@@ -18,7 +18,6 @@ export function NetworkOverviewKPIs() {
   });
 
   const latest = sensorRecords[0];
-  const activeCount = sensorRecords.length;
   const rssiValue = latest?.rssi != null ? `${latest.rssi} dBm` : "-65 dBm";
   const snrValue = latest?.snr != null ? `${latest.snr} SNR` : "9.8 SNR";
   const tempStr = weather?.temperature != null ? `${weather.temperature.toFixed(1)}°C` : "27.5°C";
@@ -45,10 +44,10 @@ export function NetworkOverviewKPIs() {
         icon={<Wifi className="size-5 text-emerald-500" />}
       />
       <KPICard
-        title="PostgreSQL Telemetry"
-        value={`${activeCount} Frames`}
-        status={`⚡ #${latest?.id ?? "132"} Last Frame`}
-        icon={<Activity className="size-5 text-sky-500" />}
+        title="Network Battery"
+        value="98%"
+        status="🔋 Solar & AC Powered"
+        icon={<Battery className="size-5 text-emerald-500" />}
       />
     </div>
   );

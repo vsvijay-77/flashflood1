@@ -92,12 +92,41 @@ async def list_sensor_data(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
+def _fetch_latest_and_stats_sync():
+    db_url = get_db_url()
+    with psycopg.connect(db_url, row_factory=dict_row, connect_timeout=8) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as total FROM sensor_data;")
+            total_count = cur.fetchone()["total"]
+            cur.execute("""
+                SELECT
+                    id,
+                    device_id,
+                    soil_moisture,
+                    water_level,
+                    rainfall,
+                    tilt,
+                    imu_x,
+                    imu_y,
+                    imu_z,
+                    rssi,
+                    snr,
+                    txt,
+                    created_at
+                FROM sensor_data
+                ORDER BY id DESC
+                LIMIT 50;
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+            return total_count, rows
+
+
 @router.get("/latest")
 async def get_latest_sensor_data():
-    """Fetch latest sensor reading, trend averages, and unique active devices."""
+    """Fetch latest sensor reading, trend averages, total database records and unique active devices."""
     try:
         loop = asyncio.get_running_loop()
-        rows = await loop.run_in_executor(None, _fetch_records_sync, 50, None)
+        total_count, rows = await loop.run_in_executor(None, _fetch_latest_and_stats_sync)
         latest = rows[0] if rows else None
         
         # Unique devices reporting
@@ -105,6 +134,7 @@ async def get_latest_sensor_data():
         
         return {
             "latest": latest,
+            "total_count": total_count,
             "recent_count": len(rows),
             "devices": devices,
             "records": rows[:20],

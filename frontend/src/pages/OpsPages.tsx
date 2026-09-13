@@ -19,6 +19,7 @@ import GISMap, { DEFAULT_LAYERS } from "@/components/gis/GISMap";
 import { supabase } from "@/lib/supabase";
 import { parseCustomAreaPolygon } from "@/lib/gisUtils";
 import DisasterIntelligenceChat from "@/components/gis/DisasterIntelligenceChat";
+import { MobileUsersManagement } from "@/components/users/MobileUsersManagement";
 
 
 const useZones = () => useQuery({ queryKey: ["zones"], queryFn: () => apiGet<Zone[]>("/zones"), retry: false });
@@ -1085,6 +1086,7 @@ export function SensorManagementPage() {
 }
 
 export function UserManagementPage() {
+  const [tab, setTab] = useState<"mobile" | "officers">("mobile");
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["users"], queryFn: () => apiGet<User[]>("/users"), retry: false });
 
@@ -1101,55 +1103,96 @@ export function UserManagementPage() {
   const list = data ?? [];
 
   return (
-    <div data-testid="user-management-page">
-      <PageHeader title="User Management" description="Verify departmental accounts and assign clearance levels." />
-      <SectionCard testId="users-card" title="Registered officers" description={`${list.length} accounts`}>
-        {isLoading ? (
-          <LoadingRows rows={4} />
-        ) : list.length === 0 ? (
-          <EmptyState testId="users-empty" title="No accounts registered" />
-        ) : (
-          <Table data-testid="users-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Officer</TableHead><TableHead>Organization</TableHead><TableHead>Clearance</TableHead>
-                <TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((u) => (
-                <TableRow key={u.id} data-testid={`user-row-${u.email}`}>
-                  <TableCell>
-                    <span className="block font-medium text-slate-900">{u.first_name} {u.last_name}</span>
-                    <span className="block font-mono text-[11px] text-slate-500">{u.email}</span>
-                  </TableCell>
-                  <TableCell className="text-xs text-slate-600">{u.organization}</TableCell>
-                  <TableCell>
-                    <Select value={u.role} onValueChange={(v: string) => update.mutate({ id: u.id, role: v as Role })}>
-                      <SelectTrigger size="sm" className="w-[170px]" data-testid={`user-role-trigger-${u.email}`}>
-                        <SelectValue>{(v) => ROLE_LABELS[v as Role] ?? String(v)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
-                          <SelectItem key={r} value={r} data-testid={`user-role-${r}`}>{ROLE_LABELS[r]}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                  <TableCell><StatusPill status={u.status} testId={`user-status-${u.email}`} /></TableCell>
-                  <TableCell className="text-right">
-                    {u.status === "active" ? (
-                      <Button variant="outline" size="xs" onClick={() => update.mutate({ id: u.id, status: "suspended" })} data-testid={`user-suspend-btn-${u.email}`}>Suspend</Button>
-                    ) : (
-                      <Button size="xs" onClick={() => update.mutate({ id: u.id, status: "active" })} data-testid={`user-verify-btn-${u.email}`}>Verify &amp; Activate</Button>
-                    )}
-                  </TableCell>
+    <div data-testid="user-management-page" className="space-y-6">
+      <PageHeader
+        title="User & Citizen Management"
+        description="Monitor registered mobile citizen users, dispatch emergency warnings, and verify departmental officers."
+      />
+
+      {/* Modern Tabs Navigation */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-1">
+        <button
+          type="button"
+          onClick={() => setTab("mobile")}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-colors cursor-pointer border-b-2 -mb-[5px] ${
+            tab === "mobile"
+              ? "border-indigo-600 text-indigo-600 bg-indigo-50/50"
+              : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+          }`}
+        >
+          <span>📱 Mobile Citizen Users</span>
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+            Live
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTab("officers")}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-colors cursor-pointer border-b-2 -mb-[5px] ${
+            tab === "officers"
+              ? "border-indigo-600 text-indigo-600 bg-indigo-50/50"
+              : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+          }`}
+        >
+          <span>👮 Department Officers</span>
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+            {list.length}
+          </span>
+        </button>
+      </div>
+
+      {tab === "mobile" ? (
+        <MobileUsersManagement />
+      ) : (
+        <SectionCard testId="users-card" title="Registered officers" description={`${list.length} accounts`}>
+          {isLoading ? (
+            <LoadingRows rows={4} />
+          ) : list.length === 0 ? (
+            <EmptyState testId="users-empty" title="No accounts registered" />
+          ) : (
+            <Table data-testid="users-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Officer</TableHead><TableHead>Organization</TableHead><TableHead>Clearance</TableHead>
+                  <TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </SectionCard>
+              </TableHeader>
+              <TableBody>
+                {list.map((u) => (
+                  <TableRow key={u.id} data-testid={`user-row-${u.email}`}>
+                    <TableCell>
+                      <span className="block font-medium text-slate-900">{u.first_name} {u.last_name}</span>
+                      <span className="block font-mono text-[11px] text-slate-500">{u.email}</span>
+                    </TableCell>
+                    <TableCell className="text-xs text-slate-600">{u.organization}</TableCell>
+                    <TableCell>
+                      <Select value={u.role} onValueChange={(v: string) => update.mutate({ id: u.id, role: v as Role })}>
+                        <SelectTrigger size="sm" className="w-[170px]" data-testid={`user-role-trigger-${u.email}`}>
+                          <SelectValue>{(v) => ROLE_LABELS[v as Role] ?? String(v)}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
+                            <SelectItem key={r} value={r} data-testid={`user-role-${r}`}>{ROLE_LABELS[r]}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell><StatusPill status={u.status} testId={`user-status-${u.email}`} /></TableCell>
+                    <TableCell className="text-right">
+                      {u.status === "active" ? (
+                        <Button variant="outline" size="xs" onClick={() => update.mutate({ id: u.id, status: "suspended" })} data-testid={`user-suspend-btn-${u.email}`}>Suspend</Button>
+                      ) : (
+                        <Button size="xs" onClick={() => update.mutate({ id: u.id, status: "active" })} data-testid={`user-verify-btn-${u.email}`}>Verify &amp; Activate</Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </SectionCard>
+      )}
     </div>
   );
 }

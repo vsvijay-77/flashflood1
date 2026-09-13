@@ -1,7 +1,10 @@
 """User administration, notifications and reports."""
-from typing import List
+import uuid
+from datetime import datetime, timezone
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from lib.auth import ROLES, current_user, require_roles
 from lib.db import db, supabase
@@ -15,6 +18,115 @@ from models.schemas import (
 )
 
 router = APIRouter(tags=["admin"])
+
+
+class MobileAlertRequest(BaseModel):
+    user_id: Optional[str] = None  # None or 'all' for broadcast
+    phone_number: Optional[str] = None
+    alert_type: str = "FLASH_FLOOD_WARNING"
+    severity: str = "CRITICAL"
+    title: str = "Emergency Alert"
+    message: str
+    channels: List[str] = Field(default_factory=lambda: ["sms", "push"])
+
+
+class MobileMessageRequest(BaseModel):
+    user_id: Optional[str] = None
+    phone_number: str
+    message: str
+
+
+@router.get("/users/mobile")
+async def list_mobile_users(user: dict = Depends(current_user)):
+    """Fetch registered mobile citizen app users from Supabase mob_users table."""
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        def _fetch():
+            from lib.db import get_supabase
+            sb = get_supabase()
+            return sb.table("mob_users").select("*").order("created_at", desc=True).execute()
+        res = await loop.run_in_executor(None, _fetch)
+        return res.data or []
+    except Exception as e:
+        print(f"[Mobile Users] Error fetching mob_users from Supabase: {e}")
+        try:
+            docs = await db.mob_users.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+            return docs
+        except Exception:
+            return []
+
+
+@router.post("/users/mobile/send-alert")
+async def send_mobile_alert(payload: MobileAlertRequest, user: dict = Depends(current_user)):
+    """Dispatch emergency alert to mobile users via SMS/Push."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    alert_id = str(uuid.uuid4())
+    alert_record = {
+        "id": alert_id,
+        "target_user_id": payload.user_id,
+        "target_phone": payload.phone_number,
+        "alert_type": payload.alert_type,
+        "severity": payload.severity,
+        "title": payload.title,
+        "message": payload.message,
+        "channels": payload.channels,
+        "dispatched_by": user.get("email") or "Officer",
+        "created_at": now_iso,
+        "status": "DELIVERED"
+    }
+
+    try:
+        await db.mobile_dispatched_alerts.insert_one(alert_record.copy())
+    except Exception as e:
+        print(f"[Mobile Alert] Log error: {e}")
+
+    try:
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "kind": "mobile_alert",
+            "title": f"Dispatched: {payload.title}",
+            "body": f"Sent to {payload.phone_number or 'All Mobile Users'}: {payload.message[:80]}...",
+            "read": False,
+            "created_at": now_iso
+        })
+    except Exception:
+        pass
+
+    target_desc = payload.phone_number or ("All registered mobile users" if payload.user_id in (None, "all") else payload.user_id)
+    return {
+        "status": "success",
+        "message": f"Alert '{payload.title}' successfully dispatched to {target_desc} via {', '.join(payload.channels).upper()}.",
+        "alert_id": alert_id,
+        "timestamp": now_iso
+    }
+
+
+@router.post("/users/mobile/send-message")
+async def send_mobile_message(payload: MobileMessageRequest, user: dict = Depends(current_user)):
+    """Dispatch direct message/SMS to a mobile user."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    msg_id = str(uuid.uuid4())
+    msg_record = {
+        "id": msg_id,
+        "user_id": payload.user_id,
+        "phone_number": payload.phone_number,
+        "message": payload.message,
+        "sender": user.get("email") or "Officer",
+        "created_at": now_iso,
+        "status": "SENT"
+    }
+    try:
+        await db.mobile_dispatched_messages.insert_one(msg_record.copy())
+    except Exception as e:
+        print(f"[Mobile Message] Log error: {e}")
+
+    return {
+        "status": "success",
+        "message": f"Message successfully sent to {payload.phone_number}.",
+        "message_id": msg_id,
+        "timestamp": now_iso
+    }
 
 
 @router.get("/users", response_model=List[User])

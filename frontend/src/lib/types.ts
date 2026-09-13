@@ -265,3 +265,33 @@ export interface LiveWeatherData {
     wind_speed: number | null;
   }[];
 }
+
+export interface MobileUserPreferences {
+  accessibilitySettings?: {
+    largeText?: boolean;
+    highContrast?: boolean;
+    audioAnnouncements?: boolean;
+  };
+  notificationPreferences?: {
+    smsFallback?: boolean;
+    criticalAlerts?: boolean;
+    communityReports?: boolean;
+    landslideWarnings?: boolean;
+    flashFloodWarnings?: boolean;
+  };
+}
+
+export interface MobileUser {
+  id: string;
+  full_name: string;
+  phone_number: string;
+  language?: string;
+  location_name?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_accuracy_m?: number | null;
+  location_updated_at?: string | null;
+  preferences?: MobileUserPreferences;
+  created_at: string;
+  updated_at?: string;
+}

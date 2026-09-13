@@ -36,9 +36,18 @@ def get_supabase() -> Client:
             load_dotenv(ROOT_DIR / ".env")
             url = os.environ.get("SUPABASE_URL", "")
             key = os.environ.get("SUPABASE_SECRET_KEY", "")
+        if not url or not key:
+            raise ValueError("SUPABASE_URL or SUPABASE_SECRET_KEY not set")
         client = create_client(url, key)
         _thread_local.client = client
     return client
+
+
+def _is_fallback_error(e: Exception) -> bool:
+    if not os.environ.get("SUPABASE_URL") or not os.environ.get("SUPABASE_SECRET_KEY"):
+        return True
+    err = str(e).lower()
+    return "pgrst205" in err or "not find the table" in err or isinstance(e, (ValueError, KeyError, AttributeError))
 
 
 def _run_with_retry(fn, retries=2):
@@ -51,6 +60,7 @@ def _run_with_retry(fn, retries=2):
                 time.sleep(0.04 * (attempt + 1))
                 continue
             raise
+
 
 
 def get_mongo_fallback():
@@ -170,7 +180,7 @@ class SupabaseCursor:
             return data
         except Exception as e:
             # Fallback to local MongoDB if table not yet created in Supabase
-            if "PGRST205" in str(e) or "not find the table" in str(e):
+            if _is_fallback_error(e):
                 mongo = get_mongo_fallback()
                 cursor = mongo[self.table_name].find(self.query, self.projection)
                 if self._sort_column:
@@ -214,7 +224,7 @@ class SupabaseCollection:
                 inserted_id = res.data[0].get("id")
             return InsertOneResult(inserted_id)
         except Exception as e:
-            if "PGRST205" in str(e) or "not find the table" in str(e):
+            if _is_fallback_error(e):
                 mongo = get_mongo_fallback()
                 res = await mongo[self.table_name].insert_one(document)
                 return InsertOneResult(res.inserted_id)
@@ -239,7 +249,7 @@ class SupabaseCollection:
             inserted_ids = [d.get("id") for d in clean_docs]
             return InsertManyResult(inserted_ids)
         except Exception as e:
-            if "PGRST205" in str(e) or "not find the table" in str(e):
+            if _is_fallback_error(e):
                 mongo = get_mongo_fallback()
                 res = await mongo[self.table_name].insert_many(documents)
                 return InsertManyResult(res.inserted_ids)
@@ -278,7 +288,7 @@ class SupabaseCollection:
             count = len(res.data or []) if res.data else 1
             return UpdateResult(count)
         except Exception as e:
-            if "PGRST205" in str(e) or "not find the table" in str(e):
+            if _is_fallback_error(e):
                 mongo = get_mongo_fallback()
                 res = await mongo[self.table_name].update_one(filter, update)
                 return UpdateResult(res.modified_count)
@@ -299,7 +309,7 @@ class SupabaseCollection:
             count = len(res.data or []) if res.data else 1
             return DeleteResult(count)
         except Exception as e:
-            if "PGRST205" in str(e) or "not find the table" in str(e):
+            if _is_fallback_error(e):
                 mongo = get_mongo_fallback()
                 res = await mongo[self.table_name].delete_one(filter)
                 return DeleteResult(res.deleted_count)
@@ -320,7 +330,7 @@ class SupabaseCollection:
             count = len(res.data or []) if res.data else 0
             return DeleteResult(count)
         except Exception as e:
-            if "PGRST205" in str(e) or "not find the table" in str(e):
+            if _is_fallback_error(e):
                 mongo = get_mongo_fallback()
                 res = await mongo[self.table_name].delete_many(filter)
                 return DeleteResult(res.deleted_count)
@@ -359,7 +369,7 @@ class SupabaseCollection:
                 return res.count
             return len(res.data or [])
         except Exception as e:
-            if "PGRST205" in str(e) or "not find the table" in str(e):
+            if _is_fallback_error(e):
                 mongo = get_mongo_fallback()
                 return await mongo[self.table_name].count_documents(filter)
             raise e

@@ -240,6 +240,7 @@ export function CesiumDigitalTwinViewer({
   const viewportDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastViewportBboxRef = useRef<string>("");  // Last fetched bbox string for dedup
   const networkRequestRef = useRef(0);
+  const buildingRequestRef = useRef(0);
   const networkAbortRef = useRef<AbortController | null>(null);
   const buildingAbortRef = useRef<AbortController | null>(null);
   const isInFlightRef = useRef<boolean>(false);
@@ -295,7 +296,7 @@ export function CesiumDigitalTwinViewer({
   // ─── 📡 3D IOT MESH NODES (MASTER & SLAVE SENSORS) ───
   const meshNodeEntitiesRef = useRef<any[]>([]);
   const [weatherDayTab, setWeatherDayTab] = useState<"1d" | "2d" | "3d" | "4d" | "5d" | "6d" | "7d">("1d");
-  const [showMeshNodes, setShowMeshNodes] = useState<boolean>(false);
+  const [showMeshNodes, setShowMeshNodes] = useState<boolean>(true);
   const [showMeshPanel, setShowMeshPanel] = useState<boolean>(false);
   const [showRainPanel, setShowRainPanel] = useState<boolean>(false);
   const [isPickingLocation, setIsPickingLocation] = useState<"master" | "slave" | SensorType | null>(null);
@@ -974,11 +975,34 @@ export function CesiumDigitalTwinViewer({
       }
 
       const activePoly = getActivePolygon();
+      let minPolyLat = Infinity, maxPolyLat = -Infinity;
+      let minPolyLng = Infinity, maxPolyLng = -Infinity;
+      if (activePoly && activePoly.length >= 3) {
+        for (const [pLat, pLng] of activePoly) {
+          if (pLat < minPolyLat) minPolyLat = pLat;
+          if (pLat > maxPolyLat) maxPolyLat = pLat;
+          if (pLng < minPolyLng) minPolyLng = pLng;
+          if (pLng > maxPolyLng) maxPolyLng = pLng;
+        }
+      }
+      const padLat = Math.max(0.015, (maxPolyLat - minPolyLat) * 0.5);
+      const padLng = Math.max(0.015, (maxPolyLng - minPolyLng) * 0.5);
+
       roads.forEach((road) => {
         const coords = road.geometry?.coordinates;
         if (!coords || coords.length < 2) return;
 
-        const clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
+        let clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
+        if (clippedSegments.length === 0) {
+          const anyInside = (coords as [number, number][]).some(
+            ([lng, lat]) =>
+              lat >= minPolyLat - padLat && lat <= maxPolyLat + padLat &&
+              lng >= minPolyLng - padLng && lng <= maxPolyLng + padLng
+          );
+          if (anyInside) {
+            clippedSegments = [coords as [number, number][]];
+          }
+        }
         if (clippedSegments.length === 0) return;
 
         const rType = road.properties?.road_type || "residential";
@@ -987,28 +1011,43 @@ export function CesiumDigitalTwinViewer({
         const risk = road.properties?.flood_risk || 0;
         const widthPx = road.properties?.width_px;
 
-        // Color: flooded = dark red, major = bright red, minor = muted red/salmon
+        // Cartographic hierarchy with dark casing:
+        // Ensures roads/paths never mix with rivers (zIndex: 30 > 15) or house boundaries
         let strokeColor: string;
+        let outlineColor: string;
         let lineWidth: number;
+        let outlineWidth: number;
 
         if (access === "flooded" || risk >= 0.7) {
-          strokeColor = "#dc2626";   // Dark red — flooded
+          strokeColor = "#ef4444";   // Danger red — flooded road
+          outlineColor = "#7f1d1d";  // Deep crimson outline
           lineWidth = widthPx ?? 6.0;
-        } else if (rType === "motorway") {
-          strokeColor = "#ff4444";   // Bright red
-          lineWidth = widthPx ?? 7.0;
-        } else if (rType === "trunk" || rType === "primary") {
-          strokeColor = "#ef4444";   // Red 500
-          lineWidth = widthPx ?? 5.5;
+          outlineWidth = 2.0;
+        } else if (rType === "motorway" || rType === "trunk") {
+          strokeColor = "#f59e0b";   // Amber-500 — arterial highways
+          outlineColor = "#0f172a";  // Slate-900 border
+          lineWidth = widthPx ?? 6.5;
+          outlineWidth = 2.0;
+        } else if (rType === "primary") {
+          strokeColor = "#fbbf24";   // Amber-400 — primary connectors
+          outlineColor = "#1e293b";  // Slate-800 border
+          lineWidth = widthPx ?? 5.0;
+          outlineWidth = 1.5;
         } else if (rType === "secondary" || rType === "tertiary") {
-          strokeColor = "#f87171";   // Red 400
+          strokeColor = "#fef08a";   // Warm cream/yellow-200 — secondary streets
+          outlineColor = "#334155";  // Slate-700 border
           lineWidth = widthPx ?? 4.0;
-        } else if (rType === "residential" || rType === "unclassified") {
-          strokeColor = "#fca5a5";   // Red 300
-          lineWidth = widthPx ?? 2.5;
+          outlineWidth = 1.5;
+        } else if (rType === "residential" || rType === "living_street" || rType === "unclassified") {
+          strokeColor = "#ffffff";   // Crisp white — residential streets
+          outlineColor = "#334155";  // Slate-700 border
+          lineWidth = widthPx ?? 3.0;
+          outlineWidth = 1.0;
         } else {
-          strokeColor = "#fecaca";   // Red 200 — tracks, paths
-          lineWidth = widthPx ?? 1.5;
+          strokeColor = "#cbd5e1";   // Light slate — footpaths, trails, service paths
+          outlineColor = "#475569";  // Slate-600 border
+          lineWidth = widthPx ?? 2.0;
+          outlineWidth = 1.0;
         }
 
         clippedSegments.forEach((seg) => {
@@ -1021,8 +1060,13 @@ export function CesiumDigitalTwinViewer({
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray(flatPositions),
               width: lineWidth,
-              material: Cesium.Color.fromCssColorString(strokeColor).withAlpha(isMajor ? 0.95 : 0.85),
+              material: new Cesium.PolylineOutlineMaterialProperty({
+                color: Cesium.Color.fromCssColorString(strokeColor),
+                outlineColor: Cesium.Color.fromCssColorString(outlineColor),
+                outlineWidth: outlineWidth,
+              }),
               clampToGround: true,
+              zIndex: 30,
             },
           });
           roadEntitiesRef.current.push(ent);
@@ -1053,68 +1097,116 @@ export function CesiumDigitalTwinViewer({
       }
 
       const activePoly = getActivePolygon();
+      let minPolyLat = Infinity, maxPolyLat = -Infinity;
+      let minPolyLng = Infinity, maxPolyLng = -Infinity;
+      if (activePoly && activePoly.length >= 3) {
+        for (const [pLat, pLng] of activePoly) {
+          if (pLat < minPolyLat) minPolyLat = pLat;
+          if (pLat > maxPolyLat) maxPolyLat = pLat;
+          if (pLng < minPolyLng) minPolyLng = pLng;
+          if (pLng > maxPolyLng) maxPolyLng = pLng;
+        }
+      }
+      const padLat = Math.max(0.02, (maxPolyLat - minPolyLat) * 0.5);
+      const padLng = Math.max(0.02, (maxPolyLng - minPolyLng) * 0.5);
+
       rivers.forEach((river) => {
-        const coords = river.geometry?.coordinates;
-        if (!coords || coords.length < 2) return;
-
-        const clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
-        if (clippedSegments.length === 0) return;
-
+        const geom = river.geometry as any;
         const props = (river.properties as any) || {};
-        const wType = (props.waterway_type || props.waterway || "stream").toLowerCase();
+        const wType = ((props.waterway_type || props.waterway || "stream") as string).toLowerCase();
         const isWaterBody = Boolean(
           props.is_water_body ||
           ["water", "lake", "reservoir", "pond", "basin", "riverbank", "lagoon", "oxbow"].includes(wType)
         );
-        const isMainRiver = Boolean(props.is_main_river) || wType === "river" || wType === "canal";
-        const widthM = props.width_m;
 
-        let strokeColor: string;
-        let lineWidth: number;
-        let displayName: string;
-
-        if (isWaterBody) {
-          strokeColor = "#06b6d4";  // Cyan — lakes, reservoirs, ponds
-          lineWidth = Math.max(widthM ?? 9.0, 8.0);
-          displayName = `💧 ${props.name || "Water Body"}`;
-        } else if (wType === "river") {
-          strokeColor = "#0284c7";  // Vibrant sky/azure blue — main rivers
-          lineWidth = Math.max(widthM ?? 8.0, 7.5);
-          displayName = `🌊 River: ${props.name || "River Channel"}`;
-        } else if (wType === "canal") {
-          strokeColor = "#2563eb";  // Blue — canals
-          lineWidth = Math.max(widthM ?? 6.0, 5.5);
-          displayName = `🌊 Canal: ${props.name || "Canal"}`;
-        } else if (wType === "stream") {
-          strokeColor = "#38bdf8";  // Cyan-blue — streams
-          lineWidth = Math.max(widthM ?? 4.0, 3.5);
-          displayName = `〰️ Stream: ${props.name || "Stream"}`;
-        } else {
-          strokeColor = "#7dd3fc";  // Soft light blue — drains/ditches
-          lineWidth = Math.max(widthM ?? 2.5, 2.5);
-          displayName = `〰️ ${wType}: ${props.name || "Waterway"}`;
-        }
-
-        clippedSegments.forEach((seg) => {
-          const flatPositions = seg.flat();
-          if (flatPositions.length < 4) return;
-
+        // 1. Water surface polygons (lakes, reservoirs, ponds, basins)
+        const polygons = geom?.type === "Polygon" ? [geom.coordinates] : geom?.type === "MultiPolygon" ? geom.coordinates : [];
+        for (const rings of polygons as number[][][][]) {
+          if (!rings || !rings[0] || rings[0].length < 3) continue;
+          const outerRing = rings[0].flat();
+          if (outerRing.length < 6) continue;
+          const holes = rings.slice(1).map((ring: number[][]) => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())));
           const ent = viewer.entities.add({
-            name: displayName,
+            name: `💧 ${props.name || (wType === "reservoir" ? "Reservoir" : wType === "lake" ? "Lake" : "Water Body")}`,
             show: visible,
-            polyline: {
-              positions: Cesium.Cartesian3.fromDegreesArray(flatPositions),
-              width: lineWidth,
-              material: new Cesium.PolylineGlowMaterialProperty({
-                glowPower: 0.25,
-                taperPower: 1.0,
-                color: Cesium.Color.fromCssColorString(strokeColor),
-              }),
-              clampToGround: true,
+            polygon: {
+              hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outerRing), holes),
+              material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              classificationType: Cesium.ClassificationType.TERRAIN,
+              zIndex: 10,
             },
           });
           riverEntitiesRef.current.push(ent);
-        });
+        }
+
+        // 2. Waterway channels (rivers, canals, streams, brooks)
+        const rawLines = geom?.type === "LineString" ? [geom.coordinates] : geom?.type === "MultiLineString" ? geom.coordinates : [];
+        for (const line of rawLines as [number, number][][]) {
+          if (!line || line.length < 2) continue;
+
+          // If line is closed and represents a water body, render as polygon surface
+          const isClosed = line.length >= 4 && (
+            (line[0][0] === line[line.length - 1][0] && line[0][1] === line[line.length - 1][1]) ||
+            (Math.abs(line[0][0] - line[line.length - 1][0]) < 1e-4 && Math.abs(line[0][1] - line[line.length - 1][1]) < 1e-4)
+          );
+          if (isWaterBody && isClosed) {
+            const flatRing = line.flat();
+            if (flatRing.length >= 6) {
+              const ent = viewer.entities.add({
+                name: `💧 ${props.name || (wType === "reservoir" ? "Reservoir" : wType === "lake" ? "Lake" : "Water Body")}`,
+                show: visible,
+                polygon: {
+                  hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(flatRing)),
+                  material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
+                  heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                  classificationType: Cesium.ClassificationType.TERRAIN,
+                  zIndex: 10,
+                },
+              });
+              riverEntitiesRef.current.push(ent);
+              continue;
+            }
+          }
+
+          let clippedSegments = clipPolylineToPolygon(line, activePoly);
+          if (clippedSegments.length === 0) {
+            const anyInside = line.some(
+              ([lng, lat]) =>
+                lat >= minPolyLat - padLat && lat <= maxPolyLat + padLat &&
+                lng >= minPolyLng - padLng && lng <= maxPolyLng + padLng
+            );
+            if (anyInside) {
+              clippedSegments = [line];
+            }
+          }
+          if (clippedSegments.length === 0) continue;
+
+          const isMain = wType === "river" || wType === "canal" || Boolean(props.is_main_river);
+          const strokeColor = isMain ? "#0284c7" : wType === "stream" ? "#38bdf8" : "#7dd3fc";
+          const lineWidth = Math.max(3.5, Math.min(12, props.width_m || (isMain ? 7.5 : 4.0)));
+
+          clippedSegments.forEach((seg) => {
+            const flat = seg.flat();
+            if (flat.length < 4) return;
+            const ent = viewer.entities.add({
+              name: `🌊 ${props.name || (isMain ? "River Channel" : "Waterway")}`,
+              show: visible,
+              polyline: {
+                positions: Cesium.Cartesian3.fromDegreesArray(flat),
+                width: lineWidth,
+                material: new Cesium.PolylineOutlineMaterialProperty({
+                  color: Cesium.Color.fromCssColorString(strokeColor),
+                  outlineColor: Cesium.Color.fromCssColorString("#082f49"),
+                  outlineWidth: 1.5,
+                }),
+                clampToGround: true,
+                zIndex: 15,
+              },
+            });
+            riverEntitiesRef.current.push(ent);
+          });
+        }
       });
     } finally {
       viewer.entities.resumeEvents();
@@ -1223,9 +1315,9 @@ export function CesiumDigitalTwinViewer({
             show: showBuildings && (buildingRiskFilter === "ALL" || risk === buildingRiskFilter),
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flat()), holes),
-              material: Cesium.Color.fromCssColorString("#facc15").withAlpha(0.85),
+              material: Cesium.Color.fromCssColorString(riskColor || "#facc15").withAlpha(0.85),
               outline: true,
-              outlineColor: Cesium.Color.fromCssColorString("#fde047"),
+              outlineColor: Cesium.Color.fromCssColorString(riskColor || "#fde047"),
               outlineWidth: 1.5,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               extrudedHeight: height,
@@ -1434,9 +1526,6 @@ export function CesiumDigitalTwinViewer({
     if (networkAbortRef.current) {
       try { networkAbortRef.current.abort(); } catch (e) {}
     }
-    if (buildingAbortRef.current) {
-      try { buildingAbortRef.current.abort(); } catch (e) {}
-    }
 
     const controller = new AbortController();
     networkAbortRef.current = controller;
@@ -1452,7 +1541,7 @@ export function CesiumDigitalTwinViewer({
 
     // STALE-WHILE-REVALIDATE: If cached, load and display INSTANTLY (0 ms)!
     const cachedEntry = networkAreaCache[areaCacheKey];
-    if (cachedEntry && cachedEntry.roads.length > 0) {
+    if (cachedEntry && (cachedEntry.roads.length > 0 || cachedEntry.rivers.length > 0)) {
       networksLoadedRef.current = true;
       setExtractedBbox(cachedEntry.bbox);
       setRoadFeatures(cachedEntry.roads);
@@ -1468,9 +1557,36 @@ export function CesiumDigitalTwinViewer({
       }
       setIsExtractingNetworks(false);
 
-      // If cache is fresh (< 30 minutes old), skip refetching
+      // If cache is fresh (< 30 minutes old), check if buildings need loading
       if (Date.now() - cachedEntry.timestamp < 30 * 60 * 1000) {
         window.clearTimeout(timeout);
+        // If cached entry has roads/rivers but no buildings yet, trigger building loading now!
+        if (!cachedEntry.buildings || cachedEntry.buildings.length === 0) {
+          const params: Parameters<typeof extractNetworks>[0] = selectedPolygon
+            ? {
+                polygon: selectedPolygon,
+                lat: latitude,
+                lng: longitude,
+                radius_km: searchRadiusKm,
+                place_name: searchOverride || areaName || undefined,
+              }
+            : viewportBbox
+            ? {
+                north: viewportBbox.north,
+                south: viewportBbox.south,
+                east: viewportBbox.east,
+                west: viewportBbox.west,
+                lat: latitude,
+                lng: longitude,
+              }
+            : {
+                lat: latitude,
+                lng: longitude,
+                radius_km: searchRadiusKm,
+                place_name: searchOverride || areaName || undefined,
+              };
+          void loadBuildings(params, cachedEntry.roads, cachedEntry.rivers, cachedEntry.bbox, areaCacheKey);
+        }
         return;
       }
     } else {
@@ -1520,7 +1636,7 @@ export function CesiumDigitalTwinViewer({
           total: tileStatus?.total_tiles ?? 0,
           roads: roads.length,
           rivers: rivers.length,
-          buildings: 0,
+          buildings: networkAreaCache[areaCacheKey]?.buildings?.length || 0,
         };
         setOsmTileStatus(statusObj);
 
@@ -1528,12 +1644,13 @@ export function CesiumDigitalTwinViewer({
           networksLoadedRef.current = true;
           setExtractedBbox(res.bbox);
 
-          // Update in-memory cache
+          // Update in-memory cache, preserving existing buildings
           networkAreaCache[areaCacheKey] = {
             roads,
             rivers,
             bbox: res.bbox,
             osmTileStatus: statusObj,
+            buildings: networkAreaCache[areaCacheKey]?.buildings || cachedEntry?.buildings,
             timestamp: Date.now(),
           };
         }
@@ -1560,7 +1677,7 @@ export function CesiumDigitalTwinViewer({
         }
 
         handlePredictRisk(res.bbox);
-        void loadBuildings(params, requestId, roads, rivers, res.bbox, areaCacheKey);
+        void loadBuildings(params, roads, rivers, res.bbox, areaCacheKey);
       } else {
         toast.error("Network extraction failed — check backend connection");
       }
@@ -1588,12 +1705,12 @@ export function CesiumDigitalTwinViewer({
 
   const loadBuildings = async (
     params: Parameters<typeof extractBuildings>[0],
-    requestId: number,
     roads: RoadFeature[],
     rivers: RiverFeature[],
     bbox: BoundingBox,
     areaCacheKey?: string,
   ) => {
+    const buildingRequestId = ++buildingRequestRef.current;
     if (buildingAbortRef.current) {
       try { buildingAbortRef.current.abort(); } catch (e) {}
     }
@@ -1691,7 +1808,7 @@ export function CesiumDigitalTwinViewer({
         else stats.safe++;
       });
 
-      if (requestId !== networkRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) {
+      if (buildingRequestId !== buildingRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) {
         return;
       }
 
@@ -1702,7 +1819,6 @@ export function CesiumDigitalTwinViewer({
         buildings: markedAreaBuildings.length,
       }));
       render3DBuildings(markedAreaBuildings);
-
 
       if (areaCacheKey) {
         const entry = networkAreaCache[areaCacheKey];
@@ -1737,7 +1853,7 @@ export function CesiumDigitalTwinViewer({
       toast.warning("Paths and waterways are ready; building detail is still unavailable");
     } finally {
       window.clearTimeout(timeout);
-      if (requestId === networkRequestRef.current) setIsLoadingBuildings(false);
+      if (buildingRequestId === buildingRequestRef.current) setIsLoadingBuildings(false);
     }
   };
 
@@ -1847,54 +1963,56 @@ export function CesiumDigitalTwinViewer({
 
     const activePoly = getActivePolygon();
     const validNodes = nodes.filter((n) => isPointInPolygon(n.lat, n.lng, activePoly));
-    if (!showMeshNodes || validNodes.length === 0) return;
+    if (!showMeshNodes) return;
+    if (validNodes.length === 0 && deployedSensors.length === 0) return;
 
-    const master = validNodes.find((n) => n.type === "master") || validNodes[0];
-    if (!master) return;
+    const master = validNodes.find((n) => n.type === "master");
 
-    // 1. Render Master Node (Golden Amber Mast + Radar Footprint)
-    const masterMast = viewer.entities.add({
-      id: `mesh-node-${master.id}`,
-      name: `📡 MASTER GATEWAY: ${master.name}`,
-      position: Cesium.Cartesian3.fromDegrees(master.lng, master.lat, 20),
-      cylinder: {
-        length: 40.0,
-        topRadius: 2.5,
-        bottomRadius: 4.5,
-        material: Cesium.Color.fromCssColorString("#f59e0b").withAlpha(0.95),
-        outline: true,
-        outlineColor: Cesium.Color.fromCssColorString("#fef08a"),
-        heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-      },
-      point: {
-        pixelSize: 15,
-        color: Cesium.Color.fromCssColorString("#f59e0b"),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 3,
-        heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-      },
-      label: {
-        text: "Master Node • Connected",
-        font: "bold 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-        scale: 0.5,
-        fillColor: Cesium.Color.fromCssColorString("#fef08a"),
-        outlineColor: Cesium.Color.BLACK,
-        outlineWidth: 4,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString("#451a03").withAlpha(0.92),
-        backgroundPadding: new Cesium.Cartesian2(8, 4),
-        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -32),
-        heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-    });
-    (masterMast as any)._nodeId = master.id;
-    meshNodeEntitiesRef.current.push(masterMast);
+    // 1. Render Master Node (Golden Amber Mast + Radar Footprint) if deployed
+    if (master) {
+      const masterMast = viewer.entities.add({
+        id: `mesh-node-${master.id}`,
+        name: `📡 MASTER GATEWAY: ${master.name}`,
+        position: Cesium.Cartesian3.fromDegrees(master.lng, master.lat, 20),
+        cylinder: {
+          length: 40.0,
+          topRadius: 2.5,
+          bottomRadius: 4.5,
+          material: Cesium.Color.fromCssColorString("#f59e0b").withAlpha(0.95),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString("#fef08a"),
+          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+        },
+        point: {
+          pixelSize: 15,
+          color: Cesium.Color.fromCssColorString("#f59e0b"),
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 3,
+          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+        },
+        label: {
+          text: "Master Node • Connected",
+          font: "bold 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          scale: 0.5,
+          fillColor: Cesium.Color.fromCssColorString("#fef08a"),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 4,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString("#451a03").withAlpha(0.92),
+          backgroundPadding: new Cesium.Cartesian2(8, 4),
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -32),
+          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      (masterMast as any)._nodeId = master.id;
+      meshNodeEntitiesRef.current.push(masterMast);
+    }
 
     // 2. Render Slave Nodes & Continuous 3D Connection Lines
-    const slaves = validNodes.filter((n) => n.id !== master.id);
+    const slaves = validNodes.filter((n) => n.type === "slave");
 
     slaves.forEach((slave, idx) => {
       // 3D Slave Telemetry Station (Electric Cyan)
@@ -1938,54 +2056,55 @@ export function CesiumDigitalTwinViewer({
       (slaveMast as any)._nodeId = slave.id;
       meshNodeEntitiesRef.current.push(slaveMast);
 
-      // ALWAYS-ON 3D CONNECTION LINK (MASTER ↔ SLAVE)
-      // Clamped glow polyline draped over 3D terrain
-      const linkLine = viewer.entities.add({
-        id: `link-${master.id}-${slave.id}`,
-        name: `Mesh RF Link: ${master.name} ↔ ${slave.name}`,
-        polyline: {
-          positions: Cesium.Cartesian3.fromDegreesArray([
-            master.lng, master.lat,
-            slave.lng, slave.lat,
-          ]),
-          width: 3.5,
-          clampToGround: true,
-          material: new Cesium.PolylineGlowMaterialProperty({
-            glowPower: 0.35,
-            taperPower: 0.8,
-            color: Cesium.Color.fromCssColorString("#22c55e"), // Vibrant RF link green (Master ↔ Slave)
-          }),
-        },
-      });
-      (linkLine as any)._nodeId = slave.id;
-      meshNodeEntitiesRef.current.push(linkLine);
+      // ALWAYS-ON 3D CONNECTION LINK (MASTER ↔ SLAVE) if Master exists
+      if (master) {
+        const linkLine = viewer.entities.add({
+          id: `link-${master.id}-${slave.id}`,
+          name: `Mesh RF Link: ${master.name} ↔ ${slave.name}`,
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray([
+              master.lng, master.lat,
+              slave.lng, slave.lat,
+            ]),
+            width: 3.5,
+            clampToGround: true,
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.35,
+              taperPower: 0.8,
+              color: Cesium.Color.fromCssColorString("#22c55e"), // Vibrant RF link green (Master ↔ Slave)
+            }),
+          },
+        });
+        (linkLine as any)._nodeId = slave.id;
+        meshNodeEntitiesRef.current.push(linkLine);
 
-      // Midpoint RF Telemetry Badge
-      const midLat = (master.lat + slave.lat) / 2;
-      const midLng = (master.lng + slave.lng) / 2;
-      const distKm = calculateDistanceKm(master.lat, master.lng, slave.lat, slave.lng);
-      const midBadge = viewer.entities.add({
-        id: `badge-${slave.id}`,
-        name: `Link Status: ${master.name} ↔ ${slave.name}`,
-        position: Cesium.Cartesian3.fromDegrees(midLng, midLat),
-        label: {
-          text: `Connected • ${distKm.toFixed(2)} km`,
-          font: "bold 22px monospace",
-          scale: 0.5,
-          fillColor: Cesium.Color.fromCssColorString("#a5f3fc"),
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 3,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          showBackground: true,
-          backgroundColor: Cesium.Color.fromCssColorString("#042f2e").withAlpha(0.95),
-          backgroundPadding: new Cesium.Cartesian2(8, 4),
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      });
-      (midBadge as any)._nodeId = slave.id;
-      meshNodeEntitiesRef.current.push(midBadge);
+        // Midpoint RF Telemetry Badge
+        const midLat = (master.lat + slave.lat) / 2;
+        const midLng = (master.lng + slave.lng) / 2;
+        const distKm = calculateDistanceKm(master.lat, master.lng, slave.lat, slave.lng);
+        const midBadge = viewer.entities.add({
+          id: `badge-${slave.id}`,
+          name: `Link Status: ${master.name} ↔ ${slave.name}`,
+          position: Cesium.Cartesian3.fromDegrees(midLng, midLat),
+          label: {
+            text: `Connected • ${distKm.toFixed(2)} km`,
+            font: "bold 22px monospace",
+            scale: 0.5,
+            fillColor: Cesium.Color.fromCssColorString("#a5f3fc"),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString("#042f2e").withAlpha(0.95),
+            backgroundPadding: new Cesium.Cartesian2(8, 4),
+            verticalOrigin: Cesium.VerticalOrigin.CENTER,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+        (midBadge as any)._nodeId = slave.id;
+        meshNodeEntitiesRef.current.push(midBadge);
+      }
     });
 
     // 3. Render Deployed Sensors (Connected to their respective Slave node)
@@ -2435,6 +2554,7 @@ export function CesiumDigitalTwinViewer({
 
         viewerRef.current = viewer;
         setCesiumViewer(viewer);
+        (window as any)._dtCesiumViewer = viewer;
 
         // High-performance 60 FPS resolution configuration (prevents GPU fill-rate exhaustion)
         viewer.useBrowserRecommendedResolution = true;
@@ -3886,6 +4006,58 @@ export function CesiumDigitalTwinViewer({
             >
 
 
+              {/* MASTER / SLAVE / SENSOR MESH */}
+              <div className="space-y-1">
+                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5 flex items-center justify-between">
+                  <span>IoT Sensor Mesh</span>
+                  <span className="text-[9px] text-cyan-400 font-mono">
+                    {meshNodes.length} nodes · {deployedSensors.length} sensors
+                  </span>
+                </div>
+                <div
+                  onClick={() => {
+                    enterFullscreen();
+                    setSimulationMenuOpen(false);
+                    setShowEvacPanel(false);
+                    setShowRainPanel(false);
+                    setShowMeshPanel(true);
+                  }}
+                  className="p-2 bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-cyan-500/50 rounded-lg flex items-center justify-between cursor-pointer transition-all group"
+                >
+                  <div>
+                    <div className="text-xs font-semibold text-white group-hover:text-cyan-300">
+                      IoT Mesh Nodes & Sensors
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {meshNodes.length > 0
+                        ? `${masterNode ? "1 Master" : "0 Master"}, ${slaveNodes.length} Slaves, ${deployedSensors.length} Sensors`
+                        : "Click to place Master, Slaves & Sensors"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      enterFullscreen();
+                      setSimulationMenuOpen(false);
+                      setShowEvacPanel(false);
+                      setShowRainPanel(false);
+                      setShowMeshPanel(true);
+                    }}
+                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      showMeshPanel
+                        ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-xs"
+                        : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700"
+                    }`}
+                  >
+                    {showMeshPanel ? "Active" : "Open"}
+                  </button>
+                </div>
+              </div>
+
+              {/* DIVIDER */}
+              <div className="border-t border-slate-800" />
+
               {/* RAIN */}
               <div className="space-y-1">
                 <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
@@ -4482,6 +4654,225 @@ export function CesiumDigitalTwinViewer({
       )}
 
 
+
+      {/* 📡 IOT MESH NODES & SENSORS (MASTER / SLAVE) FLOATING OVERLAY PANEL */}
+      {showMeshPanel && (
+        <div
+          onWheel={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+          style={{ maxHeight: isFullscreen ? "85vh" : "calc(100% - 70px)" }}
+          className="absolute top-14 right-3 z-30 w-96 bg-slate-900/95 backdrop-blur-md border border-cyan-500/50 rounded-xl p-3.5 shadow-2xl text-white flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="size-6 rounded-md bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                <Network className="size-3.5" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <span>IoT Mesh Architecture</span>
+                  <span className="text-[9px] px-1.5 py-0.5 bg-cyan-950 text-cyan-300 rounded border border-cyan-800 font-mono">
+                    Master / Slave
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-400">Click anywhere on map to drop nodes & field sensors</div>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowMeshPanel(false)}
+              className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              title="Close Mesh Panel"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
+            {/* Quick Summary Bar */}
+            <div className="grid grid-cols-3 gap-1.5">
+              <div className="bg-slate-950/70 border border-amber-500/30 rounded-lg p-2 text-center">
+                <div className="text-[9px] text-amber-400 font-bold uppercase tracking-wider">Master Gateway</div>
+                <div className="text-xs font-bold text-amber-200 mt-0.5 font-mono">
+                  {masterNode ? "1 Active" : "0 Placed"}
+                </div>
+              </div>
+              <div className="bg-slate-950/70 border border-cyan-500/30 rounded-lg p-2 text-center">
+                <div className="text-[9px] text-cyan-400 font-bold uppercase tracking-wider">Slave Nodes</div>
+                <div className="text-xs font-bold text-cyan-200 mt-0.5 font-mono">
+                  {slaveNodes.length} Deployed
+                </div>
+              </div>
+              <div className="bg-slate-950/70 border border-emerald-500/30 rounded-lg p-2 text-center">
+                <div className="text-[9px] text-emerald-400 font-bold uppercase tracking-wider">Sensors</div>
+                <div className="text-xs font-bold text-emerald-200 mt-0.5 font-mono">
+                  {deployedSensors.length} Live
+                </div>
+              </div>
+            </div>
+
+            {/* 📍 Click Map to Place Section */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 space-y-2">
+              <div className="text-[11px] font-bold text-cyan-300 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <MapPin className="size-3.5 text-cyan-400" />
+                  Place Nodes Anywhere on 3D Map
+                </span>
+                {isPickingLocation && (
+                  <span className="text-[9px] bg-amber-950 text-amber-300 px-1.5 py-0.5 rounded animate-pulse">
+                    Click Map Now
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsPickingLocation("master")}
+                  className={`p-2 rounded-lg text-xs font-semibold cursor-pointer border text-left transition-all ${
+                    isPickingLocation === "master"
+                      ? "bg-amber-950/90 border-amber-400 ring-2 ring-amber-500 text-white"
+                      : "bg-slate-900 hover:bg-slate-850 border-amber-500/30 text-amber-200"
+                  }`}
+                >
+                  <div className="font-bold text-amber-300 flex items-center gap-1">
+                    <Radio className="size-3 text-amber-400" />
+                    <span>+ Drop Master</span>
+                  </div>
+                  <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
+                    Central LoRaWAN Gateway node
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsPickingLocation("slave")}
+                  className={`p-2 rounded-lg text-xs font-semibold cursor-pointer border text-left transition-all ${
+                    isPickingLocation === "slave"
+                      ? "bg-cyan-950/90 border-cyan-400 ring-2 ring-cyan-500 text-white"
+                      : "bg-slate-900 hover:bg-slate-850 border-cyan-500/30 text-cyan-200"
+                  }`}
+                >
+                  <div className="font-bold text-cyan-300 flex items-center gap-1">
+                    <Cpu className="size-3 text-cyan-400" />
+                    <span>+ Drop Slave</span>
+                  </div>
+                  <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
+                    Relay Slave node for sensors
+                  </div>
+                </button>
+              </div>
+
+              {/* Quick Preset Sensor buttons */}
+              <div className="pt-1 space-y-1.5">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  Drop Sensor Node on Map:
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {[
+                    { type: "water_level", label: "Water Level", icon: Waves, color: "text-cyan-300 hover:bg-cyan-950" },
+                    { type: "soil_moisture", label: "Soil Moisture", icon: Droplets, color: "text-emerald-300 hover:bg-emerald-950" },
+                    { type: "imu", label: "9-Axis IMU", icon: Navigation, color: "text-purple-300 hover:bg-purple-950" },
+                    { type: "tilt", label: "Tilt Sentry", icon: ShieldAlert, color: "text-amber-300 hover:bg-amber-950" },
+                    { type: "raindrop", label: "Rain Drop", icon: CloudRain, color: "text-sky-300 hover:bg-sky-950" },
+                  ].map((s) => {
+                    const SIcon = s.icon;
+                    const isActive = isPickingLocation === s.type;
+                    return (
+                      <button
+                        key={s.type}
+                        type="button"
+                        onClick={() => setIsPickingLocation(s.type as SensorType)}
+                        className={`p-1.5 rounded text-[10px] font-semibold border border-slate-800 bg-slate-900 flex items-center gap-1 cursor-pointer transition-all ${
+                          isActive ? "bg-cyan-600 text-white border-cyan-400" : s.color
+                        }`}
+                      >
+                        <SIcon className="size-3" />
+                        <span className="truncate">{s.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Instant Auto-Deploy Button */}
+              <button
+                type="button"
+                onClick={addMasterAtCenter}
+                className="w-full mt-1.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs rounded-lg shadow cursor-pointer transition-all flex items-center justify-center gap-1.5"
+              >
+                <Zap className="size-3.5" />
+                <span>Auto-Deploy Gateway & Nodes at Map Center</span>
+              </button>
+            </div>
+
+            {/* Deployed Nodes List */}
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                <span>Deployed Mesh Nodes ({meshNodes.length})</span>
+                <button
+                  type="button"
+                  onClick={() => setShowMeshNodes((prev) => !prev)}
+                  className={`text-[9px] px-2 py-0.5 rounded font-mono border transition-all cursor-pointer flex items-center gap-1 ${
+                    showMeshNodes
+                      ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30"
+                      : "bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200"
+                  }`}
+                  title="Toggle visibility of nodes and sensors on 3D map"
+                >
+                  <span>{showMeshNodes ? "👁️ Visible on 3D Map" : "👁️‍🗨️ Hidden"}</span>
+                </button>
+              </div>
+
+              {meshNodes.length === 0 ? (
+                <div className="text-center py-4 bg-slate-950/60 rounded-xl border border-dashed border-slate-800 text-slate-500 text-xs">
+                  No mesh nodes deployed yet. Click "+ Drop Master" or "+ Drop Slave" above to place anywhere on the 3D viewer!
+                </div>
+              ) : (
+                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin scrollbar-thumb-slate-700">
+                  {meshNodes.map((node) => {
+                    const isMaster = node.type === "master";
+                    const nodeSensors = deployedSensors.filter((s) => s.slaveId === node.id);
+                    return (
+                      <div
+                        key={node.id}
+                        className={`p-2 rounded-xl border flex items-center justify-between text-xs transition-all ${
+                          isMaster
+                            ? "bg-amber-950/40 border-amber-500/50"
+                            : "bg-slate-950/80 border-slate-800 hover:border-cyan-500/40"
+                        }`}
+                      >
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`font-bold ${isMaster ? "text-amber-300" : "text-cyan-300"}`}>
+                              {isMaster ? "📡 " : "⚡ "}{node.name}
+                            </span>
+                            <span className="text-[9px] font-mono px-1.5 py-0.5 bg-slate-900 rounded text-slate-400">
+                              {node.lat.toFixed(4)}°, {node.lng.toFixed(4)}°
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono flex items-center gap-2">
+                            <span>Signal: <strong className="text-emerald-400">{node.signalDbm} dBm</strong></span>
+                            <span>Bat: <strong className="text-emerald-400">{node.battery}%</strong></span>
+                            {!isMaster && <span>Sensors: <strong className="text-cyan-300">{nodeSensors.length}</strong></span>}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => deleteNode(node.id)}
+                          className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
+                          title="Remove node"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 🌧️ STANDALONE RAIN SIMULATION PANEL (Shows ONLY Rain without Simulation Studio) */}
       {showRainPanel && (

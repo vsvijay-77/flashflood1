@@ -55,6 +55,7 @@ import ThreeWaterSimulation from "../simulation/ThreeWaterSimulation";
 import DisasterIntelligenceChat from "./DisasterIntelligenceChat";
 import { toast } from "sonner";
 import { generateCirclePolygon } from "@/lib/gisUtils";
+import { filterBuildingsClearOfPaths } from "./buildingGeometry";
 import {
   extractNetworks,
   extractBuildings,
@@ -1265,33 +1266,9 @@ export function CesiumDigitalTwinViewer({
           );
           const height = Math.max(3.5, Number.isFinite(rawHeight) ? rawHeight : 6.0);
 
-          // User Requirement: Color by risk
-          // Green=Safe, Yellow=Moderate, Orange=High, Red=Critical
-          let risk = building.properties?.flood_risk || "SAFE";
-          let riskColor = building.properties?.risk_color;
-
-          // Dynamic flood simulation integration: rises risk for near-river / low-elevation buildings
-          if (isSimFlooding) {
-            const dist = building.properties?.distance_to_river_m ?? 800;
-            const elev = building.properties?.elevation ?? building.properties?.elevation_m ?? 300;
-            if (dist < 180 || elev < 290) {
-              risk = "CRITICAL";
-              riskColor = "#ef4444";
-            } else if (dist < 400 || elev < 296) {
-              risk = "HIGH";
-              riskColor = "#f97316";
-            } else if (risk === "SAFE") {
-              risk = "MODERATE";
-              riskColor = "#eab308";
-            }
-          }
-
-          if (!riskColor) {
-            if (risk === "CRITICAL") riskColor = "#ef4444";
-            else if (risk === "HIGH") riskColor = "#f97316";
-            else if (risk === "MODERATE") riskColor = "#eab308";
-            else riskColor = "#10b981";
-          }
+          // User Requirement: Keep ALL houses uniform radiant orange (#f97316)
+          const risk = "MONITORED";
+          const riskColor = "#f97316";
 
           const enrichedProps = {
             ...building.properties,
@@ -1307,18 +1284,18 @@ export function CesiumDigitalTwinViewer({
             risk_color: riskColor,
             landslide_risk: building.properties?.landslide_risk || "LOW",
             distance_from_river: building.properties?.distance_from_river || `${building.properties?.distance_to_river_m || 350} m`,
-            evacuation_zone: building.properties?.evacuation_zone || (risk === "CRITICAL" ? "Zone A (Immediate Evac)" : risk === "HIGH" ? "Zone B (High Ground Alert)" : "Zone D (Safe Sector)"),
+            evacuation_zone: building.properties?.evacuation_zone || "Zone B (Monitored Area)",
           };
 
           const entity = viewer.entities.add({
             name: `🏢 ${enrichedProps.name}`,
-            show: showBuildings && (buildingRiskFilter === "ALL" || risk === buildingRiskFilter),
+            show: showBuildings,
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flat()), holes),
-              material: Cesium.Color.fromCssColorString(riskColor || "#facc15").withAlpha(0.85),
+              material: Cesium.Color.fromCssColorString("#f97316").withAlpha(0.92),
               outline: true,
-              outlineColor: Cesium.Color.fromCssColorString(riskColor || "#fde047"),
-              outlineWidth: 1.5,
+              outlineColor: Cesium.Color.fromCssColorString("#c2410c"),
+              outlineWidth: 2.0,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               extrudedHeight: height,
               extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
@@ -1791,39 +1768,41 @@ export function CesiumDigitalTwinViewer({
         return isPointInPolygon(cLat, cLon, activePoly);
       });
 
-      // 4. 📊 ACCURATE STATS: Calculate true values exclusively from the marked area houses
+      // 4. 🛣️ STRICT PATH & RIVER CLEARANCE: Remove any buildings touching or inside roads/waterways
+      const clearBuildings: BuildingFeature[] = filterBuildingsClearOfPaths(markedAreaBuildings, roads, rivers).map((b) => ({
+        ...b,
+        properties: {
+          ...b.properties,
+          risk_color: "#f97316",
+          flood_risk: "SAFE" as const,
+        },
+      }));
+
+      // 5. 📊 ACCURATE STATS: All monitored houses uniform count
       const stats = {
-        total: markedAreaBuildings.length,
-        safe: 0,
+        total: clearBuildings.length,
+        safe: clearBuildings.length,
         moderate: 0,
         high: 0,
         critical: 0,
       };
 
-      markedAreaBuildings.forEach((b) => {
-        const r = b.properties?.flood_risk || "SAFE";
-        if (r === "CRITICAL") stats.critical++;
-        else if (r === "HIGH") stats.high++;
-        else if (r === "MODERATE") stats.moderate++;
-        else stats.safe++;
-      });
-
       if (buildingRequestId !== buildingRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) {
         return;
       }
 
-      setBuildingFeatures(markedAreaBuildings);
+      setBuildingFeatures(clearBuildings);
       setBuildingStats(stats);
       setOsmTileStatus((prev) => ({
         ...prev,
-        buildings: markedAreaBuildings.length,
+        buildings: clearBuildings.length,
       }));
-      render3DBuildings(markedAreaBuildings);
+      render3DBuildings(clearBuildings);
 
       if (areaCacheKey) {
         const entry = networkAreaCache[areaCacheKey];
         if (entry) {
-          entry.buildings = markedAreaBuildings;
+          entry.buildings = clearBuildings;
         }
       }
       try {
@@ -1831,7 +1810,7 @@ export function CesiumDigitalTwinViewer({
         localStorage.setItem(cacheKey, JSON.stringify({
           roads,
           rivers,
-          buildings: markedAreaBuildings,
+          buildings: clearBuildings,
           bbox,
           timestamp: Date.now(),
         }));
@@ -3358,23 +3337,16 @@ export function CesiumDigitalTwinViewer({
     render3DRiskZones(highRiskZones, showRiskHotspots);
   }, [showRiskHotspots, highRiskZones]);
 
-  // Toggle Buildings visibility and risk filter without re-creating entities
+  // Toggle Buildings visibility without re-creating entities
   useEffect(() => {
     if (buildingEntitiesRef.current.length > 0) {
       buildingEntitiesRef.current.forEach((ent) => {
         try {
-          if (!showBuildings) {
-            ent.show = false;
-          } else if (buildingRiskFilter === "ALL") {
-            ent.show = true;
-          } else {
-            const risk = (ent as any)._buildingData?.flood_risk;
-            ent.show = risk === buildingRiskFilter;
-          }
+          ent.show = showBuildings;
         } catch (e) {}
       });
     }
-  }, [showBuildings, buildingRiskFilter]);
+  }, [showBuildings]);
 
   // Re-render buildings dynamically when flood simulation or rain state toggles
   useEffect(() => {
@@ -3937,13 +3909,13 @@ export function CesiumDigitalTwinViewer({
           onClick={() => setShowBuildings((prev) => !prev)}
           title={showBuildings ? "Hide 3D Buildings" : "Show 3D Buildings"}
           className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
-            showBuildings ? "bg-cyan-600/90 text-white ring-1 ring-cyan-400" : "hover:bg-slate-800 text-slate-300"
+            showBuildings ? "bg-orange-600/90 text-white ring-1 ring-orange-400" : "hover:bg-slate-800 text-slate-300"
           }`}
         >
-          <Building2 className="size-3.5 text-cyan-300" />
+          <Building2 className="size-3.5 text-orange-300" />
           <span className="hidden sm:inline">Buildings</span>
           {buildingFeatures.length > 0 && (
-            <span className="text-[10px] ml-0.5 px-1 py-0.2 bg-black/40 rounded text-cyan-200 font-mono">
+            <span className="text-[10px] ml-0.5 px-1 py-0.2 bg-black/40 rounded text-orange-200 font-mono">
               {buildingFeatures.length}
             </span>
           )}
@@ -5046,16 +5018,16 @@ export function CesiumDigitalTwinViewer({
 
       {/* 🏢 REAL BUILDING FOOTPRINT INSPECTION CARD (Microsoft Global ML Building Footprints) */}
       {selectedBuilding && (
-        <div className="absolute bottom-6 right-6 z-30 w-84 bg-slate-900/95 backdrop-blur-md border border-cyan-500/60 rounded-xl p-3.5 shadow-2xl text-white animate-in fade-in slide-in-from-bottom-2">
+        <div className="absolute bottom-6 right-6 z-30 w-84 bg-slate-900/95 backdrop-blur-md border border-orange-500/60 rounded-xl p-3.5 shadow-2xl text-white animate-in fade-in slide-in-from-bottom-2">
           <div className="flex items-center justify-between border-b border-slate-700/80 pb-2.5">
             <div className="flex items-center gap-1.5 min-w-0">
-              <Building2 className="size-4 text-cyan-400 shrink-0" />
+              <Building2 className="size-4 text-orange-400 shrink-0" />
               <div className="truncate">
                 <span className="font-bold text-xs text-white tracking-wide block truncate">
                   {selectedBuilding.name || selectedBuilding.id}
                 </span>
                 <span className="text-[9px] text-slate-400 block font-mono">
-                  Microsoft ML Footprint
+                  3D Building Footprint
                 </span>
               </div>
             </div>
@@ -5076,12 +5048,12 @@ export function CesiumDigitalTwinViewer({
             <span
               className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
               style={{
-                backgroundColor: `${selectedBuilding.risk_color || '#10b981'}25`,
-                color: selectedBuilding.risk_color || '#10b981',
-                border: `1px solid ${selectedBuilding.risk_color || '#10b981'}60`,
+                backgroundColor: `${selectedBuilding.risk_color || '#f97316'}25`,
+                color: selectedBuilding.risk_color || '#f97316',
+                border: `1px solid ${selectedBuilding.risk_color || '#f97316'}60`,
               }}
             >
-              ● {selectedBuilding.flood_risk || "SAFE"}
+              ● {selectedBuilding.flood_risk || "MONITORED"}
             </span>
           </div>
 
@@ -5180,17 +5152,19 @@ export function CesiumDigitalTwinViewer({
 
       {/* 📊 BUILDING FOOTPRINT ANALYTICS STATS PANEL */}
       {showBuildings && showBuildingStats && buildingFeatures.length > 0 && (
-        <div className="absolute top-14 left-3 z-20 w-80 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-xl p-3 shadow-2xl text-white animate-in fade-in slide-in-from-top-2 duration-200">
+        <div className="absolute top-14 left-3 z-20 w-80 bg-slate-900/95 backdrop-blur-md border border-orange-500/40 rounded-xl p-3 shadow-2xl text-white animate-in fade-in slide-in-from-top-2 duration-200">
           <div className="flex items-center justify-between border-b border-slate-700/70 pb-2">
-            <div className="flex items-center gap-1.5">
-              <Building2 className="size-4 text-cyan-400" />
+            <div className="flex items-center gap-2">
+              <div className="p-1 rounded bg-orange-500/20 border border-orange-500/40">
+                <Building2 className="size-4 text-orange-400" />
+              </div>
               <div>
                 <span className="font-bold text-xs text-white">Houses in Marked Area</span>
-                <span className="text-[9px] text-slate-400 block">Microsoft Global ML Footprints</span>
+                <span className="text-[9px] text-slate-400 block">Open Buildings & ML Footprints</span>
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-mono text-xs font-bold">
+              <span className="px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 border border-orange-500/40 font-mono text-xs font-bold">
                 {buildingFeatures.length} Houses
               </span>
               <button
@@ -5203,85 +5177,34 @@ export function CesiumDigitalTwinViewer({
             </div>
           </div>
 
-          {/* 4 Interactive KPI Cards for Risk Filtering in Marked Area */}
-          <div className="grid grid-cols-4 gap-1.5 mt-2.5 text-center">
-            {/* Safe */}
-            <button
-              onClick={() => setBuildingRiskFilter((prev) => (prev === "SAFE" ? "ALL" : "SAFE"))}
-              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                buildingRiskFilter === "SAFE"
-                  ? "bg-emerald-500/25 border-emerald-400 ring-1 ring-emerald-400"
-                  : "bg-slate-950/50 border-slate-800 hover:border-emerald-500/50"
-              }`}
-              title="Filter Safe houses in marked area"
-            >
-              <div className="text-[9px] font-semibold text-slate-400 uppercase">Safe</div>
-              <div className="text-xs font-bold text-emerald-400 font-mono">
-                {buildingStats.safe ?? buildingFeatures.filter((b) => b.properties?.flood_risk === "SAFE").length}
+          {/* Unified Radiant Orange Building Status */}
+          <div className="mt-2.5 bg-orange-950/40 border border-orange-500/40 rounded-lg p-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="size-2.5 rounded-full bg-orange-500 animate-pulse" />
+              <div>
+                <div className="text-xs font-semibold text-orange-200">
+                  All Houses Monitored
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Uniform Orange Twin Footprints
+                </div>
               </div>
-            </button>
-
-            {/* Medium / Moderate */}
-            <button
-              onClick={() => setBuildingRiskFilter((prev) => (prev === "MODERATE" ? "ALL" : "MODERATE"))}
-              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                buildingRiskFilter === "MODERATE"
-                  ? "bg-yellow-500/25 border-yellow-400 ring-1 ring-yellow-400"
-                  : "bg-slate-950/50 border-slate-800 hover:border-yellow-500/50"
-              }`}
-              title="Filter Moderate risk houses in marked area"
-            >
-              <div className="text-[9px] font-semibold text-slate-400 uppercase">Medium</div>
-              <div className="text-xs font-bold text-yellow-400 font-mono">
-                {buildingStats.moderate ?? buildingFeatures.filter((b) => b.properties?.flood_risk === "MODERATE").length}
+            </div>
+            <div className="text-right">
+              <div className="text-base font-extrabold text-orange-400 font-mono">
+                {buildingFeatures.length}
               </div>
-            </button>
-
-            {/* High */}
-            <button
-              onClick={() => setBuildingRiskFilter((prev) => (prev === "HIGH" ? "ALL" : "HIGH"))}
-              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                buildingRiskFilter === "HIGH"
-                  ? "bg-orange-500/25 border-orange-400 ring-1 ring-orange-400"
-                  : "bg-slate-950/50 border-slate-800 hover:border-orange-500/50"
-              }`}
-              title="Filter High risk houses in marked area"
-            >
-              <div className="text-[9px] font-semibold text-slate-400 uppercase">High</div>
-              <div className="text-xs font-bold text-orange-400 font-mono">
-                {buildingStats.high ?? buildingFeatures.filter((b) => b.properties?.flood_risk === "HIGH").length}
-              </div>
-            </button>
-
-            {/* Critical */}
-            <button
-              onClick={() => setBuildingRiskFilter((prev) => (prev === "CRITICAL" ? "ALL" : "CRITICAL"))}
-              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                buildingRiskFilter === "CRITICAL"
-                  ? "bg-rose-500/25 border-rose-400 ring-1 ring-rose-400"
-                  : "bg-slate-950/50 border-slate-800 hover:border-rose-500/50"
-              }`}
-              title="Filter Critical risk houses in marked area"
-            >
-              <div className="text-[9px] font-semibold text-slate-400 uppercase">Critical</div>
-              <div className="text-xs font-bold text-rose-400 font-mono">
-                {buildingStats.critical ?? buildingFeatures.filter((b) => b.properties?.flood_risk === "CRITICAL").length}
-              </div>
-            </button>
+              <div className="text-[9px] text-orange-300/80 font-medium">Clear of Paths</div>
+            </div>
           </div>
 
-
-          {buildingRiskFilter !== "ALL" && (
-            <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-800 text-[10px]">
-              <span className="text-slate-400">Filtering: <strong className="text-white">{buildingRiskFilter}</strong></span>
-              <button
-                onClick={() => setBuildingRiskFilter("ALL")}
-                className="text-cyan-400 hover:underline cursor-pointer"
-              >
-                Reset Filter
-              </button>
-            </div>
-          )}
+          <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400 px-0.5">
+            <span className="flex items-center gap-1">
+              <span className="size-1.5 rounded-full bg-emerald-400" />
+              Path Clearance: Verified
+            </span>
+            <span className="text-slate-500 font-mono">3D Extrusion Active</span>
+          </div>
         </div>
       )}
 

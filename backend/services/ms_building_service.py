@@ -17,12 +17,13 @@ from typing import Dict, Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path("/Users/vijay/Documents/flash_flood/backend/cache/ms_buildings")
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+CACHE_DIR = BACKEND_DIR / "cache" / "ms_buildings"
 TILES_DIR = CACHE_DIR / "tiles"
 ZONES_DIR = CACHE_DIR / "zones"
 INDEX_PATH = CACHE_DIR / "dataset_links_index.json"
 DATASET_LINKS_URL = "https://bfppub.blob.core.windows.net/%24web/2026-08-13/dataset-links.csv"
-FALLBACK_GEOJSON = Path("/Users/vijay/Documents/flash_flood/backend/pollachi_buildings.geojson")
+FALLBACK_GEOJSON = BACKEND_DIR / "pollachi_buildings.geojson"
 
 os.makedirs(TILES_DIR, exist_ok=True)
 os.makedirs(ZONES_DIR, exist_ok=True)
@@ -250,21 +251,18 @@ def compute_building_risk(
 
     risk_score = min(1.0, max(0.0, base_score + elev_factor + sim_boost))
 
+    risk_color = "#f97316"  # Radiant Orange for all houses
     if risk_score >= 0.68:
         flood_risk = "CRITICAL"
-        risk_color = "#ef4444"  # Red
         evac_zone = "Zone A (Immediate Evacuation)"
     elif risk_score >= 0.42:
         flood_risk = "HIGH"
-        risk_color = "#f97316"  # Orange
         evac_zone = "Zone B (High Ground Alert)"
     elif risk_score >= 0.20:
         flood_risk = "MODERATE"
-        risk_color = "#eab308"  # Yellow
         evac_zone = "Zone C (Monitoring Alert)"
     else:
         flood_risk = "SAFE"
-        risk_color = "#10b981"  # Emerald Green
         evac_zone = "Zone D (Safe Sector)"
 
     # 4. Landslide risk based on elevation/slope proxy
@@ -854,18 +852,7 @@ class MSBuildingService:
                 counts = osm_counts
                 source_name = "Microsoft Global ML Building Footprints"
 
-        # Step 5: Tier 4 - Road corridor settlement synthesizer if rural area has no pre-mapped footprints
-        if len(matching_features) < 5:
-            logger.info("Generating settlement footprints along road corridors inside marked area...")
-            gen_features, gen_counts = await self._extract_from_settlement_roads(
-                min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points
-            )
-            if len(gen_features) > 0:
-                matching_features = gen_features
-                counts = gen_counts
-                source_name = "Microsoft Global ML Building Footprints"
-
-        # Step 6: Local fallback GeoJSON (for Pollachi baseline) if still empty
+        # Step 5: Local fallback GeoJSON (for Pollachi baseline) if still empty
         if len(matching_features) == 0 and FALLBACK_GEOJSON.exists():
             try:
                 with open(FALLBACK_GEOJSON, "r", encoding="utf-8") as f:

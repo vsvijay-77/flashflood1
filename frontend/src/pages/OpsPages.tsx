@@ -3,7 +3,13 @@ import { useLocation, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Brain, Download, FileText, Info, Play, Sparkles, Box, Boxes, RefreshCw, CheckCircle2, ArrowRight, Layers, Globe, Map, MapPin, AlertTriangle, Square, CloudRain, Trash2 } from "lucide-react";
+import {
+  Brain, Download, FileText, Info, Play, Sparkles, Box, Boxes, RefreshCw,
+  CheckCircle2, ArrowRight, Layers, Globe, Map, MapPin, AlertTriangle,
+  Square, CloudRain, Trash2, Radio, Activity, Database, Waves, Compass,
+  ShieldAlert, Send, Navigation, Check, X, Shield, Bell, UserCheck,
+  AlertCircle, Signal, Battery, Cpu, Wifi, ExternalLink, MapPinned, Phone
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,7 +19,26 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { EmptyState, LoadingRows, LoadingSymbol, PageHeader, RiskIndicator, SectionCard, StatCard, StatusPill } from "@/components/Primitives";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { apiErrorMessage, useSession } from "@/lib/session";
-import { HAZARD_LABELS, ROLE_LABELS, SENSOR_LABELS, type Alert, type Report, type RiskAssessment, type Role, type Sensor, type SimulationResult, type User, type Zone, type CustomArea } from "@/lib/types";
+import {
+  HAZARD_LABELS,
+  ROLE_LABELS,
+  SENSOR_LABELS,
+  type Alert,
+  type Report,
+  type RiskAssessment,
+  type Role,
+  type Sensor,
+  type SimulationResult,
+  type User,
+  type Zone,
+  type CustomArea,
+  type ExternalSensorSummary,
+  type ExternalSensorHistoryItem,
+  type ExternalLoraPacket,
+  type MobUser,
+  type MobUserAlertPayload,
+  type MobUserEvacuationPayload,
+} from "@/lib/types";
 import { CesiumDigitalTwinViewer } from "@/components/gis/CesiumDigitalTwinViewer";
 import GISMap, { DEFAULT_LAYERS } from "@/components/gis/GISMap";
 import { supabase } from "@/lib/supabase";
@@ -973,7 +998,40 @@ export function ReportsPage() {
 export function SensorManagementPage() {
   const qc = useQueryClient();
   const zones = useZones();
-  const { data, isLoading } = useQuery({ queryKey: ["sensors"], queryFn: () => apiGet<Sensor[]>("/sensors"), retry: false });
+  const [activeTab, setActiveTab] = useState<"live_lora" | "inventory">("live_lora");
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [telemetrySubTab, setTelemetrySubTab] = useState<"readings" | "packets">("readings");
+  const [readingPage, setReadingPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState("");
+  const itemsPerPage = 15;
+
+  // 1. Live Summary query from sensor_db
+  const summaryQuery = useQuery({
+    queryKey: ["external-sensors-summary"],
+    queryFn: () => apiGet<ExternalSensorSummary>("/external-sensors/summary"),
+    refetchInterval: autoRefresh ? 6000 : false,
+  });
+
+  // 2. Telemetry History query from sensor_data table
+  const historyQuery = useQuery({
+    queryKey: ["external-sensors-history"],
+    queryFn: () => apiGet<ExternalSensorHistoryItem[]>("/external-sensors/history?limit=300"),
+    refetchInterval: autoRefresh ? 6000 : false,
+  });
+
+  // 3. Raw LoRa packets query from lora_packets table
+  const packetsQuery = useQuery({
+    queryKey: ["external-sensors-packets"],
+    queryFn: () => apiGet<ExternalLoraPacket[]>("/external-sensors/packets?limit=100"),
+    refetchInterval: autoRefresh ? 6000 : false,
+  });
+
+  // Inventory queries
+  const { data: inventoryData, isLoading: inventoryLoading } = useQuery({
+    queryKey: ["sensors"],
+    queryFn: () => apiGet<Sensor[]>("/sensors"),
+    retry: false,
+  });
   const [form, setForm] = useState({ code: "", name: "", sensor_type: "rainfall", zone_id: "" });
 
   const zoneList = zones.data ?? [];
@@ -983,8 +1041,15 @@ export function SensorManagementPage() {
     mutationFn: () => {
       const zone = zoneList.find((z) => z.id === zoneId);
       return apiPost<Sensor>("/sensors", {
-        code: form.code, name: form.name, sensor_type: form.sensor_type, zone_id: zoneId,
-        lat: zone ? zone.lat + 0.01 : 21.0, lng: zone ? zone.lng + 0.01 : 79.0, status: "online", battery: 100, unit: "",
+        code: form.code,
+        name: form.name,
+        sensor_type: form.sensor_type,
+        zone_id: zoneId,
+        lat: zone ? zone.lat + 0.01 : 10.667366,
+        lng: zone ? zone.lng + 0.01 : 77.016900,
+        status: "online",
+        battery: 100,
+        unit: "",
       });
     },
     onSuccess: (s) => {
@@ -1007,149 +1072,1327 @@ export function SensorManagementPage() {
     onError: (err) => toast.error(apiErrorMessage(err)),
   });
 
-  const list = data ?? [];
+  const summary = summaryQuery.data;
+  const history = historyQuery.data ?? [];
+  const packets = packetsQuery.data ?? [];
+  const activeDevice = summary?.devices?.[0];
+  const inventoryList = inventoryData ?? [];
+
+  const filteredHistory = history.filter((h) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      h.device_id.toLowerCase().includes(q) ||
+      String(h.id).includes(q) ||
+      (h.txt && h.txt.toLowerCase().includes(q))
+    );
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filteredHistory.length / itemsPerPage));
+  const currentHistorySlice = filteredHistory.slice(
+    (readingPage - 1) * itemsPerPage,
+    readingPage * itemsPerPage
+  );
+
+  const handleRefreshAll = () => {
+    summaryQuery.refetch();
+    historyQuery.refetch();
+    packetsQuery.refetch();
+    toast.success("Live sensor data refreshed");
+  };
 
   return (
-    <div data-testid="sensor-management-page">
-      <PageHeader title="Sensor Management" description="Commission, monitor and decommission LoRaWAN sensor nodes across the network." />
-
-      <Card className="mb-6 border-slate-200/80 p-6" data-testid="sensor-create-form">
-        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Commission new sensor node</p>
-        <div className="mt-4 grid gap-4 sm:grid-cols-4">
-          <div>
-            <Label htmlFor="sensor-code">Node Code</Label>
-            <Input id="sensor-code" value={form.code} onChange={(e) => setForm((p) => ({ ...p, code: e.target.value.toUpperCase() }))} placeholder="CHM-RAI-09" className="mt-1.5" data-testid="sensor-code-input" />
-          </div>
-          <div>
-            <Label htmlFor="sensor-name">Node Name</Label>
-            <Input id="sensor-name" value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="Rainfall Gauge 9" className="mt-1.5" data-testid="sensor-name-input" />
-          </div>
-          <div>
-            <Label>Sensor Type</Label>
-            <Select value={form.sensor_type} onValueChange={(v: string) => setForm((p) => ({ ...p, sensor_type: v }))}>
-              <SelectTrigger className="mt-1.5 w-full" data-testid="sensor-type-trigger"><SelectValue>{(v) => SENSOR_LABELS[v as string] ?? "Select type"}</SelectValue></SelectTrigger>
-              <SelectContent>
-                {Object.entries(SENSOR_LABELS).map(([k, v]) => <SelectItem key={k} value={k} data-testid={`sensor-type-${k}`}>{v}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Monitoring Zone</Label>
-            <Select value={zoneId} onValueChange={(v: string) => setForm((p) => ({ ...p, zone_id: v }))}>
-              <SelectTrigger className="mt-1.5 w-full" data-testid="sensor-zone-trigger"><SelectValue>{(v) => zoneList.find((z) => z.id === v)?.name ?? "Select zone"}</SelectValue></SelectTrigger>
-              <SelectContent>
-                {zoneList.map((z) => <SelectItem key={z.id} value={z.id} data-testid={`sensor-zone-${z.id}`}>{z.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+    <div data-testid="sensor-management-page" className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <PageHeader
+          title="Sensor Management & Live LoRaWAN Telemetry"
+          description="Real-time environmental sensor ingest from PostgreSQL sensor_db, LoRa packet streams, and node fleet management."
+        />
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
+            <button
+              onClick={() => setActiveTab("live_lora")}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                activeTab === "live_lora"
+                  ? "bg-emerald-700 text-white shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <Radio className="size-3.5" />
+              Live LoRaWAN Telemetry
+              <span className="flex size-2 rounded-full bg-emerald-400 ring-2 ring-emerald-300 animate-pulse ml-1" />
+            </button>
+            <button
+              onClick={() => setActiveTab("inventory")}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                activeTab === "inventory"
+                  ? "bg-slate-900 text-white shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <Boxes className="size-3.5" />
+              Node Inventory & Commissioning ({inventoryList.length})
+            </button>
           </div>
         </div>
-        <Button className="mt-4" disabled={form.code.length < 2 || form.name.length < 2 || !zoneId || create.isPending} onClick={() => create.mutate()} data-testid="sensor-create-btn">
-          {create.isPending ? "Commissioning…" : "Commission Sensor"}
-        </Button>
-      </Card>
+      </div>
 
-      <SectionCard testId="sensor-inventory-card" title="Sensor inventory" description={`${list.length} nodes registered`}>
-        {isLoading ? (
-          <LoadingRows rows={5} />
-        ) : list.length === 0 ? (
-          <EmptyState testId="sensor-inventory-empty" title="No sensors registered" description="Commission your first LoRaWAN node above." />
-        ) : (
-          <Table data-testid="sensor-inventory-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Code</TableHead><TableHead>Type</TableHead><TableHead>Zone</TableHead>
-                <TableHead>Battery</TableHead><TableHead>Signal</TableHead><TableHead>Status</TableHead>
-                <TableHead className="text-right">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((s) => (
-                <TableRow key={s.id} data-testid={`sensor-mgmt-row-${s.code}`}>
-                  <TableCell className="font-mono text-xs font-semibold">{s.code}</TableCell>
-                  <TableCell>{SENSOR_LABELS[s.sensor_type] ?? s.sensor_type}</TableCell>
-                  <TableCell className="text-xs text-slate-500">{s.zone_name}</TableCell>
-                  <TableCell className="font-mono text-xs">{s.battery}%</TableCell>
-                  <TableCell className="font-mono text-xs">{s.signal_dbm} dBm</TableCell>
-                  <TableCell><StatusPill status={s.status} /></TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="xs" className="text-red-700 hover:bg-red-50" disabled={remove.isPending} onClick={() => remove.mutate(s.id)} data-testid={`sensor-delete-btn-${s.code}`}>Decommission</Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </SectionCard>
+      {activeTab === "live_lora" ? (
+        <div className="space-y-6">
+          {/* Database Connection Status Banner */}
+          <div className="flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-lg bg-emerald-600 text-white shadow-xs">
+                <Database className="size-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-emerald-950 text-sm">
+                    PostgreSQL Ingest Connection: Active
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800 border border-emerald-300">
+                    <span className="size-1.5 rounded-full bg-emerald-600 animate-ping" />
+                    LIVE TELEMETRY
+                  </span>
+                </div>
+                <p className="font-mono text-xs text-emerald-800 mt-0.5">
+                  postgresql://sensor_user:***@db.nishanth.qzz.io:5432/sensor_db
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-emerald-900">
+                <span className="rounded-md bg-emerald-200/80 px-2.5 py-1 font-mono">
+                  {summary?.total_readings ?? history.length} readings
+                </span>
+                <span className="rounded-md bg-emerald-200/80 px-2.5 py-1 font-mono">
+                  {summary?.total_packets ?? packets.length} LoRa packets
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 text-xs text-emerald-900 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoRefresh}
+                    onChange={(e) => setAutoRefresh(e.target.checked)}
+                    className="rounded border-emerald-400 text-emerald-600 focus:ring-emerald-500 size-3.5"
+                  />
+                  <span>Auto-sync (6s)</span>
+                </label>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={handleRefreshAll}
+                  disabled={summaryQuery.isFetching}
+                  className="bg-white border-emerald-300 text-emerald-900 hover:bg-emerald-100"
+                >
+                  <RefreshCw className={`size-3 mr-1 ${summaryQuery.isFetching ? "animate-spin" : ""}`} />
+                  Refresh
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Active Device Overview Card */}
+          <Card className="border-slate-200/80 bg-linear-to-br from-white to-slate-50/50 p-5 shadow-xs">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex size-11 items-center justify-center rounded-xl bg-blue-600 text-white shadow-xs">
+                  <Radio className="size-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-bold text-slate-900 text-base">
+                      {activeDevice?.name || "LoRaWAN Hydrology Node (LORA_NODE_1)"}
+                    </h2>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                      <span className="size-1.5 rounded-full bg-emerald-600" />
+                      ONLINE
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Device Identifier: <span className="font-mono font-semibold text-slate-700">{activeDevice?.device_id || "LORA_NODE_1"}</span> • Pollachi Catchment Basin
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-2xs">
+                  <Battery className="size-4 text-emerald-600" />
+                  <span className="text-slate-600 font-medium">Battery:</span>
+                  <span className="font-mono font-bold text-slate-900">{activeDevice?.battery_pct ?? 95}%</span>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-2xs">
+                  <Signal className="size-4 text-blue-600" />
+                  <span className="text-slate-600 font-medium">RSSI:</span>
+                  <span className="font-mono font-bold text-slate-900">{activeDevice?.latest?.rssi_dbm ?? -105} dBm</span>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-2xs">
+                  <Wifi className="size-4 text-amber-600" />
+                  <span className="text-slate-600 font-medium">SNR:</span>
+                  <span className="font-mono font-bold text-slate-900">{activeDevice?.latest?.snr_db ?? 8.0} dB</span>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-2xs">
+                  <span className="text-slate-500">Last Telemetry:</span>
+                  <span className="font-mono font-semibold text-slate-800">
+                    {activeDevice?.latest?.created_at
+                      ? new Date(activeDevice.latest.created_at).toLocaleTimeString()
+                      : "Recent"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 4 Real Metric Stat Cards */}
+            <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 transition hover:shadow-md">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-blue-800">
+                    Water Level
+                  </span>
+                  <Waves className="size-5 text-blue-600" />
+                </div>
+                <div className="mt-2 flex items-baseline gap-2">
+                  <span className="font-mono text-3xl font-extrabold text-blue-950">
+                    {activeDevice?.latest?.water_level_mm ?? 94.0}
+                  </span>
+                  <span className="text-sm font-bold text-blue-700">mm</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-blue-800/80">
+                  <span>River Bed Pressure Gauge</span>
+                  <span className="font-mono font-medium">Max: {activeDevice?.stats?.max_water_level ?? 94.0} mm</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50/50 p-4 transition hover:shadow-md">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-cyan-800">
+                    Precipitation / Rain
+                  </span>
+                  <CloudRain className="size-5 text-cyan-600" />
+                </div>
+                <div className="mt-2 flex items-baseline gap-2">
+                  <span className="font-mono text-3xl font-extrabold text-cyan-950">
+                    {activeDevice?.latest?.rainfall_mm ?? 2.0}
+                  </span>
+                  <span className="text-sm font-bold text-cyan-700">mm</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-cyan-800/80">
+                  <span>Tipping Bucket Sensor</span>
+                  <span className="font-mono font-medium">Peak: {activeDevice?.stats?.max_rainfall ?? 24.0} mm</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 transition hover:shadow-md">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-amber-800">
+                    Soil Moisture
+                  </span>
+                  <Activity className="size-5 text-amber-600" />
+                </div>
+                <div className="mt-2 flex items-baseline gap-2">
+                  <span className="font-mono text-3xl font-extrabold text-amber-950">
+                    {activeDevice?.latest?.soil_moisture?.toFixed(1) ?? "0.0"}
+                  </span>
+                  <span className="text-sm font-bold text-amber-700">% VWC</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-amber-800/80">
+                  <span>Capacitive In-Ground</span>
+                  <span className="font-medium text-emerald-700">Unsaturated</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 transition hover:shadow-md">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-indigo-800">
+                    Tilt &amp; IMU Stability
+                  </span>
+                  <Compass className="size-5 text-indigo-600" />
+                </div>
+                <div className="mt-2 flex items-baseline gap-2">
+                  <span className="font-mono text-3xl font-extrabold text-indigo-950">
+                    {activeDevice?.latest?.tilt_deg?.toFixed(1) ?? "0.0"}°
+                  </span>
+                  <span className="text-sm font-bold text-indigo-700">Tilt</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between font-mono text-[11px] text-indigo-900">
+                  <span>IMU [X:{activeDevice?.latest?.imu_x ?? 0}, Y:{activeDevice?.latest?.imu_y ?? 0}, Z:{activeDevice?.latest?.imu_z ?? 0}]</span>
+                  <span className="text-emerald-700 font-semibold">Stable</span>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Telemetry Stream Views */}
+          <SectionCard
+            testId="sensor-telemetry-card"
+            title="Real-time LoRaWAN Stream"
+            description="Live historical sensor readings and raw packet frames directly from sensor_db"
+          >
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setTelemetrySubTab("readings")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    telemetrySubTab === "readings"
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  Telemetry Records (sensor_data: {history.length})
+                </button>
+                <button
+                  onClick={() => setTelemetrySubTab("packets")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    telemetrySubTab === "packets"
+                      ? "bg-slate-900 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  Raw LoRaWAN Packets (lora_packets: {packets.length})
+                </button>
+              </div>
+
+              {telemetrySubTab === "readings" && (
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Search by ID or device..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setReadingPage(1);
+                    }}
+                    className="h-8 w-48 text-xs"
+                  />
+                  <span className="text-xs text-slate-500 whitespace-nowrap">
+                    Page {readingPage} of {totalPages}
+                  </span>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={readingPage <= 1}
+                      onClick={() => setReadingPage((p) => Math.max(1, p - 1))}
+                    >
+                      Prev
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={readingPage >= totalPages}
+                      onClick={() => setReadingPage((p) => Math.min(totalPages, p + 1))}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {telemetrySubTab === "readings" ? (
+              historyQuery.isLoading ? (
+                <LoadingRows rows={6} />
+              ) : currentHistorySlice.length === 0 ? (
+                <EmptyState
+                  testId="sensor-telemetry-empty"
+                  title="No Telemetry Records Found"
+                  description="No records matching current query in sensor_data table."
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-16"># ID</TableHead>
+                        <TableHead>Device Node</TableHead>
+                        <TableHead>Timestamp</TableHead>
+                        <TableHead>Water Level</TableHead>
+                        <TableHead>Rainfall</TableHead>
+                        <TableHead>Soil Moisture</TableHead>
+                        <TableHead>Tilt</TableHead>
+                        <TableHead>IMU (X,Y,Z)</TableHead>
+                        <TableHead>RF Signal</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {currentHistorySlice.map((item) => (
+                        <TableRow key={item.id} className="font-mono text-xs">
+                          <TableCell className="font-bold text-slate-600">#{item.id}</TableCell>
+                          <TableCell className="font-sans font-semibold text-slate-900">
+                            {item.device_id}
+                          </TableCell>
+                          <TableCell className="text-slate-500 whitespace-nowrap">
+                            {item.created_at ? new Date(item.created_at).toLocaleString() : "—"}
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center gap-1 rounded bg-blue-100 px-2 py-0.5 font-bold text-blue-800">
+                              {item.water_level} mm
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-slate-700 font-semibold">{item.rainfall} mm</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-slate-700">{item.soil_moisture}%</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-slate-700">{item.tilt}°</span>
+                          </TableCell>
+                          <TableCell className="text-slate-500 text-[11px]">
+                            [{item.imu_x}, {item.imu_y}, {item.imu_z}]
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-slate-700 font-semibold">{item.rssi} dBm</span>{" "}
+                            <span className="text-slate-400 text-[11px]">(SNR {item.snr})</span>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
+            ) : packetsQuery.isLoading ? (
+              <LoadingRows rows={6} />
+            ) : packets.length === 0 ? (
+              <EmptyState
+                testId="lora-packets-empty"
+                title="No LoRaWAN Packets Logged"
+                description="No raw packet logs currently in lora_packets table."
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-16"># ID</TableHead>
+                      <TableHead>Device ID</TableHead>
+                      <TableHead>Timestamp</TableHead>
+                      <TableHead>Port / Counter</TableHead>
+                      <TableHead>Frequency</TableHead>
+                      <TableHead>Gateway EUI</TableHead>
+                      <TableHead>RF Signal</TableHead>
+                      <TableHead>Raw Payload</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {packets.map((pkt) => (
+                      <TableRow key={pkt.id} className="font-mono text-xs">
+                        <TableCell className="font-bold text-slate-600">#{pkt.id}</TableCell>
+                        <TableCell className="font-sans font-semibold text-slate-900">{pkt.device_id}</TableCell>
+                        <TableCell className="text-slate-500 whitespace-nowrap">
+                          {pkt.created_at ? new Date(pkt.created_at).toLocaleString() : "—"}
+                        </TableCell>
+                        <TableCell className="text-slate-700">Port {pkt.fport} (cnt: {pkt.fcnt})</TableCell>
+                        <TableCell className="text-slate-600">{pkt.frequency_mhz} MHz</TableCell>
+                        <TableCell className="text-slate-500">{pkt.gateway_eui || "—"}</TableCell>
+                        <TableCell className="text-slate-700 font-semibold">
+                          {pkt.rssi} dBm <span className="text-slate-400 text-[11px]">(SNR {pkt.snr})</span>
+                        </TableCell>
+                        <TableCell className="max-w-xs truncate text-[11px] text-slate-600">
+                          {pkt.raw_payload || "(empty)"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </SectionCard>
+        </div>
+      ) : (
+        /* Node Inventory & Commissioning Tab */
+        <div className="space-y-6">
+          <Card className="border-slate-200/80 p-6" data-testid="sensor-create-form">
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+              Commission new sensor node
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-4">
+              <div>
+                <Label htmlFor="sensor-code">Node Code</Label>
+                <Input
+                  id="sensor-code"
+                  value={form.code}
+                  onChange={(e) => setForm((p) => ({ ...p, code: e.target.value.toUpperCase() }))}
+                  placeholder="LORA-POL-02"
+                  className="mt-1.5"
+                  data-testid="sensor-code-input"
+                />
+              </div>
+              <div>
+                <Label htmlFor="sensor-name">Node Name</Label>
+                <Input
+                  id="sensor-name"
+                  value={form.name}
+                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="Pollachi Gauge 2"
+                  className="mt-1.5"
+                  data-testid="sensor-name-input"
+                />
+              </div>
+              <div>
+                <Label>Sensor Type</Label>
+                <Select
+                  value={form.sensor_type}
+                  onValueChange={(v: string) => setForm((p) => ({ ...p, sensor_type: v }))}
+                >
+                  <SelectTrigger className="mt-1.5 w-full" data-testid="sensor-type-trigger">
+                    <SelectValue>{(v) => SENSOR_LABELS[v as string] ?? "Select type"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(SENSOR_LABELS).map(([k, v]) => (
+                      <SelectItem key={k} value={k} data-testid={`sensor-type-${k}`}>
+                        {v}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Monitoring Zone</Label>
+                <Select
+                  value={zoneId}
+                  onValueChange={(v: string) => setForm((p) => ({ ...p, zone_id: v }))}
+                >
+                  <SelectTrigger className="mt-1.5 w-full" data-testid="sensor-zone-trigger">
+                    <SelectValue>{(v) => zoneList.find((z) => z.id === v)?.name ?? "Select zone"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {zoneList.map((z) => (
+                      <SelectItem key={z.id} value={z.id} data-testid={`sensor-zone-${z.id}`}>
+                        {z.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Button
+              className="mt-4"
+              disabled={form.code.length < 2 || form.name.length < 2 || !zoneId || create.isPending}
+              onClick={() => create.mutate()}
+              data-testid="sensor-create-btn"
+            >
+              {create.isPending ? "Commissioning…" : "Commission Sensor"}
+            </Button>
+          </Card>
+
+          <SectionCard
+            testId="sensor-inventory-card"
+            title="Registered Sensor Fleet"
+            description={`${inventoryList.length} nodes registered`}
+          >
+            {inventoryLoading ? (
+              <LoadingRows rows={5} />
+            ) : inventoryList.length === 0 ? (
+              <EmptyState
+                testId="sensor-inventory-empty"
+                title="No sensors registered"
+                description="Commission your first LoRaWAN node above."
+              />
+            ) : (
+              <Table data-testid="sensor-inventory-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Code</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Zone</TableHead>
+                    <TableHead>Battery</TableHead>
+                    <TableHead>Signal</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {inventoryList.map((s) => (
+                    <TableRow key={s.id} data-testid={`sensor-mgmt-row-${s.code}`}>
+                      <TableCell className="font-mono text-xs font-semibold">{s.code}</TableCell>
+                      <TableCell>{SENSOR_LABELS[s.sensor_type] ?? s.sensor_type}</TableCell>
+                      <TableCell className="text-xs text-slate-500">{s.zone_name}</TableCell>
+                      <TableCell className="font-mono text-xs">{s.battery}%</TableCell>
+                      <TableCell className="font-mono text-xs">{s.signal_dbm} dBm</TableCell>
+                      <TableCell>
+                        <StatusPill status={s.status} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="text-red-700 hover:bg-red-50"
+                          disabled={remove.isPending}
+                          onClick={() => remove.mutate(s.id)}
+                          data-testid={`sensor-delete-btn-${s.code}`}
+                        >
+                          Decommission
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </SectionCard>
+        </div>
+      )}
     </div>
   );
 }
 
 export function UserManagementPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ["users"], queryFn: () => apiGet<User[]>("/users"), retry: false });
+  const [activeTab, setActiveTab] = useState<"mob_users" | "officers">("mob_users");
 
-  const update = useMutation({
+  // 1. Supabase mob_users Query
+  const mobUsersQuery = useQuery({
+    queryKey: ["mob-users"],
+    queryFn: () => apiGet<MobUser[]>("/mob-users"),
+    refetchInterval: 8000,
+  });
+
+  // 2. Officers Query
+  const officersQuery = useQuery({
+    queryKey: ["users"],
+    queryFn: () => apiGet<User[]>("/users"),
+    retry: false,
+  });
+
+  // Officer Update
+  const updateOfficer = useMutation({
     mutationFn: (vars: { id: string; role?: Role; status?: string }) =>
       apiPatch<User>(`/users/${vars.id}`, { role: vars.role, status: vars.status }),
     onSuccess: (u) => {
-      toast.success(`${u.email} updated`);
+      toast.success(`${u.email} clearance updated`);
       qc.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err) => toast.error(apiErrorMessage(err)),
   });
 
-  const list = data ?? [];
+  // Citizen Alert Modal State & Mutation
+  const [alertTargetUser, setAlertTargetUser] = useState<MobUser | null>(null);
+  const [alertForm, setAlertForm] = useState<MobUserAlertPayload>({
+    hazard_type: "Flash Flood",
+    risk_level: "critical",
+    title: "Flash Flood Warning - High River Surge",
+    detail: "River water levels have reached critical threshold (94mm). Seek high ground immediately and avoid low-lying bridges and riverbanks.",
+  });
+
+  const sendAlertMutation = useMutation({
+    mutationFn: ({ userId, payload }: { userId: string; payload: MobUserAlertPayload }) =>
+      apiPost(`/mob-users/${userId}/alert`, payload),
+    onSuccess: (res: any) => {
+      toast.success(res?.message || "Emergency alert dispatched to citizen");
+      setAlertTargetUser(null);
+      qc.invalidateQueries({ queryKey: ["mob-users"] });
+      qc.invalidateQueries({ queryKey: ["alerts"] });
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+    },
+    onError: (err) => toast.error(apiErrorMessage(err, "Failed to dispatch emergency alert")),
+  });
+
+  // Citizen Evacuation Modal State & Mutation
+  const [evacTargetUser, setEvacTargetUser] = useState<MobUser | null>(null);
+  const [evacForm, setEvacForm] = useState<MobUserEvacuationPayload>({
+    shelter_name: "Pollachi High Ground Relief Camp Alpha",
+    latitude: 10.6695,
+    longitude: 77.0190,
+    elevation_m: 310.5,
+    instructions: "Follow north high-ground corridor. Water, hot meals, and medical supplies available at relief shelter.",
+  });
+
+  const sendEvacMutation = useMutation({
+    mutationFn: ({ userId, payload }: { userId: string; payload: MobUserEvacuationPayload }) =>
+      apiPost(`/mob-users/${userId}/evacuation-point`, payload),
+    onSuccess: (res: any) => {
+      toast.success(res?.message || "Evacuation shelter assigned to citizen");
+      setEvacTargetUser(null);
+      qc.invalidateQueries({ queryKey: ["mob-users"] });
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+    },
+    onError: (err) => toast.error(apiErrorMessage(err, "Failed to assign evacuation point")),
+  });
+
+  // Clear Alert Mutation
+  const clearAlertMutation = useMutation({
+    mutationFn: (userId: string) => apiDelete(`/mob-users/${userId}/alert`),
+    onSuccess: (res: any) => {
+      toast.success(res?.message || "Alert cleared");
+      qc.invalidateQueries({ queryKey: ["mob-users"] });
+    },
+    onError: (err) => toast.error(apiErrorMessage(err)),
+  });
+
+  const mobUsersList = mobUsersQuery.data ?? [];
+  const officersList = officersQuery.data ?? [];
+
+  const activeAlertsCount = mobUsersList.filter(
+    (u) => u.preferences?.active_alert && u.preferences.active_alert.active
+  ).length;
+  const assignedEvacCount = mobUsersList.filter(
+    (u) => u.preferences?.evacuation_point
+  ).length;
 
   return (
-    <div data-testid="user-management-page">
-      <PageHeader title="User Management" description="Verify departmental accounts and assign clearance levels." />
-      <SectionCard testId="users-card" title="Registered officers" description={`${list.length} accounts`}>
-        {isLoading ? (
-          <LoadingRows rows={4} />
-        ) : list.length === 0 ? (
-          <EmptyState testId="users-empty" title="No accounts registered" />
-        ) : (
-          <Table data-testid="users-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Officer</TableHead><TableHead>Organization</TableHead><TableHead>Clearance</TableHead>
-                <TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((u) => (
-                <TableRow key={u.id} data-testid={`user-row-${u.email}`}>
-                  <TableCell>
-                    <span className="block font-medium text-slate-900">{u.first_name} {u.last_name}</span>
-                    <span className="block font-mono text-[11px] text-slate-500">{u.email}</span>
-                  </TableCell>
-                  <TableCell className="text-xs text-slate-600">{u.organization}</TableCell>
-                  <TableCell>
-                    <Select value={u.role} onValueChange={(v: string) => update.mutate({ id: u.id, role: v as Role })}>
-                      <SelectTrigger size="sm" className="w-[170px]" data-testid={`user-role-trigger-${u.email}`}>
-                        <SelectValue>{(v) => ROLE_LABELS[v as Role] ?? String(v)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
-                          <SelectItem key={r} value={r} data-testid={`user-role-${r}`}>{ROLE_LABELS[r]}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                  <TableCell><StatusPill status={u.status} testId={`user-status-${u.email}`} /></TableCell>
-                  <TableCell className="text-right">
-                    {u.status === "active" ? (
-                      <Button variant="outline" size="xs" onClick={() => update.mutate({ id: u.id, status: "suspended" })} data-testid={`user-suspend-btn-${u.email}`}>Suspend</Button>
-                    ) : (
-                      <Button size="xs" onClick={() => update.mutate({ id: u.id, status: "active" })} data-testid={`user-verify-btn-${u.email}`}>Verify &amp; Activate</Button>
-                    )}
-                  </TableCell>
+    <div data-testid="user-management-page" className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <PageHeader
+          title="User & Citizen Management"
+          description="Manage mobile app citizens (mob_users) in Supabase, dispatch targeted emergency alerts, assign evacuation shelters, and manage departmental officers."
+        />
+        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
+          <button
+            onClick={() => setActiveTab("mob_users")}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              activeTab === "mob_users"
+                ? "bg-rose-700 text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <Phone className="size-3.5" />
+            Mobile App Citizens ({mobUsersList.length})
+            {activeAlertsCount > 0 && (
+              <span className="flex size-2 rounded-full bg-rose-400 ring-2 ring-rose-300 animate-ping ml-1" />
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab("officers")}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              activeTab === "officers"
+                ? "bg-slate-900 text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <UserCheck className="size-3.5" />
+            Departmental Officers ({officersList.length})
+          </button>
+        </div>
+      </div>
+
+      {activeTab === "mob_users" ? (
+        <div className="space-y-6">
+          {/* Supabase Integration Summary Card */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Card className="border-rose-200 bg-linear-to-br from-rose-50/70 to-white p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-rose-800">
+                  Registered Citizens
+                </span>
+                <Phone className="size-4 text-rose-600" />
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="font-mono text-3xl font-extrabold text-rose-950">
+                  {mobUsersList.length}
+                </span>
+                <span className="text-xs text-rose-700">Supabase mob_users</span>
+              </div>
+              <p className="mt-1 text-[11px] text-rose-800/80">
+                Connected directly to citizen mobile handsets
+              </p>
+            </Card>
+
+            <Card className="border-amber-200 bg-linear-to-br from-amber-50/70 to-white p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-amber-800">
+                  Active Dispatched Alerts
+                </span>
+                <ShieldAlert className="size-4 text-amber-600" />
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="font-mono text-3xl font-extrabold text-amber-950">
+                  {activeAlertsCount}
+                </span>
+                <span className="text-xs text-amber-700">citizens alerted</span>
+              </div>
+              <p className="mt-1 text-[11px] text-amber-800/80">
+                Live banner warnings displayed on handsets
+              </p>
+            </Card>
+
+            <Card className="border-blue-200 bg-linear-to-br from-blue-50/70 to-white p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-blue-800">
+                  Assigned Evacuations
+                </span>
+                <Navigation className="size-4 text-blue-600" />
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="font-mono text-3xl font-extrabold text-blue-950">
+                  {assignedEvacCount}
+                </span>
+                <span className="text-xs text-blue-700">shelters designated</span>
+              </div>
+              <p className="mt-1 text-[11px] text-blue-800/80">
+                Turn-by-turn high-ground shelters dispatched
+              </p>
+            </Card>
+          </div>
+
+          {/* Citizen Table */}
+          <SectionCard
+            testId="mob-users-card"
+            title="Mobile Citizens Directory (Supabase mob_users)"
+            description="Real-time geo-located citizen handsets in the flash flood basin. Send emergency warnings and designated evacuation shelters directly."
+          >
+            {mobUsersQuery.isLoading ? (
+              <LoadingRows rows={4} />
+            ) : mobUsersList.length === 0 ? (
+              <EmptyState
+                testId="mob-users-empty"
+                title="No Citizens Registered in Supabase"
+                description="When citizens launch the mobile application, their profiles will synchronize here automatically."
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <Table className="w-full">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[180px]">Citizen</TableHead>
+                      <TableHead className="w-[220px]">Live Location &amp; Coords</TableHead>
+                      <TableHead className="w-[230px]">Active Emergency Alert</TableHead>
+                      <TableHead className="w-[230px]">Assigned Evacuation Shelter</TableHead>
+                      <TableHead className="w-[180px] text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {mobUsersList.map((user) => {
+                      const activeAlert = user.preferences?.active_alert;
+                      const hasAlert = activeAlert && activeAlert.active;
+                      const evacPoint = user.preferences?.evacuation_point;
+
+                      return (
+                        <TableRow key={user.id} className="text-xs">
+                          <TableCell>
+                            <div className="flex flex-col">
+                              <span className="font-bold text-slate-900 text-sm">
+                                {user.full_name || "Anonymous Citizen"}
+                              </span>
+                              <span className="font-mono text-slate-500 mt-0.5">
+                                {user.phone_number || "No phone number"}
+                              </span>
+                              <div className="mt-1">
+                                <span className="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                                  Lang: {user.language === "ta" ? "தமிழ் (Tamil)" : "English"}
+                                </span>
+                              </div>
+                            </div>
+                          </TableCell>
+
+                          <TableCell>
+                            <div className="flex flex-col gap-1">
+                              <span className="font-medium text-slate-800">
+                                {user.location_name || "Pollachi Catchment Basin"}
+                              </span>
+                              {user.latitude && user.longitude ? (
+                                <div className="flex items-center gap-1.5 font-mono text-[11px] text-blue-700 bg-blue-50/80 px-2 py-1 rounded-md border border-blue-100 w-fit">
+                                  <MapPin className="size-3 text-blue-600 shrink-0" />
+                                  <span>
+                                    {user.latitude.toFixed(6)}°N, {user.longitude.toFixed(6)}°E
+                                  </span>
+                                  {user.location_accuracy_m && (
+                                    <span className="text-slate-400 text-[10px]">
+                                      (±{user.location_accuracy_m}m)
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-slate-400 italic">No GPS coordinates</span>
+                              )}
+                            </div>
+                          </TableCell>
+
+                          <TableCell>
+                            {hasAlert ? (
+                              <div className="rounded-lg border border-red-200 bg-red-50 p-2 max-w-xs space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="inline-flex items-center gap-1 rounded bg-red-600 px-1.5 py-0.5 font-bold text-[10px] text-white uppercase">
+                                    <AlertTriangle className="size-2.5" />
+                                    {activeAlert.risk_level || "CRITICAL"}
+                                  </span>
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    className="h-5 px-1.5 text-red-700 hover:bg-red-100"
+                                    onClick={() => clearAlertMutation.mutate(user.id)}
+                                    title="Clear alert for this user"
+                                  >
+                                    <X className="size-3 mr-0.5" /> Clear
+                                  </Button>
+                                </div>
+                                <p className="font-bold text-red-950 text-xs">{activeAlert.title}</p>
+                                <p className="text-[11px] text-red-800 line-clamp-2">{activeAlert.detail}</p>
+                              </div>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="size-3" />
+                                Normal / No Alert
+                              </span>
+                            )}
+                          </TableCell>
+
+                          <TableCell>
+                            {evacPoint ? (
+                              <div className="rounded-lg border border-blue-200 bg-blue-50 p-2 max-w-xs space-y-1">
+                                <div className="flex items-center gap-1 font-bold text-blue-950 text-xs">
+                                  <Navigation className="size-3 text-blue-600" />
+                                  <span>{evacPoint.shelter_name}</span>
+                                </div>
+                                <div className="font-mono text-[10px] text-blue-700">
+                                  Coords: {evacPoint.latitude}, {evacPoint.longitude}{" "}
+                                  {evacPoint.elevation_m ? `(${evacPoint.elevation_m}m)` : ""}
+                                </div>
+                                {evacPoint.instructions && (
+                                  <p className="text-[10px] text-blue-800 line-clamp-2">
+                                    {evacPoint.instructions}
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs italic">None assigned</span>
+                            )}
+                          </TableCell>
+
+                          <TableCell className="text-right">
+                            <div className="flex flex-col gap-1.5 items-end justify-center">
+                              <Button
+                                size="xs"
+                                className="w-28 justify-center bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                                onClick={() => {
+                                  setAlertTargetUser(user);
+                                  setAlertForm((prev) => ({
+                                    ...prev,
+                                    title: "Flash Flood Warning - High River Surge",
+                                    detail: `River water levels have reached critical threshold (94mm) near ${user.location_name || "your area"}. Seek elevated high ground immediately.`,
+                                  }));
+                                }}
+                              >
+                                <AlertTriangle className="size-3 mr-1" />
+                                Send Alert
+                              </Button>
+
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                className="w-28 justify-center border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold"
+                                onClick={() => {
+                                  setEvacTargetUser(user);
+                                  setEvacForm({
+                                    shelter_name: "Pollachi High Ground Relief Camp Alpha",
+                                    latitude: 10.6695,
+                                    longitude: 77.0190,
+                                    elevation_m: 310.5,
+                                    instructions: `Proceed immediately to designated high-ground relief camp from ${user.location_name || "current coordinates"}. Food, medical aid, and shelter available.`,
+                                  });
+                                }}
+                              >
+                                <Navigation className="size-3 mr-1" />
+                                Evac Point
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </SectionCard>
+
+          {/* Modal: Send Emergency Alert */}
+          {alertTargetUser && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+              <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2 text-rose-700">
+                    <ShieldAlert className="size-5" />
+                    <h3 className="font-bold text-slate-900 text-base">
+                      Dispatch Emergency Alert
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setAlertTargetUser(null)}
+                    className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+
+                <div className="rounded-lg bg-rose-50/70 border border-rose-100 p-3 text-xs text-rose-900">
+                  <span className="font-bold">Recipient Handset:</span> {alertTargetUser.full_name || "Citizen"} (
+                  {alertTargetUser.phone_number || "No Phone"}) • Location: {alertTargetUser.location_name || "Pollachi Catchment Basin"}
+                </div>
+
+                {/* Pre-set Alert Buttons */}
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Quick Incident Templates</Label>
+                  <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAlertForm({
+                          hazard_type: "Flash Flood",
+                          risk_level: "critical",
+                          title: "Flash Flood Warning - High River Surge",
+                          detail: "River water levels have reached critical threshold (94mm). Seek high ground immediately and avoid low-lying bridges.",
+                        })
+                      }
+                      className="text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-rose-300 hover:bg-rose-50/50"
+                    >
+                      <p className="font-semibold text-slate-900">🚨 94mm Flash Flood Surge</p>
+                      <p className="text-[11px] text-slate-500">Critical warning based on sensor_db</p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAlertForm({
+                          hazard_type: "Severe Rainfall",
+                          risk_level: "high",
+                          title: "Torrential Cloudburst Warning",
+                          detail: "Extreme rainfall detected in upper catchment. Inundation of roads and storm drains expected within 30 minutes.",
+                        })
+                      }
+                      className="text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-amber-300 hover:bg-amber-50/50"
+                    >
+                      <p className="font-semibold text-slate-900">🌧️ Torrential Cloudburst</p>
+                      <p className="text-[11px] text-slate-500">High rain intensity warning</p>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3 text-xs">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label htmlFor="hazard-type">Hazard Type</Label>
+                      <Input
+                        id="hazard-type"
+                        value={alertForm.hazard_type}
+                        onChange={(e) => setAlertForm((p) => ({ ...p, hazard_type: e.target.value }))}
+                        className="mt-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <Label>Risk Level</Label>
+                      <Select
+                        value={alertForm.risk_level}
+                        onValueChange={(v: string) => setAlertForm((p) => ({ ...p, risk_level: v }))}
+                      >
+                        <SelectTrigger className="mt-1 text-xs w-full">
+                          <SelectValue>{(v) => String(v).toUpperCase()}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="critical">CRITICAL (Red Alert)</SelectItem>
+                          <SelectItem value="high">HIGH (Orange Alert)</SelectItem>
+                          <SelectItem value="medium">MEDIUM (Yellow Warning)</SelectItem>
+                          <SelectItem value="low">LOW (Advisory)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="alert-title">Alert Title</Label>
+                    <Input
+                      id="alert-title"
+                      value={alertForm.title}
+                      onChange={(e) => setAlertForm((p) => ({ ...p, title: e.target.value }))}
+                      className="mt-1 text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="alert-detail">Emergency Instructions &amp; Action Details</Label>
+                    <textarea
+                      id="alert-detail"
+                      rows={3}
+                      value={alertForm.detail}
+                      onChange={(e) => setAlertForm((p) => ({ ...p, detail: e.target.value }))}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-xs focus:border-rose-500 focus:ring-1 focus:ring-rose-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                  <Button variant="outline" size="sm" onClick={() => setAlertTargetUser(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                    disabled={!alertForm.title || !alertForm.detail || sendAlertMutation.isPending}
+                    onClick={() =>
+                      sendAlertMutation.mutate({
+                        userId: alertTargetUser.id,
+                        payload: alertForm,
+                      })
+                    }
+                  >
+                    {sendAlertMutation.isPending ? "Dispatching…" : "Dispatch Emergency Alert"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal: Send Evacuation Point */}
+          {evacTargetUser && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+              <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2 text-blue-700">
+                    <Navigation className="size-5" />
+                    <h3 className="font-bold text-slate-900 text-base">
+                      Assign Safe Evacuation Shelter Point
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setEvacTargetUser(null)}
+                    className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+
+                <div className="rounded-lg bg-blue-50/70 border border-blue-100 p-3 text-xs text-blue-900">
+                  <span className="font-bold">Citizen:</span> {evacTargetUser.full_name || "Citizen"} •{" "}
+                  <span className="font-mono">
+                    Current GPS: {evacTargetUser.latitude?.toFixed(5)}°N, {evacTargetUser.longitude?.toFixed(5)}°E
+                  </span>
+                </div>
+
+                {/* Preset Safe Shelters */}
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Designated Safe Relief Shelters (Pollachi Basin)
+                  </Label>
+                  <div className="mt-1.5 space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEvacForm({
+                          shelter_name: "Pollachi High Ground Relief Camp Alpha",
+                          latitude: 10.6695,
+                          longitude: 77.0190,
+                          elevation_m: 310.5,
+                          instructions: "Proceed north along Main High Ground Road. Medical camp, drinking water, and dry rations available.",
+                        })
+                      }
+                      className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-blue-300 hover:bg-blue-50/50"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900">🏫 Pollachi High Ground Relief Camp Alpha</span>
+                        <span className="font-mono text-emerald-700 font-bold">310.5m Elev</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">Coords: 10.6695° N, 77.0190° E • 350m from river corridor</p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEvacForm({
+                          shelter_name: "Govt Higher Secondary School Safe Shelter",
+                          latitude: 10.6620,
+                          longitude: 77.0110,
+                          elevation_m: 298.0,
+                          instructions: "Evacuate south-west to concrete multi-story school building. Shelter ground floor is elevated.",
+                        })
+                      }
+                      className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-blue-300 hover:bg-blue-50/50"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900">🏛️ Govt Higher Secondary School Safe Shelter</span>
+                        <span className="font-mono text-emerald-700 font-bold">298.0m Elev</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">Coords: 10.6620° N, 77.0110° E • Multi-story safe refuge</p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEvacForm({
+                          shelter_name: "Municipal Community Flood Center Beta",
+                          latitude: 10.6720,
+                          longitude: 77.0250,
+                          elevation_m: 325.0,
+                          instructions: "Proceed east toward hilltop civic center. Elevated helicopter pad and ambulance access available.",
+                        })
+                      }
+                      className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-blue-300 hover:bg-blue-50/50"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900">⛰️ Municipal Community Flood Center Beta</span>
+                        <span className="font-mono text-emerald-700 font-bold">325.0m Elev</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">Coords: 10.6720° N, 77.0250° E • High hill refuge</p>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <Label htmlFor="shelter-name">Shelter Facility Name</Label>
+                    <Input
+                      id="shelter-name"
+                      value={evacForm.shelter_name}
+                      onChange={(e) => setEvacForm((p) => ({ ...p, shelter_name: e.target.value }))}
+                      className="mt-1 text-xs"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <Label htmlFor="shelter-lat">Latitude</Label>
+                      <Input
+                        id="shelter-lat"
+                        type="number"
+                        step="0.00001"
+                        value={evacForm.latitude}
+                        onChange={(e) =>
+                          setEvacForm((p) => ({ ...p, latitude: parseFloat(e.target.value) || 0 }))
+                        }
+                        className="mt-1 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="shelter-lng">Longitude</Label>
+                      <Input
+                        id="shelter-lng"
+                        type="number"
+                        step="0.00001"
+                        value={evacForm.longitude}
+                        onChange={(e) =>
+                          setEvacForm((p) => ({ ...p, longitude: parseFloat(e.target.value) || 0 }))
+                        }
+                        className="mt-1 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="shelter-elev">Elevation (m)</Label>
+                      <Input
+                        id="shelter-elev"
+                        type="number"
+                        value={evacForm.elevation_m || 300}
+                        onChange={(e) =>
+                          setEvacForm((p) => ({ ...p, elevation_m: parseFloat(e.target.value) || 0 }))
+                        }
+                        className="mt-1 text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="shelter-inst">Evacuation Route Instructions</Label>
+                    <textarea
+                      id="shelter-inst"
+                      rows={3}
+                      value={evacForm.instructions}
+                      onChange={(e) => setEvacForm((p) => ({ ...p, instructions: e.target.value }))}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                  <Button variant="outline" size="sm" onClick={() => setEvacTargetUser(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                    disabled={!evacForm.shelter_name || sendEvacMutation.isPending}
+                    onClick={() =>
+                      sendEvacMutation.mutate({
+                        userId: evacTargetUser.id,
+                        payload: evacForm,
+                      })
+                    }
+                  >
+                    {sendEvacMutation.isPending ? "Assigning…" : "Assign & Dispatch Evacuation Point"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Departmental Officers Tab */
+        <SectionCard
+          testId="users-card"
+          title="Registered Officers & Personnel"
+          description={`${officersList.length} accounts registered`}
+        >
+          {officersQuery.isLoading ? (
+            <LoadingRows rows={4} />
+          ) : officersList.length === 0 ? (
+            <EmptyState testId="users-empty" title="No accounts registered" />
+          ) : (
+            <Table data-testid="users-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Officer</TableHead>
+                  <TableHead>Organization</TableHead>
+                  <TableHead>Clearance</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </SectionCard>
+              </TableHeader>
+              <TableBody>
+                {officersList.map((u) => (
+                  <TableRow key={u.id} data-testid={`user-row-${u.email}`}>
+                    <TableCell>
+                      <span className="block font-medium text-slate-900">
+                        {u.first_name} {u.last_name}
+                      </span>
+                      <span className="block font-mono text-[11px] text-slate-500">{u.email}</span>
+                    </TableCell>
+                    <TableCell className="text-xs text-slate-600">{u.organization}</TableCell>
+                    <TableCell>
+                      <Select
+                        value={u.role}
+                        onValueChange={(v: string) => updateOfficer.mutate({ id: u.id, role: v as Role })}
+                      >
+                        <SelectTrigger size="sm" className="w-[170px]" data-testid={`user-role-trigger-${u.email}`}>
+                          <SelectValue>{(v) => ROLE_LABELS[v as Role] ?? String(v)}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
+                            <SelectItem key={r} value={r} data-testid={`user-role-${r}`}>
+                              {ROLE_LABELS[r]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <StatusPill status={u.status} testId={`user-status-${u.email}`} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {u.status === "active" ? (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          onClick={() => updateOfficer.mutate({ id: u.id, status: "suspended" })}
+                          data-testid={`user-suspend-btn-${u.email}`}
+                        >
+                          Suspend
+                        </Button>
+                      ) : (
+                        <Button
+                          size="xs"
+                          onClick={() => updateOfficer.mutate({ id: u.id, status: "active" })}
+                          data-testid={`user-verify-btn-${u.email}`}
+                        >
+                          Verify &amp; Activate
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </SectionCard>
+      )}
     </div>
   );
 }

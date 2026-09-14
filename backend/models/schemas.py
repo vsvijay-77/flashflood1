@@ -284,3 +284,35 @@ class ReportCreate(BaseModel):
     report_type: str
     period: str
     zone_name: str = ""
+
+
+# ---------- mobile app citizens (mob_users) ----------
+class MobUser(BaseModel):
+    id: str
+    full_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    language: Optional[str] = "en"
+    location_name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_accuracy_m: Optional[int] = None
+    location_updated_at: Optional[str] = None
+    preferences: Optional[dict] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class MobUserAlertRequest(BaseModel):
+    hazard_type: str = "Flash Flood"
+    risk_level: str = "critical"
+    title: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+
+
+class MobUserEvacuationRequest(BaseModel):
+    shelter_name: str = Field(min_length=1)
+    latitude: float
+    longitude: float
+    elevation_m: Optional[float] = None
+    instructions: Optional[str] = "Proceed immediately to the designated safe elevation zone."
+

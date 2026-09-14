@@ -1,5 +1,7 @@
-"""User administration, notifications and reports."""
-from typing import List
+from datetime import datetime, timezone
+import time
+from typing import List, Optional
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -7,6 +9,9 @@ from lib.auth import ROLES, current_user, require_roles
 from lib.db import db, supabase
 from models.schemas import (
     MessageResponse,
+    MobUser,
+    MobUserAlertRequest,
+    MobUserEvacuationRequest,
     Notification,
     Report,
     ReportCreate,
@@ -175,3 +180,196 @@ async def create_report(
         Notification(kind="report_ready", title="Report ready", body=report.title).model_dump()
     )
     return report
+
+
+# ---------- Mobile App Citizens (mob_users) ----------
+@router.get("/mob-users", response_model=List[MobUser])
+async def list_mob_users(user: dict = Depends(current_user)):
+    """Fetch registered mobile app citizen users from Supabase."""
+    try:
+        res = supabase.table("mob_users").select("*").order("created_at", desc=True).execute()
+        data = res.data or []
+        return [MobUser(**u) for u in data]
+    except Exception as exc:
+        print(f"Error fetching mob_users from Supabase: {exc}")
+        return []
+
+
+@router.post("/mob-users/{user_id}/alert")
+async def send_mob_user_alert(
+    user_id: str,
+    payload: MobUserAlertRequest,
+    admin: dict = Depends(require_roles("admin", "gov_officer")),
+):
+    """Dispatch emergency alert to a citizen (updates mob_users.preferences, alerts, notifications)."""
+    try:
+        res = supabase.table("mob_users").select("*").eq("id", user_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Mobile citizen user not found")
+        target_user = res.data[0]
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        prefs = target_user.get("preferences") or {}
+        alert_data = {
+            "hazard_type": payload.hazard_type,
+            "risk_level": payload.risk_level,
+            "title": payload.title,
+            "detail": payload.detail,
+            "sent_at": now_iso,
+            "active": True,
+        }
+        prefs["active_alert"] = alert_data
+
+        # 1. Update mob_users
+        supabase.table("mob_users").update({"preferences": prefs, "updated_at": now_iso}).eq("id", user_id).execute()
+
+        # 2. Insert into public.alerts
+        try:
+            supabase.table("alerts").insert({
+                "id": str(uuid.uuid4()),
+                "code": f"ALT-{int(time.time())}",
+                "zone_id": "ZONE-POLLACHI",
+                "location": target_user.get("location_name") or "Pollachi Sector",
+                "hazard_type": payload.hazard_type,
+                "risk_level": payload.risk_level,
+                "title": payload.title,
+                "detail": payload.detail,
+                "status": "active",
+                "assigned_to": target_user.get("full_name") or "Citizen",
+            }).execute()
+        except Exception as alert_err:
+            print(f"Notice: alerts table insert failed: {alert_err}")
+
+        # 3. Insert into public.notifications
+        try:
+            supabase.table("notifications").insert({
+                "id": str(uuid.uuid4()),
+                "kind": "flood_alert",
+                "title": f"🚨 {payload.title}",
+                "body": payload.detail,
+                "read": False,
+            }).execute()
+        except Exception as notif_err:
+            print(f"Notice: notifications table insert failed: {notif_err}")
+
+        # 4. Mirror to mongo notifications
+        await db.notifications.insert_one({
+            "kind": "critical_alert",
+            "title": f"🚨 Mobile Alert to {target_user.get('full_name') or 'Citizen'}: {payload.title}",
+            "body": payload.detail,
+            "read": False,
+            "created_at": datetime.now(timezone.utc),
+        })
+
+        return {
+            "status": "ok",
+            "message": f"Alert successfully dispatched to {target_user.get('full_name') or 'Citizen'}",
+            "alert": alert_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to dispatch alert: {str(e)}")
+
+
+@router.post("/mob-users/{user_id}/evacuation-point")
+async def send_mob_user_evacuation(
+    user_id: str,
+    payload: MobUserEvacuationRequest,
+    admin: dict = Depends(require_roles("admin", "gov_officer")),
+):
+    """Assign emergency evacuation point to a citizen."""
+    try:
+        res = supabase.table("mob_users").select("*").eq("id", user_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Mobile citizen user not found")
+        target_user = res.data[0]
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        prefs = target_user.get("preferences") or {}
+        evac_data = {
+            "shelter_name": payload.shelter_name,
+            "latitude": payload.latitude,
+            "longitude": payload.longitude,
+            "elevation_m": payload.elevation_m,
+            "instructions": payload.instructions or "Proceed immediately to the designated safe evacuation shelter.",
+            "assigned_at": now_iso,
+        }
+        prefs["evacuation_point"] = evac_data
+
+        # 1. Update mob_users
+        supabase.table("mob_users").update({"preferences": prefs, "updated_at": now_iso}).eq("id", user_id).execute()
+
+        # 2. Insert into public.notifications
+        try:
+            supabase.table("notifications").insert({
+                "id": str(uuid.uuid4()),
+                "kind": "evacuation_order",
+                "title": f"🏃 Evacuation Assigned: {payload.shelter_name}",
+                "body": f"Proceed to {payload.shelter_name} ({payload.latitude}, {payload.longitude}). {payload.instructions}",
+                "read": False,
+            }).execute()
+        except Exception as notif_err:
+            print(f"Notice: notifications table insert failed: {notif_err}")
+
+        # 3. Insert into public.alerts
+        try:
+            supabase.table("alerts").insert({
+                "id": str(uuid.uuid4()),
+                "code": f"EVAC-{int(time.time())}",
+                "zone_id": "ZONE-POLLACHI",
+                "location": target_user.get("location_name") or f"Coords ({payload.latitude}, {payload.longitude})",
+                "hazard_type": "Evacuation Order",
+                "risk_level": "critical",
+                "title": f"Evacuate to {payload.shelter_name}",
+                "detail": payload.instructions or "Proceed immediately to shelter.",
+                "status": "active",
+                "assigned_to": target_user.get("full_name") or "Citizen",
+            }).execute()
+        except Exception as alert_err:
+            print(f"Notice: alerts table insert failed: {alert_err}")
+
+        # 4. Mirror to mongo notifications
+        await db.notifications.insert_one({
+            "kind": "critical_alert",
+            "title": f"🏃 Evacuation Assigned to {target_user.get('full_name') or 'Citizen'}: {payload.shelter_name}",
+            "body": f"Shelter: {payload.shelter_name} ({payload.latitude}, {payload.longitude}). {payload.instructions}",
+            "read": False,
+            "created_at": datetime.now(timezone.utc),
+        })
+
+        return {
+            "status": "ok",
+            "message": f"Evacuation point assigned to {target_user.get('full_name') or 'Citizen'}",
+            "evacuation_point": evac_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to assign evacuation point: {str(e)}")
+
+
+@router.delete("/mob-users/{user_id}/alert")
+async def clear_mob_user_alert(
+    user_id: str,
+    admin: dict = Depends(require_roles("admin", "gov_officer")),
+):
+    """Clear active alert for a mobile citizen."""
+    try:
+        res = supabase.table("mob_users").select("*").eq("id", user_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Mobile citizen user not found")
+        target_user = res.data[0]
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        prefs = target_user.get("preferences") or {}
+        if "active_alert" in prefs:
+            del prefs["active_alert"]
+
+        supabase.table("mob_users").update({"preferences": prefs, "updated_at": now_iso}).eq("id", user_id).execute()
+        return {"status": "ok", "message": f"Alert cleared for {target_user.get('full_name') or 'Citizen'}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear alert: {str(e)}")
+

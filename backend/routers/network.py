@@ -54,6 +54,10 @@ async def list_gateways(user: dict = Depends(current_user)):
     return [Gateway(**d) for d in docs]
 
 
+import logging
+logger = logging.getLogger(__name__)
+
+
 @router.get("/sensors", response_model=List[Sensor])
 async def list_sensors(
     zone_id: Optional[str] = Query(default=None),
@@ -69,7 +73,35 @@ async def list_sensors(
     if status:
         query["status"] = status
     docs = await db.sensors.find(query, {"_id": 0}).to_list(1000)
-    return [Sensor(**d) for d in docs]
+    sensors = [Sensor(**d) for d in docs]
+
+    # Enrich with live real LoRaWAN hydrology node from external sensor_db
+    try:
+        from services.external_sensor_service import get_live_sensor_summary
+        summary = get_live_sensor_summary()
+        if summary.get("connected") and summary.get("devices"):
+            for dev in summary["devices"]:
+                latest = dev.get("latest", {})
+                sensors.insert(0, Sensor(
+                    id=f"ext-lora-{dev['device_id']}",
+                    code=dev["device_id"],
+                    name=dev["name"],
+                    sensor_type="water_level",
+                    zone_id="zone-pollachi-monitored",
+                    zone_name="Monitored Basin (Pollachi Sector)",
+                    lat=10.667366,
+                    lng=77.016900,
+                    status="online",
+                    battery=dev.get("battery_pct", 95),
+                    signal_dbm=int(latest.get("rssi_dbm") or -108),
+                    last_value=float(latest.get("water_level_mm") or 94.0),
+                    unit="mm",
+                    updated_at=datetime.fromisoformat(latest["created_at"]) if latest.get("created_at") else datetime.now(timezone.utc),
+                ))
+    except Exception as e:
+        logger.warning(f"Could not merge external sensor: {e}")
+
+    return sensors
 
 
 @router.post("/sensors", response_model=Sensor, status_code=201)

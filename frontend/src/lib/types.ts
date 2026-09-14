@@ -228,3 +228,137 @@ export const SENSOR_LABELS: Record<string, string> = {
   air_quality: "Air Quality",
   tilt: "Tilt / Landslide",
 };
+
+// ---------- external sensor_db telemetry types ----------
+export interface ExternalSensorLatest {
+  id: number;
+  soil_moisture: number;
+  water_level_mm: number;
+  rainfall_mm: number;
+  tilt_deg: number;
+  imu_x: number;
+  imu_y: number;
+  imu_z: number;
+  rssi_dbm: number;
+  snr_db: number;
+  txt: string;
+  created_at: string | null;
+}
+
+export interface ExternalSensorDeviceStats {
+  total_records: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  avg_water_level: number;
+  max_water_level: number;
+  avg_rainfall: number;
+  max_rainfall: number;
+  avg_rssi: number;
+  avg_snr: number;
+}
+
+export interface ExternalSensorDevice {
+  device_id: string;
+  name: string;
+  status: string;
+  battery_pct: number;
+  latest: ExternalSensorLatest;
+  stats: ExternalSensorDeviceStats;
+}
+
+export interface ExternalSensorSummary {
+  database: string;
+  connected: boolean;
+  total_readings: number;
+  total_packets: number;
+  active_devices_count: number;
+  devices: ExternalSensorDevice[];
+  error?: string;
+}
+
+export interface ExternalSensorHistoryItem {
+  id: number;
+  device_id: string;
+  soil_moisture: number;
+  water_level: number;
+  rainfall: number;
+  tilt: number;
+  imu_x: number;
+  imu_y: number;
+  imu_z: number;
+  rssi: number;
+  snr: number;
+  txt: string;
+  created_at: string;
+}
+
+export interface ExternalLoraPacket {
+  id: number;
+  device_id: string;
+  raw_payload: string;
+  fport: number;
+  fcnt: number;
+  rssi: number;
+  snr: number;
+  frequency_mhz: number;
+  gateway_eui: string;
+  created_at: string;
+}
+
+// ---------- Supabase mob_users types ----------
+export interface MobUserPreferences {
+  active_alert?: {
+    hazard_type: string;
+    risk_level: RiskLevel | string;
+    title: string;
+    detail: string;
+    sent_at: string;
+    active: boolean;
+  };
+  evacuation_point?: {
+    shelter_name: string;
+    latitude: number;
+    longitude: number;
+    elevation_m?: number;
+    instructions?: string;
+    assigned_at: string;
+  };
+  accessibilitySettings?: {
+    largeText?: boolean;
+    highContrast?: boolean;
+    audioAnnouncements?: boolean;
+  };
+  notificationPreferences?: Record<string, boolean>;
+  [key: string]: any;
+}
+
+export interface MobUser {
+  id: string;
+  full_name: string | null;
+  phone_number: string | null;
+  language?: string | null;
+  location_name?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_accuracy_m?: number | null;
+  location_updated_at?: string | null;
+  preferences?: MobUserPreferences | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MobUserAlertPayload {
+  hazard_type: string;
+  risk_level: string;
+  title: string;
+  detail: string;
+}
+
+export interface MobUserEvacuationPayload {
+  shelter_name: string;
+  latitude: number;
+  longitude: number;
+  elevation_m?: number;
+  instructions?: string;
+}
+

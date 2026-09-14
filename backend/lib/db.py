@@ -208,8 +208,11 @@ class SupabaseCollection:
         return items[0] if items else None
 
     async def insert_one(self, document: Dict[str, Any]) -> InsertOneResult:
+        import uuid
         doc = dict(document)
         doc.pop("_id", None)
+        if "id" not in doc or not doc["id"]:
+            doc["id"] = str(uuid.uuid4())
         clean = _serialize_for_supabase(doc)
 
         def _exec():
@@ -233,10 +236,13 @@ class SupabaseCollection:
     async def insert_many(self, documents: List[Dict[str, Any]]) -> InsertManyResult:
         if not documents:
             return InsertManyResult([])
+        import uuid
         clean_docs = []
         for d in documents:
             doc = dict(d)
             doc.pop("_id", None)
+            if "id" not in doc or not doc["id"]:
+                doc["id"] = str(uuid.uuid4())
             clean_docs.append(_serialize_for_supabase(doc))
 
         def _exec():

@@ -163,7 +163,7 @@ export const WaterFragmentShader = /* glsl */ `
     if (vInside < 0.99) discard;
 
     // Discard completely dry cells where water has not reached yet
-    if (vDepth < 0.02) discard;
+    if (vDepth < 0.0002) discard;
 
     // Current-advected surface coordinates: ripples travel along simulated hydrodynamic velocity
     vec2 flowOffset = vVelocity * uTime * 0.35;
@@ -257,7 +257,7 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 finalColor = blendedWater;
 
     // Opacity: high clarity with deep presence
-    float alpha = smoothstep(0.02, 0.12, vDepth);
+    float alpha = smoothstep(0.0002, 0.02, vDepth);
 
     gl_FragColor = vec4(finalColor, alpha);
     #include <tonemapping_fragment>

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, Body, HTTPException
 from pydantic import BaseModel, Field
 
 from services.ms_building_service import ms_building_service
+from services.supabase_building_store import supabase_building_store
 
 router = APIRouter(prefix="/buildings", tags=["buildings"])
 
@@ -81,7 +82,11 @@ async def get_buildings(
                 detail="Must supply minLat/minLon/maxLat/maxLon or polygon or lat/lng/radius_km",
             )
 
-    return await ms_building_service.get_buildings_for_bbox(
+    row_id = supabase_building_store.row_id(float(s), float(w), float(n), float(e), poly_list)
+    stored = await supabase_building_store.load(row_id)
+    if stored and len(stored.get("features", [])) > 0:
+        return stored
+    result = await ms_building_service.get_buildings_for_bbox(
         min_lat=float(s),
         min_lon=float(w),
         max_lat=float(n),
@@ -90,6 +95,9 @@ async def get_buildings(
         max_buildings=max_buildings,
         water_level_m=water_level_m,
     )
+    if result.get("features"):
+        await supabase_building_store.save(row_id, result)
+    return result
 
 
 
@@ -111,7 +119,11 @@ async def extract_buildings_post(payload: BuildingBboxRequest = Body(...)):
         else:
             raise HTTPException(status_code=400, detail="Bounding box or polygon required")
 
-    return await ms_building_service.get_buildings_for_bbox(
+    row_id = supabase_building_store.row_id(float(s), float(w), float(n), float(e), payload.polygon)
+    stored = await supabase_building_store.load(row_id)
+    if stored and len(stored.get("features", [])) > 0:
+        return stored
+    result = await ms_building_service.get_buildings_for_bbox(
         min_lat=float(s),
         min_lon=float(w),
         max_lat=float(n),
@@ -120,3 +132,6 @@ async def extract_buildings_post(payload: BuildingBboxRequest = Body(...)):
         max_buildings=payload.max_buildings or 2500,
         water_level_m=payload.water_level_m or 0.0,
     )
+    if result.get("features"):
+        await supabase_building_store.save(row_id, result)
+    return result

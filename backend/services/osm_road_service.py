@@ -83,14 +83,23 @@ class OSMRoadService:
 
             features = geojson.get("features", [])
             if polygon and len(polygon) >= 3:
+                poly_lats = [point[0] for point in polygon]
+                poly_lngs = [point[1] for point in polygon]
+                min_lat, max_lat = min(poly_lats), max(poly_lats)
+                min_lng, max_lng = min(poly_lngs), max(poly_lngs)
                 scoped_features = []
                 for feat in features:
                     pts = _extract_points(feat.get("geometry", {}))
-                    if any(point_in_polygon(lat, lng, polygon) for lat, lng in pts):
+                    has_inside_point = any(point_in_polygon(lat, lng, polygon) for lat, lng in pts)
+                    overlaps_bounds = bool(pts) and not (
+                        max(lng for lat, lng in pts) < min_lng
+                        or min(lng for lat, lng in pts) > max_lng
+                        or max(lat for lat, lng in pts) < min_lat
+                        or min(lat for lat, lng in pts) > max_lat
+                    )
+                    if has_inside_point or overlaps_bounds:
                         scoped_features.append(feat)
-                # If polygon filtering matched features, scope to it; otherwise retain all features
-                if scoped_features:
-                    features = scoped_features
+                features = scoped_features
                 geojson = {
                     "type": "FeatureCollection",
                     "features": features,

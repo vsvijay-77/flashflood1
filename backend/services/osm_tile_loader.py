@@ -146,30 +146,40 @@ class OSMTileLoader:
         headers = {"User-Agent": "FlashFloodDigitalTwin/1.0 (contact: admin@ein.gov.in)"}
         errors: list[str] = []
 
-        for attempt in range(MAX_ATTEMPTS):
-            if attempt:
-                await asyncio.sleep(2 ** (attempt - 1))
-            endpoints = list(self._endpoint_order(attempt))
-            for idx, endpoint in enumerate(endpoints):
-                try:
-                    async with self._semaphore:
-                        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, headers=headers) as client:
-                            response = await client.post(endpoint, data={"data": query})
-                    if response.status_code in (429, 502, 503, 504):
-                        self._unhealthy_until[endpoint] = time.monotonic() + 60
-                        errors.append(f"{tile.key} {response.status_code} {endpoint}")
-                        continue
-                    response.raise_for_status()
-                    payload = response.json()
-                    elements = payload.get("elements")
-                    if not isinstance(elements, list):
-                        raise ValueError("response did not contain an elements list")
-                    # Authoritative OSM response received: cache and return immediately
-                    self._write_cache(dataset, tile, elements)
-                    return elements, False
-                except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
-                    self._unhealthy_until[endpoint] = time.monotonic() + 30
-                    errors.append(f"{tile.key} {endpoint}: {exc}")
+        async def fetch(endpoint: str, delay: float = 0):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                async with self._semaphore:
+                    async with httpx.AsyncClient(timeout=12, headers=headers) as client:
+                        response = await client.post(endpoint, data={"data": query})
+                response.raise_for_status()
+                payload = response.json()
+                elements = payload.get("elements")
+                if payload.get("remark") or not isinstance(elements, list):
+                    raise ValueError("Overpass did not return a complete dataset")
+                return elements
+            except (httpx.HTTPError, ValueError) as exc:
+                self._unhealthy_until[endpoint] = time.monotonic() + 30
+                errors.append(f"{tile.key} {endpoint}: {exc}")
+                return None
+
+        # Hedge a slow mirror after one second; bound each wave to two requests.
+        endpoints = list(self._endpoint_order(0))
+        for start in range(0, len(endpoints), 2):
+            tasks = [asyncio.create_task(fetch(endpoint, index * 1.0))
+                     for index, endpoint in enumerate(endpoints[start:start + 2])]
+            try:
+                for completed in asyncio.as_completed(tasks):
+                    elements = await completed
+                    if elements is not None:
+                        self._write_cache(dataset, tile, elements)
+                        return elements, False
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
         raise OSMTileLoadError(errors or [f"{tile.key} failed without a response"])
 
     async def load(

@@ -8,7 +8,7 @@ import type { SensorDataRecord } from "@/lib/types";
 
 /** Find all local maxima (peaks) for a given data key. A peak is a point
  *  whose value is strictly greater than both its immediate neighbors. */
-function findPeaks(data: { time: string; x: number; y: number; z: number }[], key: "x" | "y" | "z") {
+function findPeaks(data: { time: string; x: number; y: number; z: number; tilt: number }[], key: "x" | "y" | "z" | "tilt") {
   const peaks: { time: string; value: number }[] = [];
   for (let i = 1; i < data.length - 1; i++) {
     const prev = data[i - 1][key];
@@ -63,8 +63,9 @@ export function AccelerometerGraph() {
   const xPeaks = useMemo(() => findPeaks(accelData, "x"), [accelData]);
   const yPeaks = useMemo(() => findPeaks(accelData, "y"), [accelData]);
   const zPeaks = useMemo(() => findPeaks(accelData, "z"), [accelData]);
+  const tiltPeaks = useMemo(() => findPeaks(accelData, "tilt"), [accelData]);
 
-  const totalPeaks = xPeaks.length + yPeaks.length + zPeaks.length;
+  const totalPeaks = xPeaks.length + yPeaks.length + zPeaks.length + tiltPeaks.length;
   const latestTilt = records[0]?.tilt ?? 0;
   const latestDevice = records[0]?.device_id ?? "LORA_NODE_1";
 
@@ -86,8 +87,8 @@ export function AccelerometerGraph() {
         </div>
         <div className="flex items-center gap-3">
           <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
-            <span className="size-2 rounded-full bg-black ring-2 ring-white" />
-            {totalPeaks} Peaks Detected
+            <span className="size-2 rounded-full bg-amber-400 ring-2 ring-white" />
+            {totalPeaks} Peaks Detected ({tiltPeaks.length} Tilts Marked)
           </span>
           <div className="flex gap-2">
             {["Live", "Last 1 Hour", "Last 24 Hours", "Last 7 Days"].map((r) => (
@@ -117,6 +118,16 @@ export function AccelerometerGraph() {
               <Line type="monotone" dataKey="x" name="IMU X-Axis" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="y" name="IMU Y-Axis" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="z" name="IMU Z-Axis" stroke="#f43f5e" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="tilt"
+                name="Tilt Angle (°)"
+                stroke="#f59e0b"
+                strokeWidth={2.5}
+                dot={{ r: 3.5, fill: "#f59e0b", stroke: "#ffffff", strokeWidth: 1.5 }}
+                activeDot={{ r: 6, fill: "#d97706", stroke: "#ffffff", strokeWidth: 2 }}
+                isAnimationActive={false}
+              />
 
               {/* X-axis peaks */}
               {xPeaks.map((p, i) => (
@@ -132,11 +143,16 @@ export function AccelerometerGraph() {
               {zPeaks.map((p, i) => (
                 <ReferenceDot key={`zp-${i}`} x={p.time} y={p.value} r={4} fill="#000000" stroke="#000000" strokeWidth={2} />
               ))}
+
+              {/* Tilt-axis marked peaks */}
+              {tiltPeaks.map((p, i) => (
+                <ReferenceDot key={`tiltp-${i}`} x={p.time} y={p.value} r={5} fill="#f59e0b" stroke="#78350f" strokeWidth={2} />
+              ))}
             </LineChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-4 rounded-lg bg-slate-50 p-4 md:grid-cols-5">
+        <div className="mt-6 grid grid-cols-2 gap-4 rounded-lg bg-slate-50 p-4 md:grid-cols-6">
           <div className="flex flex-col">
             <span className="text-xs font-medium uppercase text-slate-500">X Peaks</span>
             <span className="font-mono text-lg font-semibold text-slate-900">{xPeaks.length}</span>
@@ -148,6 +164,13 @@ export function AccelerometerGraph() {
           <div className="flex flex-col">
             <span className="text-xs font-medium uppercase text-slate-500">Z Peaks</span>
             <span className="font-mono text-lg font-semibold text-slate-900">{zPeaks.length}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-xs font-medium uppercase text-amber-600 flex items-center gap-1">
+              <span className="size-2 rounded-full bg-amber-500" />
+              Tilt Peaks
+            </span>
+            <span className="font-mono text-lg font-semibold text-amber-700">{tiltPeaks.length} Marked</span>
           </div>
           <div className="flex flex-col">
             <span className="text-xs font-medium uppercase text-slate-500">Inclinometer Tilt</span>

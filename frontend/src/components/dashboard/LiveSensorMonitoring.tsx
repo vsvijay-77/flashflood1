@@ -205,6 +205,7 @@ export function LiveSensorMonitoring() {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={trendData}>
                   <Tooltip contentStyle={{ fontSize: "10px" }} />
+                  <Line type="monotone" dataKey="tilt" name="Tilt Angle °" stroke="#f59e0b" strokeWidth={2} dot={{ r: 2.5, fill: "#f59e0b" }} />
                   <Line type="monotone" dataKey="x" stroke="#a855f7" strokeWidth={1.5} dot={false} />
                   <Line type="monotone" dataKey="y" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
                   <Line type="monotone" dataKey="z" stroke="#ec4899" strokeWidth={1.5} dot={false} />

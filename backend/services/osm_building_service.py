@@ -33,7 +33,7 @@ def _closed(coords: list[list[float]]) -> list[list[float]]:
 
 def _join_rings(ways: list[list[list[float]]]) -> list[list[list[float]]]:
     """Join relation member ways by shared endpoints into closed boundary rings."""
-    pending = [_closed(way) for way in ways if len(way) >= 2]
+    pending = [list(way) for way in ways if len(way) >= 2]
     rings: list[list[list[float]]] = []
     while pending:
         chain = pending.pop()
@@ -88,8 +88,8 @@ class OSMBuildingService:
             if item.get("type") != "way":
                 continue
             coords = [nodes[node_id] for node_id in item.get("nodes", []) if node_id in nodes]
-            if len(coords) >= 3:
-                way_coords[item["id"]] = _closed(coords)
+            if len(coords) >= 2:
+                way_coords[item["id"]] = coords
                 way_tags[item["id"]] = dict(item.get("tags") or {})
 
         features: list[dict[str, Any]] = []
@@ -102,8 +102,8 @@ class OSMBuildingService:
                 if geometry.get("type") == "Polygon"
                 else [point for polygon_rings in rings for ring in polygon_rings for point in ring]
             )
-            if polygon and len(polygon) >= 3 and not any(point_in_polygon(lat, lng, polygon) for lng, lat in flat):
-                return
+            # Exact clipping is performed by the selected-area endpoint. A
+            # footprint crossing the boundary may have no vertex inside it.
             height_m, source = _height(tags)
             features.append({
                 "type": "Feature",
@@ -124,7 +124,7 @@ class OSMBuildingService:
             if not tags.get("building") or ("way", way_id) in seen or len(coords) < 4:
                 continue
             seen.add(("way", way_id))
-            include({"type": "Polygon", "coordinates": [coords]}, tags, "way", way_id)
+            include({"type": "Polygon", "coordinates": [_closed(coords)]}, tags, "way", way_id)
 
         # Relations are typically multipolygon buildings. Their member ways are
         # already present through the recursive Overpass query above.
@@ -146,17 +146,6 @@ class OSMBuildingService:
             polygons = [[outer, *inners] if index == 0 else [outer] for index, outer in enumerate(outers)]
             geometry = {"type": "Polygon", "coordinates": polygons[0]} if len(polygons) == 1 else {"type": "MultiPolygon", "coordinates": polygons}
             include(geometry, dict(relation.get("tags") or {}), "relation", relation_id)
-
-        if len(features) == 0:
-            try:
-                from services.ms_building_service import ms_building_service
-                ms_res = await ms_building_service.get_buildings_for_bbox(
-                    south, west, north, east, polygon=polygon
-                )
-                if ms_res and ms_res.get("features"):
-                    return ms_res, load_status
-            except Exception:
-                pass
 
         return {
             "type": "FeatureCollection",

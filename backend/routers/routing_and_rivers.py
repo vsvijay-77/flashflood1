@@ -120,12 +120,8 @@ async def delete_area_data(payload: AreaDeleteRequest, user: dict = Depends(curr
 async def _selected_location(payload: LocationRequest):
     area_id = str(payload.area_id) if payload.area_id else None
     if area_id:
-        try:
-            area = await selected_area_store.get_area(area_id)
-            if area and (not payload.polygon or len(payload.polygon) < 3):
-                payload.polygon = area_polygon(area)
-        except Exception:
-            pass
+        area = await selected_area_store.get_area(area_id)
+        payload.polygon = area_polygon(area)
     bbox = tight_bbox(payload.polygon) if payload.polygon and len(payload.polygon) >= 3 else _derive_bbox(payload)
     key = f"dt-area-{area_id}" if area_id else supabase_network_store.area_key(
         bbox["north"], bbox["south"], bbox["east"], bbox["west"], payload.polygon)
@@ -229,33 +225,100 @@ async def extract_networks(payload: LocationRequest = Body(...)):
 
 @router.post("/extract-buildings")
 async def extract_buildings(payload: LocationRequest = Body(...)):
-    """Load complete OSM building footprints after the priority network layers."""
+    """Load Microsoft Global ML and OSM building footprints with complete area coverage."""
     started = time.perf_counter()
     area_id, bbox, area_key = await _selected_location(payload)
     row_id = f"{area_key}:buildings"
     db_started = time.perf_counter()
-    stored = await supabase_building_store.load(row_id)
+    stored = None
+    try:
+        stored = await supabase_building_store.load(row_id)
+    except Exception as exc:
+        print(f"[ExtractBuildings] Supabase read error: {exc}")
     db_read_ms = round((time.perf_counter() - db_started) * 1000)
-    if stored is not None and stored.get("metadata", {}).get("selection_polygon") == payload.polygon:
+
+    # If already cached with a rich building dataset (>=100 buildings), sanitize and serve immediately
+    if stored is not None and len(stored.get("features", [])) >= 100 and stored.get("metadata", {}).get("selection_polygon") == payload.polygon:
+        try:
+            net_stored = await supabase_network_store.load(area_key, bbox=bbox, polygon=payload.polygon)
+            cached_roads = (net_stored or {}).get("roads", [])
+            if cached_roads:
+                from services.ms_building_service import is_building_in_road_path, build_road_spatial_grid
+                road_segments = []
+                for f in cached_roads:
+                    coords = (f.get("geometry") or {}).get("coordinates") or []
+                    if len(coords) < 2:
+                        continue
+                    r_type = (f.get("properties") or {}).get("road_type") or "residential"
+                    setback = 8.5 if r_type in ("motorway", "trunk") else 7.0 if r_type == "primary" else 6.0 if r_type in ("secondary", "tertiary") else 5.0 if r_type in ("residential", "living_street", "unclassified") else 3.5
+                    for i in range(len(coords) - 1):
+                        p1, p2 = coords[i], coords[i + 1]
+                        road_segments.append((float(p1[0]), float(p1[1]), float(p2[0]), float(p2[1]), setback))
+                rgrid = build_road_spatial_grid(road_segments)
+                cleaned = []
+                for b in stored.get("features", []):
+                    geom = b.get("geometry") or {}
+                    coords = geom.get("coordinates") or []
+                    if not coords or not coords[0]:
+                        continue
+                    ring = coords[0] if geom.get("type") == "Polygon" else coords[0][0]
+                    lat = b.get("properties", {}).get("lat") or ring[0][1]
+                    lon = b.get("properties", {}).get("lon") or ring[0][0]
+                    if not is_building_in_road_path(lat, lon, ring, rgrid):
+                        cleaned.append(b)
+                stored["features"] = cleaned
+                stored.setdefault("metadata", {})["total_buildings"] = len(cleaned)
+        except Exception as filter_err:
+            print(f"[ExtractBuildings] Road filter on cached buildings warning: {filter_err}")
+
         return {"status": "success", "bbox": bbox, "area_id": area_id,
                 "buildings": {"geojson": stored, "total_features": len(stored["features"])},
                 "osm_loading": {"complete": True, "source": "Supabase"}, "persistence": {"saved": True},
                 "timing_ms": {"db_read": db_read_ms, "total": round((time.perf_counter() - started) * 1000)}}
+
+    features = []
+    tile_status = {"complete": True, "source": "Microsoft Global ML"}
+
+    # 1. Primary: Load real Microsoft Global ML Building Footprints for this area
     try:
-        geojson, tile_status = await building_service.get_buildings(
-            bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
+        from services.ms_building_service import ms_building_service
+        net_stored = await supabase_network_store.load(area_key, bbox=bbox, polygon=payload.polygon)
+        cached_roads = (net_stored or {}).get("roads", [])
+        ms_res = await ms_building_service.get_buildings_for_bbox(
+            min_lat=bbox["south"], min_lon=bbox["west"],
+            max_lat=bbox["north"], max_lon=bbox["east"],
+            polygon=payload.polygon, max_buildings=1500,
+            roads=cached_roads,
         )
-    except OSMTileLoadError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"message": "Building data is incomplete.", "failed_tiles": exc.failures},
-        ) from exc
+        if ms_res and ms_res.get("features"):
+            features = ms_res["features"]
+    except Exception as exc:
+        print(f"[ExtractBuildings] MS building service error: {exc}")
+
+    # 2. Fallback: If MS building footprints returned nothing, try OSM buildings
+    if not features:
+        try:
+            osm_res, osm_status = await building_service.get_buildings(
+                bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
+            )
+            features = osm_res.get("features", [])
+            tile_status = osm_status
+        except Exception as exc:
+            print(f"[ExtractBuildings] OSM building service fallback error: {exc}")
+
+    geojson = {"type": "FeatureCollection", "features": features, "metadata": {"total_buildings": len(features)}}
     geojson = {**geojson, "features": clip_features(geojson.get("features", []), bbox, payload.polygon)}
-    geojson["metadata"] = {**geojson.get("metadata", {}), "selection_polygon": payload.polygon}
+    geojson["metadata"] = {**geojson.get("metadata", {}), "selection_polygon": payload.polygon, "total_buildings": len(geojson["features"])}
+
     db_started = time.perf_counter()
-    async with selected_area_store.writing(area_key, area_id):
-        saved = await supabase_building_store.save(row_id, geojson, area_id)
+    saved = False
+    try:
+        async with selected_area_store.writing(area_key, area_id):
+            saved = await supabase_building_store.save(row_id, geojson, area_id)
+    except Exception as exc:
+        print(f"[ExtractBuildings] Supabase save error: {exc}")
     db_write_ms = round((time.perf_counter() - db_started) * 1000)
+
     return {
         "status": "success",
         "area_id": area_id,

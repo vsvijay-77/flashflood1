@@ -17,6 +17,7 @@ import { HAZARD_LABELS, ROLE_LABELS, SENSOR_LABELS, type Alert, type Report, typ
 import { CesiumDigitalTwinViewer } from "@/components/gis/CesiumDigitalTwinViewer";
 import GISMap, { DEFAULT_LAYERS } from "@/components/gis/GISMap";
 import { supabase } from "@/lib/supabase";
+import { deleteMonitoredArea } from "@/lib/monitoredAreas";
 import { parseCustomAreaPolygon } from "@/lib/gisUtils";
 import DisasterIntelligenceChat from "@/components/gis/DisasterIntelligenceChat";
 import { MobileUsersManagement } from "@/components/users/MobileUsersManagement";
@@ -30,6 +31,27 @@ const SCENARIOS = [
   { value: "evacuation", label: "Evacuation Route Simulation" },
 ];
 const SCENARIO_LABELS: Record<string, string> = Object.fromEntries(SCENARIOS.map((s) => [s.value, s.label]));
+
+const DEFAULT_MONITORED_AREA: CustomArea = {
+  id: "e441fb05-e72a-4f1b-baa6-0294cce3213d",
+  name: "Pollachi Basin",
+  district: "Coimbatore",
+  type: "Basin",
+  risk: "High",
+  priority: "High",
+  description: "Monitored catchment and urban basin for flash flood tracking.",
+  date: new Date().toLocaleDateString(),
+  lat: 10.6608,
+  lng: 77.0048,
+  shape: "Polygon",
+  polygon: [
+    [10.6758, 76.9898],
+    [10.6758, 77.0198],
+    [10.6458, 77.0198],
+    [10.6458, 76.9898],
+  ],
+  areaSqMeters: 18500000,
+};
 
 export function DigitalTwinPage() {
   const location = useLocation();
@@ -56,7 +78,7 @@ export function DigitalTwinPage() {
       const cached = localStorage.getItem("cached_custom_areas");
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed.map((d: any) => ({
             ...d,
             polygon: d.polygon || parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng)),
@@ -66,24 +88,24 @@ export function DigitalTwinPage() {
     } catch (e) {
       console.warn("Failed to parse cached custom areas", e);
     }
-    return [];
+    return [DEFAULT_MONITORED_AREA];
   });
   const [selectedAreaId, setSelectedAreaId] = useState<string>(
-    location.state?.area?.id || (customAreas[0]?.id ?? "")
+    location.state?.area?.id || customAreas[0]?.id || DEFAULT_MONITORED_AREA.id
   );
   const [activeArea, setActiveArea] = useState<CustomArea | null>(
-    location.state?.area || (customAreas[0] ?? null)
+    location.state?.area || customAreas[0] || DEFAULT_MONITORED_AREA
   );
   const [twinViewMode, setTwinViewMode] = useState<"3d" | "gis">("3d");
 
   const [lat, setLat] = useState<number>(
-    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : (customAreas[0]?.lat ? Number(customAreas[0].lat) : 10.6608))
+    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : (customAreas[0]?.lat ? Number(customAreas[0].lat) : DEFAULT_MONITORED_AREA.lat))
   );
   const [lng, setLng] = useState<number>(
-    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : (customAreas[0]?.lng ? Number(customAreas[0].lng) : 77.0048))
+    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : (customAreas[0]?.lng ? Number(customAreas[0].lng) : DEFAULT_MONITORED_AREA.lng))
   );
   const [areaTitle, setAreaTitle] = useState<string>(
-    location.state?.area?.name || location.state?.name || customAreas[0]?.name || "Pollachi Basin"
+    location.state?.area?.name || location.state?.name || customAreas[0]?.name || DEFAULT_MONITORED_AREA.name
   );
 
   // Fetch monitored areas from Supabase
@@ -111,20 +133,24 @@ export function DigitalTwinPage() {
           }));
           setCustomAreas(loaded);
           setActiveArea((current) => {
-            if (!current && loaded.length > 0) {
-              setSelectedAreaId(loaded[0].id);
-              setLat(Number(loaded[0].lat));
-              setLng(Number(loaded[0].lng));
-              setAreaTitle(loaded[0].name);
-              return loaded[0];
-            }
-            return current;
+            const selected = loaded.find(area => area.id === current?.id) || loaded[0] || DEFAULT_MONITORED_AREA;
+            setSelectedAreaId(selected?.id || "");
+            setAreaTitle(selected?.name || "");
+            if (selected) { setLat(Number(selected.lat)); setLng(Number(selected.lng)); }
+            return selected;
           });
           try {
             localStorage.setItem("cached_custom_areas", JSON.stringify(loaded));
           } catch (e) {
             console.warn("Failed to persist custom areas to localStorage", e);
           }
+        } else {
+          setCustomAreas([DEFAULT_MONITORED_AREA]);
+          setActiveArea((current) => current || DEFAULT_MONITORED_AREA);
+          setSelectedAreaId(DEFAULT_MONITORED_AREA.id);
+          setAreaTitle(DEFAULT_MONITORED_AREA.name);
+          setLat(DEFAULT_MONITORED_AREA.lat);
+          setLng(DEFAULT_MONITORED_AREA.lng);
         }
       },
       () => {
@@ -359,7 +385,7 @@ export function DigitalTwinPage() {
                     if (!window.confirm(`Delete monitored area "${activeArea.name}" and all its saved data permanently from database?`)) return;
 
                     try {
-                      await supabase.from("custom_areas").delete().eq("id", activeArea.id);
+                      await deleteMonitoredArea(activeArea);
                       const safeName = activeArea.name.replace(/\s+/g, "_");
                       localStorage.removeItem(`dt_mesh_nodes_${safeName}`);
                       localStorage.removeItem(`dt_user_activity_${safeName}`);
@@ -388,6 +414,7 @@ export function DigitalTwinPage() {
           {twinViewMode === "3d" ? (
             <div className="w-full transition-all duration-500 ease-out animate-in fade-in zoom-in-[0.99]">
               <CesiumDigitalTwinViewer
+                areaId={activeArea?.id}
                 key={`cesium-dt-${selectedAreaId || areaTitle}-${lat.toFixed(4)}-${lng.toFixed(4)}`}
                 latitude={lat}
                 longitude={lng}

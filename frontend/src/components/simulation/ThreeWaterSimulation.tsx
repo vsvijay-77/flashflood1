@@ -2,8 +2,11 @@ import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwa
 import * as THREE from "three";
 import { WaterPhysicsSimulation } from "./waterPhysics";
 import { createWaterShaderMaterial } from "./WaterShaders";
-import { fetchOsmWaterSources, type OsmWaterQueryResult, type WaterSourceFeature } from "@/services/osmWaterSourceService";
+import { fetchOsmWaterSources, type OsmWaterQueryResult } from "@/services/osmWaterSourceService";
 import { WaterSimulationControlPanel } from "./WaterSimulationControlPanel";
+import { createWaterSources } from "./waterSources";
+import { sampleFloodTriangle, type FloodSurface } from "./floodExposure";
+import type { BuildingFeature } from "@/lib/routingApi";
 
 declare const Cesium: any;
 
@@ -14,6 +17,11 @@ export interface ThreeWaterSimulationProps {
   baseElevation?: number;
   polygonCoords?: [number, number][] | null;
   active: boolean;
+  waterSourceActive?: boolean;
+  rainfallActive?: boolean;
+  rainfallIntensity?: number;
+  onFloodUpdate?: (surface: FloodSurface | null) => void;
+  buildings?: BuildingFeature[];
   onClose?: () => void;
   debugMode?: boolean;
 }
@@ -38,6 +46,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       baseElevation = 293,
       polygonCoords,
       active,
+      waterSourceActive = true,
+      rainfallActive = false,
+      rainfallIntensity = 0,
+      onFloodUpdate,
+      buildings,
       onClose,
     },
     ref
@@ -50,6 +63,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const sceneRef = useRef<THREE.Scene | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
     const terrainMeshRef = useRef<THREE.Mesh | null>(null);
+    const buildingMeshRef = useRef<THREE.Mesh | null>(null);
+    const buildingsRef = useRef(buildings);
+    buildingsRef.current = buildings;
     const waterMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
     const sceneColorTextureRef = useRef<THREE.CanvasTexture | null>(null);
@@ -58,6 +74,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const physicsSimRef = useRef<WaterPhysicsSimulation | null>(null);
     const insideMaskRef = useRef<Uint8Array | null>(null);
     const waterBodyMaskRef = useRef<Uint8Array | null>(null);
+    const floodSurfaceRef = useRef<FloodSurface | null>(null);
+    const floodUpdateRef = useRef(onFloodUpdate);
+    floodUpdateRef.current = onFloodUpdate;
+    const rainRef = useRef({ active: rainfallActive, intensity: rainfallIntensity });
+    rainRef.current = { active: rainfallActive, intensity: rainfallIntensity };
+    const hasWaterBodiesRef = useRef(false);
 
     // Local-inertial & ENU coordinate frame refs
     const effectiveCenterElevRef = useRef<number>(baseElevation);
@@ -115,8 +137,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       const abortController = new AbortController();
       let isMounted = true;
       setIsRunning(false);
+      isRunningRef.current = false;
       setIsPaused(false);
+      isPausedRef.current = false;
       physicsSimRef.current = null;
+      floodSurfaceRef.current = null;
+      floodUpdateRef.current?.(null);
 
       const setupSimulation = async () => {
         setStatusText("Sampling Cesium high-resolution DEM…");
@@ -167,6 +193,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const COLS = Math.max(2, Math.round(totalWidthM / spacing) + 1);
         const ROWS = Math.max(2, Math.round(totalHeightM / spacing) + 1);
         const dx = totalWidthM / (COLS - 1);
+        const dy = totalHeightM / (ROWS - 1);
 
         setGridResolutionText(`${COLS} × ${ROWS} (${dx.toFixed(1)}m)`);
 
@@ -198,12 +225,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             });
             for (let i = 0; i < results.length; i++) {
               const h = results[i]?.height;
-              sampledElevations[i] = h !== undefined && !isNaN(h) && h > -50 ? h : centerElev;
+              sampledElevations[i] = Number.isFinite(h) ? h : centerElev;
             }
           } else {
             for (let i = 0; i < cartographics.length; i++) {
               const h = cesiumViewer.scene.globe.getHeight(cartographics[i]);
-              sampledElevations[i] = h !== undefined && !isNaN(h) && h > -50 ? h : centerElev;
+              sampledElevations[i] = Number.isFinite(h) ? h : centerElev;
             }
           }
         } catch (e) {
@@ -211,7 +238,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           console.warn("[WaterSim] Falling back to globe height:", e);
           for (let i = 0; i < cartographics.length; i++) {
             const h = cesiumViewer.scene.globe.getHeight(cartographics[i]);
-            sampledElevations[i] = h !== undefined && !isNaN(h) && h > -50 ? h : centerElev;
+            sampledElevations[i] = Number.isFinite(h) ? h : centerElev;
           }
         }
 
@@ -240,8 +267,6 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         // 3. Calculate Elevation Relief and Mark Polygon Masks
         const totalCells = COLS * ROWS;
         const insideMask = new Uint8Array(totalCells);
-        const sourceMask = new Uint8Array(totalCells);
-        const initialDepths = new Float32Array(totalCells);
 
         let minElev = Infinity;
         let maxElev = -Infinity;
@@ -273,40 +298,18 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         }
         const relief = maxElev - minElev;
 
-        // Tag OSM water sources into grid strictly inside the selected polygon
-        let waterFeatureCount = 0;
-        const waterFeatures = osmResult.features || [];
-
-        for (const feat of waterFeatures) {
-          const geom = feat.geometry;
-          if (!geom) continue;
-
-          if (geom.type === "LineString" && Array.isArray(geom.coordinates)) {
-            tagLineStringCells(geom.coordinates, latList, lngList, COLS, ROWS, insideMask, sourceMask, initialDepths);
-          } else if (geom.type === "MultiLineString" && Array.isArray(geom.coordinates)) {
-            for (const line of geom.coordinates) {
-              tagLineStringCells(line, latList, lngList, COLS, ROWS, insideMask, sourceMask, initialDepths);
-            }
-          } else if (geom.type === "Polygon" && Array.isArray(geom.coordinates)) {
-            tagPolygonCells(geom.coordinates, latList, lngList, COLS, ROWS, insideMask, sourceMask, initialDepths);
-          } else if (geom.type === "MultiPolygon" && Array.isArray(geom.coordinates)) {
-            for (const poly of geom.coordinates) {
-              tagPolygonCells(poly, latList, lngList, COLS, ROWS, insideMask, sourceMask, initialDepths);
-            }
-          }
-        }
-
-        // Count OSM water cells
-        for (let i = 0; i < totalCells; i++) {
-          if (insideMask[i] && sourceMask[i]) {
-            waterFeatureCount++;
-          }
-        }
+        const { bed, sourceMask, initialDepths } = createWaterSources(
+          { cols: COLS, rows: ROWS, dx, dy, south, west, north, east },
+          sampledElevations, insideMask, osmResult.features || []
+        );
+        const waterFeatureCount = sourceMask.reduce((sum, value) => sum + value, 0);
+        hasWaterBodiesRef.current = waterFeatureCount > 0;
+        waterBodyMaskRef.current = new Uint8Array(sourceMask);
 
         // OSM sources take precedence; an unmapped area gets a small scenario
         // inflow near its highest terrain, rather than flooding every hilltop.
         let highSourceCount = 0;
-        if (waterFeatureCount === 0 && insideCellsCount > 0) {
+        if (waterSourceActive && waterFeatureCount === 0 && insideCellsCount > 0) {
           const candidates = Array.from({ length: totalCells }, (_, i) => i)
             .filter(i => insideMask[i]).sort((a, b) => sampledElevations[b] - sampledElevations[a]);
           const count = Math.max(1, Math.ceil(candidates.length * 0.01));
@@ -317,26 +320,26 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           }
         }
 
-        waterBodyMaskRef.current = sourceMask;
         setIsFallbackSource(waterFeatureCount === 0);
         setOsmFeatureCount(waterFeatureCount || highSourceCount);
 
         // 5. Initialize Physics Simulation Engine with High-to-Low Momentum
         const physics = new WaterPhysicsSimulation(
-          { cols: COLS, rows: ROWS, dx, manningN: 0.035, gravity: 9.81 },
-          sampledElevations,
+          { cols: COLS, rows: ROWS, dx, dy, manningN: 0.035, gravity: 9.81 },
+          bed,
           insideMask,
           sourceMask,
           initialDepths
         );
         physicsSimRef.current = physics;
+        floodSurfaceRef.current = { state: physics.state, terrain: sampledElevations, south, west, north, east };
 
         // 6. Build Local ENU Three.js Mesh Coordinates
         const positions = new Float32Array(totalCells * 3);
         for (let i = 0; i < totalCells; i++) {
           const lat = latList[i];
           const lng = lngList[i];
-          const elev = sampledElevations[i];
+          const elev = bed[i];
 
           const posCartesian = Cesium.Cartesian3.fromDegrees(lng, lat, elev);
           const posENU = Cesium.Matrix4.multiplyByPoint(
@@ -363,10 +366,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         };
 
         // 7. Build Three.js Geometry & Mesh across the entire polygon area
-        buildThreeWaterMesh(COLS, ROWS, positions, sampledElevations, initialDepths, insideMask, sourceMask);
+        buildThreeWaterMesh(COLS, ROWS, positions, bed, initialDepths, insideMask, waterBodyMaskRef.current);
 
         setStatusText(
-          `Ready • Slope: ${minElev.toFixed(0)}m → ${maxElev.toFixed(0)}m (${relief.toFixed(0)}m drop, ${highSourceCount} high-inflow cells)`
+          `Ready • Slope: ${maxElev.toFixed(0)}m → ${minElev.toFixed(0)}m (${relief.toFixed(0)}m drop, ${highSourceCount} high-inflow cells)`
         );
       };
 
@@ -377,8 +380,75 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       return () => {
         isMounted = false;
         abortController.abort();
+        floodSurfaceRef.current = null;
+        floodUpdateRef.current?.(null);
       };
-    }, [active, cesiumViewer, centerLat, centerLng, baseElevation, polygonCoords]);
+    }, [active, waterSourceActive, cesiumViewer, centerLat, centerLng, baseElevation, polygonCoords]);
+
+    // A shared depth-only mesh keeps the water overlay behind roofs and walls.
+    const buildBuildingOccluders = () => {
+      const scene = sceneRef.current, surface = floodSurfaceRef.current;
+      const transform = enuTransformRef.current;
+      if (!scene || !surface || !transform) return;
+      if (buildingMeshRef.current) {
+        scene.remove(buildingMeshRef.current);
+        buildingMeshRef.current.geometry.dispose();
+        (buildingMeshRef.current.material as THREE.Material).dispose();
+        buildingMeshRef.current = null;
+      }
+      const vertices: number[] = [], indices: number[] = [];
+      for (const building of buildingsRef.current || []) {
+        const polygons = building.geometry.type === "Polygon"
+          ? [building.geometry.coordinates as number[][][]] : building.geometry.coordinates as number[][][][];
+        const rawHeight = Number(building.properties?.estimated_height || building.properties?.height || building.properties?.height_m || 6);
+        const height = Math.max(3.5, Number.isFinite(rawHeight) ? rawHeight : 6);
+        for (const rings of polygons) {
+          if (!rings[0]?.length) continue;
+          const contours: THREE.Vector2[][] = [];
+          const bottoms: THREE.Vector3[] = [];
+          let valid = true;
+          for (const ring of rings) {
+            const contour: THREE.Vector2[] = [];
+            const openRing = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring;
+            for (const [lng, lat] of openRing) {
+              const sample = sampleFloodTriangle(surface, lng, lat);
+              if (!sample) { valid = false; break; }
+              const elevation = sample.cells.reduce((sum, i, j) => sum + surface.terrain[i] * sample.weights[j], 0);
+              const local = Cesium.Matrix4.multiplyByPoint(transform.fixedToEnu,
+                Cesium.Cartesian3.fromDegrees(lng, lat, elevation), new Cesium.Cartesian3());
+              contour.push(new THREE.Vector2(local.x, -local.y));
+              bottoms.push(new THREE.Vector3(local.x, local.z, -local.y));
+            }
+            contours.push(contour);
+          }
+          if (!valid || contours[0].length < 3) continue;
+          const base = vertices.length / 3, count = bottoms.length;
+          for (const p of bottoms) vertices.push(p.x, p.y, p.z);
+          for (const p of bottoms) vertices.push(p.x, p.y + height, p.z);
+          for (const triangle of THREE.ShapeUtils.triangulateShape(contours[0], contours.slice(1))) {
+            indices.push(...triangle.map(i => base + count + i));
+          }
+          let offset = 0;
+          for (const contour of contours) {
+            for (let i = 0; i < contour.length; i++) {
+              const a = base + offset + i, b = base + offset + (i + 1) % contour.length;
+              indices.push(a, b, a + count, b, b + count, a + count);
+            }
+            offset += contour.length;
+          }
+        }
+      }
+      if (!vertices.length) return;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+      geometry.setIndex(indices);
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }));
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      buildingMeshRef.current = mesh;
+    };
+
+    useEffect(() => { buildBuildingOccluders(); }, [buildings]);
 
     // ─── 2. BUILD THREE.JS WATER MESH WITH SHADERMATERIAL ────────────────────
     const buildThreeWaterMesh = (
@@ -445,7 +515,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       // Depth-only terrain occludes water behind sampled ridges in the overlay.
       const terrainGeometry = new THREE.BufferGeometry();
       const terrainPositions = new Float32Array(positions);
-      for (let i = 0; i < totalCells; i++) terrainPositions[i * 3 + 1] -= 0.12;
+      for (let i = 0; i < totalCells; i++) {
+        const terrain = floodSurfaceRef.current?.terrain[i] ?? bedElevations[i];
+        const visibleBed = waterBodyMask[i] ? Math.min(terrain, bedElevations[i] + initialDepths[i]) : terrain;
+        terrainPositions[i * 3 + 1] += visibleBed - bedElevations[i] - 0.12;
+      }
       terrainGeometry.setAttribute("position", new THREE.BufferAttribute(terrainPositions, 3));
       const terrainIndices: number[] = [];
       for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols - 1; c++) {
@@ -479,6 +553,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       mesh.frustumCulled = false;
       scene.add(mesh);
       waterMeshRef.current = mesh;
+      buildBuildingOccluders();
       handleReset();
       cesiumViewer.scene.requestRender();
     };
@@ -565,7 +640,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       const removeFrameRequest = cesiumViewer.scene.preUpdate.addEventListener(() => {
         const now = performance.now();
         if (document.hidden || !waterMeshRef.current || now - requestedAt < 1000 / 60 - 1) return;
-        if (showWaterRef.current || (isRunningRef.current && !isPausedRef.current)) {
+        if (showWaterRef.current || ((isRunningRef.current || rainRef.current.active) && !isPausedRef.current)) {
           requestedAt = now;
           cesiumViewer.scene.requestRender();
         }
@@ -612,10 +687,14 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const mesh = waterMeshRef.current;
         const gridMeta = gridMetaRef.current;
 
-        if (isRunningRef.current && !isPausedRef.current) physicsTime += dt;
+        const running = (isRunningRef.current || rainRef.current.active) && !isPausedRef.current;
+        if (running) physicsTime += dt;
         else physicsTime = 0;
-        if (physics && mesh && gridMeta && isRunningRef.current && !isPausedRef.current && physicsTime >= 1 / 30) {
-          physics.advance(physicsTime, speedRef.current, sourceRiseRef.current);
+        if (physics && mesh && gridMeta && running && physicsTime >= 1 / 30) {
+          physics.advance(physicsTime, speedRef.current,
+            isRunningRef.current ? sourceRiseRef.current : 0,
+            rainRef.current.active ? rainRef.current.intensity : 0,
+            hasWaterBodiesRef.current || isRunningRef.current);
           physicsTime = 0;
 
           // Update Geometry Buffers
@@ -649,12 +728,13 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             setElapsedSeconds(Math.round(physics.state.elapsedSeconds));
             setSpreadAreaHectares(physics.state.floodedAreaHectares);
             setMaxDepthM(physics.state.maxDepthM);
+            floodUpdateRef.current?.(floodSurfaceRef.current);
           }
         }
 
         // Toggle mesh visibility
         if (mesh) {
-          mesh.visible = showWaterRef.current;
+          mesh.visible = showWaterRef.current && Boolean(physics);
         }
 
         if (!showWaterRef.current) { renderer.clear(); return; }
@@ -676,6 +756,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           physicsSimRef.current.reset();
         }
 
+        if (buildingMeshRef.current) {
+          buildingMeshRef.current.geometry.dispose();
+          (buildingMeshRef.current.material as THREE.Material).dispose();
+          buildingMeshRef.current = null;
+        }
         if (terrainMeshRef.current) {
           terrainMeshRef.current.geometry.dispose();
           (terrainMeshRef.current.material as THREE.Material).dispose();
@@ -719,23 +804,27 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
     useEffect(() => {
       if (cesiumViewer && !cesiumViewer.isDestroyed()) cesiumViewer.scene.requestRender();
-    }, [cesiumViewer, showWater, isRunning, isPaused, waveIntensity]);
+    }, [cesiumViewer, showWater, isRunning, isPaused, waveIntensity, rainfallActive]);
 
     // ─── 4. IMPERATIVE CONTROLS ──────────────────────────────────────────────
     const handleStart = () => {
       if (!physicsSimRef.current || !waterMeshRef.current) return;
       setIsRunning(true);
+      isRunningRef.current = true;
       setIsPaused(false);
+      isPausedRef.current = false;
       setStatusText(isFallbackSource ? "Simulating (Fallback Source)" : "Simulating (OSM Water Sources)");
     };
 
     const handlePause = () => {
       setIsPaused(true);
+      isPausedRef.current = true;
       setStatusText("Paused");
     };
 
     const handleResume = () => {
       setIsPaused(false);
+      isPausedRef.current = false;
       setStatusText(isFallbackSource ? "Simulating (Fallback Source)" : "Simulating (OSM Water Sources)");
     };
 
@@ -769,7 +858,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         }
       }
       setIsRunning(false);
+      isRunningRef.current = false;
       setIsPaused(false);
+      isPausedRef.current = false;
+      floodUpdateRef.current?.(null);
       setStatusText("Reset to initial state");
     };
 
@@ -808,14 +900,14 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         />
 
         {/* Floating Control Panel HUD */}
-        <WaterSimulationControlPanel
-          isRunning={isRunning}
+        {waterSourceActive && <WaterSimulationControlPanel
+          isRunning={isRunning || rainfallActive}
           isPaused={isPaused}
           showWater={showWater}
           sourceRise={sourceRise}
           speed={speed}
           waveIntensity={waveIntensity}
-          statusText={statusText}
+          statusText={rainfallActive && !isPaused && !isRunning ? "Simulating (Rainfall Runoff)" : statusText}
           isFallbackSource={isFallbackSource}
           osmFeatureCount={osmFeatureCount}
           gridResolution={gridResolutionText}
@@ -831,7 +923,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           onSpeedChange={(s) => setSpeed(s)}
           onWaveIntensityChange={(w) => setWaveIntensity(w)}
           onClose={handleClose}
-        />
+        />}
       </>
     );
   }
@@ -850,92 +942,6 @@ function isPointInPoly(lat: number, lng: number, poly: [number, number][]): bool
     const xj = poly[j][1];
     const yj = poly[j][0];
     const intersect = yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
-function tagLineStringCells(
-  coords: [number, number][],
-  latList: number[],
-  lngList: number[],
-  cols: number,
-  rows: number,
-  insideMask: Uint8Array,
-  sourceMask: Uint8Array,
-  initialDepths: Float32Array
-) {
-  const channelCorridor = 0.00035; // ~35m channel corridor along waterway
-  for (let s = 0; s < coords.length - 1; s++) {
-    const [lng1, lat1] = coords[s];
-    const [lng2, lat2] = coords[s + 1];
-
-    const segLen = Math.hypot(lat2 - lat1, lng2 - lng1);
-    const steps = Math.max(4, Math.ceil(segLen * 1200));
-    for (let st = 0; st <= steps; st++) {
-      const t = st / steps;
-      const lat = lat1 + (lat2 - lat1) * t;
-      const lng = lng1 + (lng2 - lng1) * t;
-
-      for (let i = 0; i < latList.length; i++) {
-        if (!insideMask[i]) continue;
-        const d = Math.hypot(latList[i] - lat, lngList[i] - lng);
-        if (d <= channelCorridor) {
-          sourceMask[i] = 1;
-          initialDepths[i] = Math.max(initialDepths[i], 1.8);
-        }
-      }
-    }
-  }
-}
-
-function tagPolygonCells(
-  rings: [number, number][][],
-  latList: number[],
-  lngList: number[],
-  cols: number,
-  rows: number,
-  insideMask: Uint8Array,
-  sourceMask: Uint8Array,
-  initialDepths: Float32Array
-) {
-  if (rings.length === 0) return;
-  const outerRing = rings[0];
-  const innerRings = rings.slice(1);
-
-  for (let i = 0; i < latList.length; i++) {
-    if (!insideMask[i]) continue;
-
-    const lat = latList[i];
-    const lng = lngList[i];
-
-    // Inside outer ring
-    if (isPointInPolyCoords(lng, lat, outerRing)) {
-      // Must NOT be inside any inner hole ring
-      let inHole = false;
-      for (const hole of innerRings) {
-        if (isPointInPolyCoords(lng, lat, hole)) {
-          inHole = true;
-          break;
-        }
-      }
-
-      if (!inHole && insideMask[i]) {
-        sourceMask[i] = 1;
-        initialDepths[i] = Math.max(initialDepths[i], 2.2);
-      }
-    }
-  }
-}
-
-function isPointInPolyCoords(x: number, y: number, poly: [number, number][]): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i][0];
-    const yi = poly[i][1];
-    const xj = poly[j][0];
-    const yj = poly[j][1];
-    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
     if (intersect) inside = !inside;
   }
   return inside;

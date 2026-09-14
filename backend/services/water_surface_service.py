@@ -11,8 +11,16 @@ from services.osm_tile_loader import osm_tile_loader
 
 CACHE = Path(__file__).resolve().parent.parent / 'cache' / 'water_surfaces'
 TTL = 86400
-ENDPOINTS = ('https://overpass.private.coffee/api/interpreter',
-             'https://overpass-api.de/api/interpreter')
+# Hedge water-body requests across the same mirrors used by the road/river
+# loader.  A single overloaded Overpass instance must not make the simulation
+# report that an area has no water.
+ENDPOINTS = (
+    'https://overpass.openstreetmap.fr/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass-api.de/api/interpreter',
+)
 
 
 async def load_water_elements(south, west, north, east):

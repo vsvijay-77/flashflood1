@@ -24,6 +24,151 @@ WATERWAY_WIDTHS = {
 WATER_BODY_TYPES = {"water", "lake", "reservoir", "pond", "basin", "riverbank", "lagoon", "oxbow"}
 
 
+def _is_water_body_tags(tags: Dict[str, Any]) -> bool:
+    """Return whether OSM tags describe an area of standing water."""
+    waterway = str(tags.get("waterway") or tags.get("water") or tags.get("natural") or tags.get("landuse") or "").lower()
+    return bool(
+        tags.get("natural") == "water"
+        or tags.get("water")
+        or tags.get("landuse") in ("reservoir", "basin")
+        or waterway in WATER_BODY_TYPES
+    )
+
+
+def _assemble_relation_rings(
+    relation: Dict[str, Any],
+    ways_by_id: Dict[int, Dict[str, Any]],
+) -> Tuple[List[List[int]], List[List[int]]]:
+    """Stitch multipolygon member ways into closed outer and inner node rings.
+
+    OSM multipolygon members are often split across several ways.  Joining by
+    node ids keeps the operation deterministic and avoids geometry libraries in
+    the request path.  Unclosed members are ignored so a partial relation never
+    becomes a misleading filled polygon.
+    """
+    members_by_role: Dict[str, List[List[int]]] = {"outer": [], "inner": []}
+    for member in relation.get("members", []):
+        if member.get("type") != "way" or member.get("ref") is None:
+            continue
+        try:
+            way_id = int(member["ref"])
+        except (TypeError, ValueError):
+            continue
+        if way_id not in ways_by_id:
+            continue
+        role = member.get("role") if member.get("role") in members_by_role else "outer"
+        refs = [int(node_id) for node_id in ways_by_id[way_id].get("nodes", [])]
+        if len(refs) >= 2:
+            members_by_role[role].append(refs)
+
+    def stitch(segments: List[List[int]]) -> List[List[int]]:
+        remaining = [segment[:] for segment in segments]
+        rings: List[List[int]] = []
+        while remaining:
+            chain = remaining.pop(0)
+            changed = True
+            while changed and chain[0] != chain[-1]:
+                changed = False
+                for index, segment in enumerate(remaining):
+                    if segment[0] == chain[-1]:
+                        chain.extend(segment[1:])
+                    elif segment[-1] == chain[-1]:
+                        chain.extend(reversed(segment[:-1]))
+                    elif segment[-1] == chain[0]:
+                        chain = segment[:-1] + chain
+                    elif segment[0] == chain[0]:
+                        chain = list(reversed(segment[1:])) + chain
+                    else:
+                        continue
+                    remaining.pop(index)
+                    changed = True
+                    break
+            if len(chain) >= 4 and chain[0] == chain[-1]:
+                rings.append(chain)
+        return rings
+
+    return stitch(members_by_role["outer"]), stitch(members_by_role["inner"])
+
+
+def relation_water_body_features(
+    elements: List[Dict[str, Any]],
+    nodes_dict: Optional[Dict[int, Tuple[float, float]]] = None,
+) -> Tuple[List[Dict[str, Any]], set[int]]:
+    """Build filled GeoJSON features for OSM multipolygon water relations.
+
+    Returns the features plus the member way ids that were consumed.  Callers
+    can omit those boundary ways from their line feature collection while still
+    retaining them for graph construction.
+    """
+    node_lookup = nodes_dict or {
+        int(element["id"]): (float(element["lat"]), float(element["lon"]))
+        for element in elements
+        if element.get("type") == "node" and element.get("lat") is not None and element.get("lon") is not None
+    }
+    ways_by_id = {
+        int(element["id"]): element
+        for element in elements
+        if element.get("type") == "way" and element.get("id") is not None
+    }
+    features: List[Dict[str, Any]] = []
+    consumed: set[int] = set()
+    for relation in elements:
+        if relation.get("type") != "relation":
+            continue
+        tags = dict(relation.get("tags") or {})
+        if not _is_water_body_tags(tags):
+            continue
+        outers, inners = _assemble_relation_rings(relation, ways_by_id)
+        if not outers:
+            continue
+        def to_coords(ring: List[int]) -> List[List[float]]:
+            return [[node_lookup[node_id][1], node_lookup[node_id][0]] for node_id in ring if node_id in node_lookup]
+        outer_coords = [to_coords(ring) for ring in outers]
+        inner_coords = [to_coords(ring) for ring in inners]
+        outer_coords = [ring for ring in outer_coords if len(ring) >= 4 and ring[0] == ring[-1]]
+        inner_coords = [ring for ring in inner_coords if len(ring) >= 4 and ring[0] == ring[-1]]
+        if not outer_coords:
+            continue
+        if len(outer_coords) == 1:
+            geometry: Dict[str, Any] = {"type": "Polygon", "coordinates": [outer_coords[0], *inner_coords]}
+        else:
+            # Relations with several outer rings are represented as a
+            # MultiPolygon.  Assign holes to the first ring; the common case is
+            # one outer ring, while this still preserves all outer water areas.
+            geometry = {
+                "type": "MultiPolygon",
+                "coordinates": [[outer, *inner_coords] if index == 0 else [outer] for index, outer in enumerate(outer_coords)],
+            }
+        relation_id = relation.get("id")
+        waterway = str(tags.get("waterway") or tags.get("water") or tags.get("natural") or tags.get("landuse") or "water").lower()
+        features.append({
+            "type": "Feature",
+            "id": f"relation-{relation_id}",
+            "properties": {
+                **tags,
+                "id": f"relation-{relation_id}",
+                "name": tags.get("name", ""),
+                "waterway_type": waterway,
+                "is_water_body": True,
+                "is_main_river": False,
+                "width_m": WATERWAY_WIDTHS.get(waterway, 8.0),
+                "length_m": 0.0,
+                "source_relation": True,
+            },
+            "geometry": geometry,
+        })
+        for member in relation.get("members", []):
+            if member.get("type") != "way" or member.get("ref") is None:
+                continue
+            try:
+                way_id = int(member["ref"])
+            except (TypeError, ValueError):
+                continue
+            if way_id in ways_by_id:
+                consumed.add(way_id)
+    return features, consumed
+
+
 def _extract_points(geometry: Dict[str, Any]) -> List[Tuple[float, float]]:
     """Extracts (lat, lng) tuples from LineString, MultiLineString, Polygon, MultiPolygon."""
     gtype = geometry.get("type", "")
@@ -59,7 +204,9 @@ class OSMRiverService:
         pass
 
     def _cache_key(self, north: float, south: float, east: float, west: float) -> Path:
-        key_str = f"river_v2_{north:.4f}_{south:.4f}_{east:.4f}_{west:.4f}"
+        # v3 invalidates line-only snapshots so multipolygon water relations
+        # are rebuilt as filled polygons after this renderer change.
+        key_str = f"river_v3_{north:.4f}_{south:.4f}_{east:.4f}_{west:.4f}"
         hash_val = hashlib.md5(key_str.encode()).hexdigest()
         return CACHE_DIR / f"{hash_val}.json"
 
@@ -76,13 +223,26 @@ class OSMRiverService:
 
             features = geojson.get("features", [])
             if polygon and len(polygon) >= 3:
+                poly_lats = [point[0] for point in polygon]
+                poly_lngs = [point[1] for point in polygon]
+                min_lat, max_lat = min(poly_lats), max(poly_lats)
+                min_lng, max_lng = min(poly_lngs), max(poly_lngs)
                 scoped_features = []
                 for feat in features:
                     pts = _extract_points(feat.get("geometry", {}))
-                    if any(point_in_polygon(lat, lng, polygon) for lat, lng in pts):
+                    has_inside_point = any(point_in_polygon(lat, lng, polygon) for lat, lng in pts)
+                    # Keep a line/polygon whose bounding box overlaps the
+                    # selection even when its vertices are just outside.  The
+                    # renderer clips the crossing segment to the boundary.
+                    overlaps_bounds = bool(pts) and not (
+                        max(lng for lat, lng in pts) < min_lng
+                        or min(lng for lat, lng in pts) > max_lng
+                        or max(lat for lat, lng in pts) < min_lat
+                        or min(lat for lat, lng in pts) > max_lat
+                    )
+                    if has_inside_point or overlaps_bounds:
                         scoped_features.append(feat)
-                if scoped_features:
-                    features = scoped_features
+                features = scoped_features
                 geojson = {
                     "type": "FeatureCollection",
                     "features": features,
@@ -165,12 +325,21 @@ class OSMRiverService:
             if el.get("type") == "node":
                 nodes_dict[el["id"]] = (float(el["lat"]), float(el["lon"]))
 
+        # Generate relation polygons first.  Multipolygon water bodies are
+        # commonly split into open boundary ways; drawing those ways as lines
+        # leaves lakes/reservoirs unmarked.  Keep their ways in the graph, but
+        # omit duplicate boundary lines from the rendered feature collection.
+        relation_features, relation_way_ids = relation_water_body_features(elements, nodes_dict)
+
         # Generate full-way GeoJSON — all nodes per way → continuous polylines
-        features = []
+        features = list(relation_features)
         seen_way_ids = set()
 
         for el in elements:
             if el.get("type") != "way" or el["id"] in seen_way_ids:
+                continue
+            if el["id"] in relation_way_ids:
+                seen_way_ids.add(el["id"])
                 continue
             tags = dict(el.get("tags", {}))
             if el["id"] in relation_way_tags:
@@ -216,6 +385,16 @@ class OSMRiverService:
             is_main_river = ww_type in ("river", "canal") and not is_water_body
             name = tags.get("name", "")
 
+            # Closed natural-water ways describe an area, not a centerline.
+            # Preserve that geometry so the map can draw a filled water body;
+            # open ways remain continuous river/path polylines.
+            is_closed = len(coords) >= 4 and coords[0] == coords[-1]
+            geometry = (
+                {"type": "Polygon", "coordinates": [coords]}
+                if is_water_body and is_closed
+                else {"type": "LineString", "coordinates": coords}
+            )
+
             features.append({
                 "type": "Feature",
                 "properties": {
@@ -227,10 +406,7 @@ class OSMRiverService:
                     "width_m": WATERWAY_WIDTHS.get(ww_type, 3.0),
                     "length_m": 0.0,  # Computed client-side if needed
                 },
-                "geometry": {
-                    "type": "LineString",
-                    "coordinates": coords,
-                },
+                "geometry": geometry,
             })
 
         geojson = {

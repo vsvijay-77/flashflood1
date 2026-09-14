@@ -54,8 +54,8 @@ export interface RiverFeature {
     flood_susceptibility?: number;
   };
   geometry: {
-    type: "LineString";
-    coordinates: [number, number][]; // [lng, lat]
+    type: "LineString" | "MultiLineString" | "Polygon" | "MultiPolygon";
+    coordinates: [number, number][] | [number, number][][] | [number, number][][][]; // GeoJSON [lng, lat]
   };
 }
 
@@ -193,6 +193,7 @@ export interface EvacuationRouteResponse {
 }
 
 export async function extractNetworks(params: {
+  area_id?: string;
   lat?: number;
   lng?: number;
   radius_km?: number;
@@ -208,6 +209,7 @@ export async function extractNetworks(params: {
 }
 
 export async function extractBuildings(params: {
+  area_id?: string;
   lat?: number;
   lng?: number;
   radius_km?: number;
@@ -306,5 +308,3 @@ export async function fetchMicrosoftBuildings(
 
   return apiGet<MicrosoftBuildingsResponse>(`/buildings?${query.toString()}`, { signal });
 }
-
-

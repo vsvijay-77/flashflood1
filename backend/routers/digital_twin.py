@@ -13,7 +13,6 @@ import httpx
 
 router = APIRouter(prefix="/digital-twin", tags=["digital-twin"])
 
-GEOJSON_PATH = Path(__file__).parent.parent / "pollachi_buildings.geojson"
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371000  # radius of Earth in meters
@@ -212,50 +211,10 @@ async def fetch_overpass_buildings(lat: float, lng: float, radius_m: float) -> L
     return []
 
 
-def load_local_buildings(lat: float, lng: float, radius_m: float) -> List[dict]:
-    if not GEOJSON_PATH.exists():
-        return []
-    with open(GEOJSON_PATH, "r") as f:
-        data = json.load(f)
-    out = []
-    for feat in data.get("features") or []:
-        geom = feat.get("geometry") or {}
-        if geom.get("type") != "Polygon":
-            continue
-        coords = geom.get("coordinates") or []
-        if not coords:
-            continue
-        c_lat, c_lng = get_centroid(coords)
-        if haversine(lat, lng, c_lat, c_lng) <= radius_m:
-            out.append(feat)
-    return out
-
 @router.get("/validate-geojson")
 def validate_geojson():
-    if not GEOJSON_PATH.exists():
-        raise HTTPException(status_code=404, detail="GeoJSON file not found.")
-        
-    with open(GEOJSON_PATH, "r") as f:
-        data = json.load(f)
-        
-    features = data.get("features", [])
-    if not features:
-        return {"valid": False}
-        
-    return {
-        "valid": True,
-        "crs": "CRS84 (WGS84)",
-        "feature_count": len(features),
-        "geometry_types": ["Polygon"],
-        "bbox": {
-            "min_lat": 10.643, "max_lat": 10.679,
-            "min_lng": 76.969, "max_lng": 77.032
-        },
-        "properties_schema": ["building"],
-        "invalid_geometries": 0,
-        "duplicate_features": 0,
-        "missing_attributes": {"height": 99, "name": 99, "building:levels": 99}
-    }
+    """Compatibility status endpoint; building data is now stored in Supabase."""
+    return {"valid": True, "source": "Supabase", "storage": "simulations.steps JSONB"}
 
 @router.get("/aoi")
 def get_aoi(lat: float, lng: float, radius_km: float):
@@ -308,6 +267,7 @@ async def get_buildings(
     water_level_m: float = 0.0,
 ):
     from services.ms_building_service import ms_building_service
+    from services.supabase_building_store import supabase_building_store
     n = north if north is not None else maxLat
     s = south if south is not None else minLat
     e = east if east is not None else maxLon
@@ -326,13 +286,19 @@ async def get_buildings(
                 "metadata": {"source": "none", "count": 0},
             }
 
-    return await ms_building_service.get_buildings_for_bbox(
+    row_id = supabase_building_store.row_id(float(s), float(w), float(n), float(e), None)
+    stored = await supabase_building_store.load(row_id)
+    if stored:
+        return stored
+    result = await ms_building_service.get_buildings_for_bbox(
         min_lat=float(s),
         min_lon=float(w),
         max_lat=float(n),
         max_lon=float(e),
         water_level_m=water_level_m,
     )
+    await supabase_building_store.save(row_id, result)
+    return result
 
 
 class UserActivityItem(BaseModel):

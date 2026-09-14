@@ -1,0 +1,197 @@
+[
+  {
+    "id": "fba32300-1d95-4530-bb20-5b4f4d73456f",
+    "name": "Hyderabad",
+    "polygon": [
+      [
+        17.417353327532798,
+        78.46835332753281
+      ],
+      [
+        17.417353327532798,
+        78.4796466724672
+      ],
+      [
+        17.4286466724672,
+        78.47851733797377
+      ],
+      [
+        17.428082005220478,
+        78.46835332753281
+      ]
+    ],
+    "paths": 0,
+    "water": 3,
+    "water_bodies": 1,
+    "buildings": 0,
+    "first_network_seconds": 6.371,
+    "first_building_seconds": 7.056,
+    "cached_network_seconds": 0.647,
+    "cached_building_seconds": 0.605,
+    "db_read_seconds": 0.328,
+    "network_timing_ms": {
+      "db_read": 348,
+      "db_write": 5691,
+      "total": 6352
+    },
+    "building_timing_ms": {
+      "db_read": 338,
+      "db_write": 1724,
+      "total": 7049
+    },
+    "persisted": true,
+    "only_selected_area": true
+  },
+  {
+    "id": "714f00f7-a229-430b-aff8-44d441caeb49",
+    "name": "Kolkata",
+    "polygon": [
+      [
+        22.5619451516666,
+        88.33194515166659
+      ],
+      [
+        22.5619451516666,
+        88.3440548483334
+      ],
+      [
+        22.574054848333404,
+        88.34284387866671
+      ],
+      [
+        22.573449363500064,
+        88.33194515166659
+      ]
+    ],
+    "paths": 87,
+    "water": 3,
+    "water_bodies": 2,
+    "buildings": 124,
+    "first_network_seconds": 7.855,
+    "first_building_seconds": 6.211,
+    "cached_network_seconds": 0.619,
+    "cached_building_seconds": 0.598,
+    "db_read_seconds": 0.305,
+    "network_timing_ms": {
+      "db_read": 4974,
+      "db_write": 2485,
+      "total": 7835
+    },
+    "building_timing_ms": {
+      "db_read": 4976,
+      "db_write": 853,
+      "total": 6178
+    },
+    "persisted": true,
+    "only_selected_area": true
+  },
+  {
+    "id": "9c105e18-d563-4a22-9e18-a4c997208c67",
+    "name": "Madurai",
+    "polygon": [
+      [
+        9.91905372909436,
+        78.11505372909436
+      ],
+      [
+        9.91905372909436,
+        78.12894627090564
+      ],
+      [
+        9.93294627090564,
+        78.12755701672451
+      ],
+      [
+        9.932251643815077,
+        78.11505372909436
+      ]
+    ],
+    "error": ""
+  },
+  {
+    "id": "7e6b507a-d182-437a-8e53-23e94b209c72",
+    "name": "Coimbatore",
+    "polygon": [
+      [
+        10.990481859270199,
+        76.97048185927021
+      ],
+      [
+        10.990481859270199,
+        76.9835181407298
+      ],
+      [
+        11.0035181407298,
+        76.98221451258384
+      ],
+      [
+        11.00286632665682,
+        76.97048185927021
+      ]
+    ],
+    "paths": 331,
+    "water": 6,
+    "water_bodies": 6,
+    "buildings": 314,
+    "first_network_seconds": 4.001,
+    "first_building_seconds": 1.68,
+    "cached_network_seconds": 0.593,
+    "cached_building_seconds": 0.71,
+    "db_read_seconds": 0.45,
+    "network_timing_ms": {
+      "db_read": 359,
+      "db_write": 3291,
+      "total": 3983
+    },
+    "building_timing_ms": {
+      "db_read": 298,
+      "db_write": 1017,
+      "total": 1650
+    },
+    "persisted": true,
+    "only_selected_area": true
+  },
+  {
+    "id": "d353e177-0ab7-4035-bbb4-3a74eb30813c",
+    "name": "Chennai",
+    "polygon": [
+      [
+        13.006667443555822,
+        80.24466744355583
+      ],
+      [
+        13.006667443555822,
+        80.25533255644417
+      ],
+      [
+        13.01733255644418,
+        80.25426604515535
+      ],
+      [
+        13.01679930079976,
+        80.24466744355583
+      ]
+    ],
+    "paths": 141,
+    "water": 5,
+    "water_bodies": 3,
+    "buildings": 553,
+    "first_network_seconds": 3.198,
+    "first_building_seconds": 1.66,
+    "cached_network_seconds": 0.654,
+    "cached_building_seconds": 0.83,
+    "db_read_seconds": 0.462,
+    "network_timing_ms": {
+      "db_read": 353,
+      "db_write": 2467,
+      "total": 3183
+    },
+    "building_timing_ms": {
+      "db_read": 301,
+      "db_write": 942,
+      "total": 1613
+    },
+    "persisted": true,
+    "only_selected_area": true
+  }
+]

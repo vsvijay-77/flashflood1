@@ -124,7 +124,34 @@ CREATE TABLE IF NOT EXISTS public.simulations (
     run_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 8. REPORTS (Assessments & Summaries)
+-- 7b. DIGITAL TWIN BUILDING FOOTPRINT SNAPSHOTS
+-- Each area query stores one deterministic row. The ``steps`` JSONB array holds
+-- the GeoJSON features and ``summary`` stores source/count/bbox metadata, so the
+-- viewer has no local GeoJSON dependency.
+CREATE INDEX IF NOT EXISTS idx_simulations_building_footprints
+    ON public.simulations (scenario, zone_id)
+    WHERE scenario = 'building_footprints';
+
+-- 8. DIGITAL TWIN NETWORK FEATURES (Paths, Rivers & Water Bodies)
+-- One row is stored per OSM feature for each requested area. Geometry and
+-- source tags remain queryable JSONB without requiring PostGIS.
+CREATE TABLE IF NOT EXISTS public.digital_twin_network_features (
+    id TEXT PRIMARY KEY,
+    area_key TEXT NOT NULL,
+    feature_id TEXT NOT NULL,
+    feature_type TEXT NOT NULL CHECK (feature_type IN ('path', 'waterway', 'water_body')),
+    name TEXT DEFAULT '',
+    geometry JSONB NOT NULL,
+    properties JSONB DEFAULT '{}'::jsonb,
+    bbox JSONB DEFAULT '{}'::jsonb,
+    source TEXT DEFAULT 'OpenStreetMap',
+    observed_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_digital_twin_network_area
+    ON public.digital_twin_network_features(area_key, feature_type);
+
+-- 9. REPORTS (Assessments & Summaries)
 CREATE TABLE IF NOT EXISTS public.reports (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -136,7 +163,7 @@ CREATE TABLE IF NOT EXISTS public.reports (
     created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 9. NOTIFICATIONS (System & Warning Dispatches)
+-- 10. NOTIFICATIONS (System & Warning Dispatches)
 CREATE TABLE IF NOT EXISTS public.notifications (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -146,7 +173,7 @@ CREATE TABLE IF NOT EXISTS public.notifications (
     created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 10. STATUS CHECKS (Health Monitoring)
+-- 11. STATUS CHECKS (Health Monitoring)
 CREATE TABLE IF NOT EXISTS public.status_checks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     timestamp TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
@@ -171,6 +198,7 @@ ALTER TABLE public.gateways ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sensors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.alerts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.simulations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.digital_twin_network_features ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.status_checks ENABLE ROW LEVEL SECURITY;

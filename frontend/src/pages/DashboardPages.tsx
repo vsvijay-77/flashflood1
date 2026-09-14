@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { deleteMonitoredArea } from "@/lib/monitoredAreas";
 import { useMemo, useState, useEffect, useRef } from "react";
 import L from "leaflet";
 import { useQuery } from "@tanstack/react-query";
@@ -12,7 +13,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import GISMap, { DEFAULT_LAYERS, type GISLayerState } from "@/components/gis/GISMap";
 import { EmptyState, LoadingRows, LoadingSymbol, PageHeader, RiskIndicator, SectionCard, StatCard, StatusPill } from "@/components/Primitives";
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { MobileSosRequest } from "@/components/dashboard/BatteryAndAlerts";
 import { HAZARD_LABELS, SENSOR_LABELS, type Alert, type NetworkStats, type Sensor, type Zone, type SensorDataRecord, type LiveWeatherData } from "@/lib/types";
@@ -904,19 +905,29 @@ export function GISMonitoringPage() {
                 onClick={async () => {
                   if (!deleteTarget) return;
                   setDeleteLoading(true);
-                  await supabase.from("custom_areas").delete().eq("id", deleteTarget.id);
+                  try {
+                    await deleteMonitoredArea(deleteTarget);
+                  } catch (err) {
+                    toast.error("Area deletion failed. The area is kept so you can retry.");
+                    setDeleteLoading(false);
+                    return;
+                  }
                   const safeName = deleteTarget.name.replace(/\s+/g, "_");
                   localStorage.removeItem(`dt_mesh_nodes_${safeName}`);
                   localStorage.removeItem(`dt_user_activity_${safeName}`);
                   localStorage.removeItem(`dt_networks_${safeName}`);
                   const filtered = customAreas.filter((a) => a.id !== deleteTarget.id);
                   setCustomAreas(filtered);
+                  try {
+                    localStorage.setItem("cached_custom_areas", JSON.stringify(filtered.map(({ bounds, ...rest }) => rest)));
+                  } catch (e) {}
                   if (selectedArea?.id === deleteTarget.id) {
                     setSelectedArea(filtered[0] || null);
                     setFocusedArea(null);
                   }
                   setDeleteTarget(null);
                   setDeleteLoading(false);
+                  toast.success(`Area "${deleteTarget.name}" and all associated data deleted from database.`);
                 }}
                 className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 rounded-lg shadow-sm transition-all cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2"
               >
@@ -2128,4 +2139,3 @@ export function AreaDetailsPage() {
     </div>
   );
 }
-

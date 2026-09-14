@@ -289,9 +289,104 @@ def compute_building_risk(
     }
 
 
+def point_to_segment_dist_m(px: float, py: float, x1: float, y1: float, x2: float, y2: float, cos_lat: float) -> float:
+    dx = (x2 - x1) * 111132.0 * cos_lat
+    dy = (y2 - y1) * 111132.0
+    seg_len_sq = dx * dx + dy * dy
+    if seg_len_sq < 1e-6:
+        return math.hypot((px - x1) * 111132.0 * cos_lat, (py - y1) * 111132.0)
+    dpx = (px - x1) * 111132.0 * cos_lat
+    dpy = (py - y1) * 111132.0
+    t = max(0.0, min(1.0, (dpx * dx + dpy * dy) / seg_len_sq))
+    return math.hypot(dpx - t * dx, dpy - t * dy)
+
+
+def build_road_spatial_grid(
+    road_segments: List[Tuple[float, float, float, float, float]], cell_size: float = 0.003
+) -> Dict[Tuple[int, int], List[Tuple[float, float, float, float, float]]]:
+    grid: Dict[Tuple[int, int], List[Tuple[float, float, float, float, float]]] = {}
+    for seg in road_segments:
+        x1, y1, x2, y2, setback = seg
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        min_y, max_y = min(y1, y2), max(y1, y2)
+        c1x, c2x = int(min_x / cell_size), int(max_x / cell_size)
+        c1y, c2y = int(min_y / cell_size), int(max_y / cell_size)
+        for cx in range(c1x, c2x + 1):
+            for cy in range(c1y, c2y + 1):
+                grid.setdefault((cx, cy), []).append(seg)
+    return grid
+
+
+def is_building_in_road_path(
+    c_lat: float,
+    c_lon: float,
+    ring: List[List[float]],
+    road_grid: Optional[Dict[Tuple[int, int], List[Tuple[float, float, float, float, float]]]],
+    cell_size: float = 0.003,
+) -> bool:
+    if not road_grid:
+        return False
+    cx = int(c_lon / cell_size)
+    cy = int(c_lat / cell_size)
+    candidate_segs = []
+    for dcx in (-1, 0, 1):
+        for dcy in (-1, 0, 1):
+            candidate_segs.extend(road_grid.get((cx + dcx, cy + dcy), []))
+    if not candidate_segs:
+        return False
+
+    cos_lat = math.cos(math.radians(c_lat))
+
+    # 1. Centroid check: reject if house center is within the road corridor
+    for x1, y1, x2, y2, setback in candidate_segs:
+        if point_to_segment_dist_m(c_lon, c_lat, x1, y1, x2, y2, cos_lat) < setback:
+            return True
+
+    # 2. Ring vertices check: reject if any corner encroaches into the road
+    for pt in ring:
+        px, py = pt[0], pt[1]
+        for x1, y1, x2, y2, setback in candidate_segs:
+            if point_to_segment_dist_m(px, py, x1, y1, x2, y2, cos_lat) < setback * 0.65:
+                return True
+
+    return False
+
+
 class MSBuildingService:
     def __init__(self):
         self.quadkey_index = load_quadkey_index()
+
+    async def _get_road_segments(
+        self, min_lat: float, min_lon: float, max_lat: float, max_lon: float
+    ) -> List[Tuple[float, float, float, float, float]]:
+        """Fetch OSM road network segments with setback distances (lon1, lat1, lon2, lat2, setback_m)."""
+        try:
+            from services.osm_road_service import OSMRoadService
+            road_svc = OSMRoadService()
+            _, geo = await road_svc.get_road_network(max_lat, min_lat, max_lon, min_lon)
+            segs: List[Tuple[float, float, float, float, float]] = []
+            for f in geo.get("features", []):
+                coords = (f.get("geometry") or {}).get("coordinates") or []
+                if len(coords) < 2:
+                    continue
+                r_type = (f.get("properties") or {}).get("road_type") or "residential"
+                if r_type in ("motorway", "trunk"):
+                    setback = 8.5
+                elif r_type == "primary":
+                    setback = 7.0
+                elif r_type in ("secondary", "tertiary"):
+                    setback = 6.0
+                elif r_type in ("residential", "living_street", "unclassified"):
+                    setback = 5.0
+                else:
+                    setback = 3.5
+                for i in range(len(coords) - 1):
+                    p1, p2 = coords[i], coords[i + 1]
+                    segs.append((float(p1[0]), float(p1[1]), float(p2[0]), float(p2[1]), setback))
+            return segs
+        except Exception as exc:
+            logger.debug(f"Could not load road network for clearance: {exc}")
+            return []
 
     async def _get_river_points(
         self, min_lat: float, min_lon: float, max_lat: float, max_lon: float
@@ -339,6 +434,7 @@ class MSBuildingService:
         max_buildings: int,
         water_level_m: float,
         river_points: List[Tuple[float, float]],
+        road_grid: Optional[Dict[Tuple[int, int], List[Tuple[float, float, float, float, float]]]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """Extract building footprints from local Microsoft Global ML Building Footprint tiles."""
         quadkeys = bbox_to_quadkeys(min_lat, min_lon, max_lat, max_lon, zoom=9)
@@ -391,6 +487,10 @@ class MSBuildingService:
                         if polygon and len(polygon) >= 3:
                             if not point_in_polygon(c_lat, c_lon, polygon):
                                 continue
+
+                        # Skip building if situated inside road path
+                        if road_grid and is_building_in_road_path(c_lat, c_lon, ring, road_grid):
+                            continue
 
                         bldg_idx += 1
                         area_sqm = calculate_polygon_area_sqm(ring)
@@ -466,6 +566,7 @@ class MSBuildingService:
         max_buildings: int,
         water_level_m: float,
         river_points: List[Tuple[float, float]],
+        road_grid: Optional[Dict[Tuple[int, int], List[Tuple[float, float, float, float, float]]]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """
         Query real satellite AI building footprint polygons from Google Earth Engine Open Buildings dataset.
@@ -507,6 +608,10 @@ class MSBuildingService:
                 if polygon and len(polygon) >= 3:
                     if not point_in_polygon(c_lat, c_lon, polygon):
                         continue
+
+                # Skip building if situated inside road path
+                if road_grid and is_building_in_road_path(c_lat, c_lon, ring, road_grid):
+                    continue
 
                 area_sqm = float(feat.get("properties", {}).get("area_in_meters", 0.0))
                 if area_sqm <= 0:
@@ -583,6 +688,7 @@ class MSBuildingService:
         max_buildings: int,
         water_level_m: float,
         river_points: List[Tuple[float, float]],
+        road_grid: Optional[Dict[Tuple[int, int], List[Tuple[float, float, float, float, float]]]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """Query OpenStreetMap for mapped building footprints in the bounding box."""
         try:
@@ -618,6 +724,10 @@ class MSBuildingService:
                 if polygon and len(polygon) >= 3:
                     if not point_in_polygon(c_lat, c_lon, polygon):
                         continue
+
+                # Skip building if situated inside road path
+                if road_grid and is_building_in_road_path(c_lat, c_lon, coords, road_grid):
+                    continue
 
                 bldg_idx += 1
                 area_sqm = calculate_polygon_area_sqm(coords)
@@ -673,6 +783,7 @@ class MSBuildingService:
         max_buildings: int,
         water_level_m: float,
         river_points: List[Tuple[float, float]],
+        road_grid: Optional[Dict[Tuple[int, int], List[Tuple[float, float, float, float, float]]]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """
         Resilient settlement generator: Places realistic building footprint polygons
@@ -761,6 +872,11 @@ class MSBuildingService:
                                 for plat, plon in placed_centers
                             ):
                                 continue
+
+                            # Check road clearance against full network
+                            if road_grid and is_building_in_road_path(h_lat, h_lon, [[h_lon, h_lat]], road_grid):
+                                continue
+
                             placed_centers.append((h_lat, h_lon))
 
                             bldg_idx += 1
@@ -834,11 +950,12 @@ class MSBuildingService:
         polygon: Optional[List[List[float]]] = None,
         max_buildings: int = 2500,
         water_level_m: float = 0.0,
+        roads: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Extract real building footprint polygons inside the marked area.
         Uses Microsoft Global ML Building Footprints and Google Earth Engine Open Buildings.
-        Filters strictly within polygon boundary.
+        Filters strictly within polygon boundary and ensures clearance from road and river paths.
         """
         min_lat, max_lat = min(min_lat, max_lat), max(min_lat, max_lat)
         min_lon, max_lon = min(min_lon, max_lon), max(min_lon, max_lon)
@@ -868,12 +985,27 @@ class MSBuildingService:
 
         logger.info(f"Extracting buildings for [{min_lat:.4f}, {min_lon:.4f} → {max_lat:.4f}, {max_lon:.4f}] poly={bool(polygon)}")
 
-        # Step 1: Retrieve real river network coordinates for the AOI
+        # Step 1: Retrieve real river network and road network coordinates for the AOI
         river_points = await self._get_river_points(min_lat, min_lon, max_lat, max_lon)
+        if roads is not None and len(roads) > 0:
+            road_segments = []
+            for f in roads:
+                coords = (f.get("geometry") or {}).get("coordinates") or []
+                if len(coords) < 2:
+                    continue
+                r_type = (f.get("properties") or {}).get("road_type") or "residential"
+                setback = 8.5 if r_type in ("motorway", "trunk") else 7.0 if r_type == "primary" else 6.0 if r_type in ("secondary", "tertiary") else 5.0 if r_type in ("residential", "living_street", "unclassified") else 3.5
+                for i in range(len(coords) - 1):
+                    p1, p2 = coords[i], coords[i + 1]
+                    road_segments.append((float(p1[0]), float(p1[1]), float(p2[0]), float(p2[1]), setback))
+        else:
+            road_segments = await self._get_road_segments(min_lat, min_lon, max_lat, max_lon)
+
+        road_grid = build_road_spatial_grid(road_segments) if road_segments else None
 
         # Step 2: Tier 1 - Microsoft Global ML Building Footprints from downloaded tiles
         matching_features, counts = self._extract_from_ms_tiles(
-            min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points
+            min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points, road_grid
         )
         source_name = "Microsoft Global ML Building Footprints"
 
@@ -881,7 +1013,7 @@ class MSBuildingService:
         if len(matching_features) < 10:
             logger.info(f"Microsoft tile has {len(matching_features)} bldgs; querying Google Earth Engine Open Buildings...")
             gee_features, gee_counts = self._extract_from_gee_open_buildings(
-                min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points
+                min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points, road_grid
             )
             if len(gee_features) >= 5:
                 matching_features = gee_features
@@ -892,7 +1024,7 @@ class MSBuildingService:
         if len(matching_features) < 5:
             logger.info(f"Querying OpenStreetMap building footprints fallback...")
             osm_features, osm_counts = await self._extract_from_osm_buildings(
-                min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points
+                min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points, road_grid
             )
             if len(osm_features) >= 5:
                 matching_features = osm_features
@@ -903,7 +1035,7 @@ class MSBuildingService:
         if len(matching_features) < 5:
             logger.info("Generating settlement footprints along road corridors inside marked area...")
             gen_features, gen_counts = await self._extract_from_settlement_roads(
-                min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points
+                min_lat, min_lon, max_lat, max_lon, polygon, max_buildings, water_level_m, river_points, road_grid
             )
             if len(gen_features) > 0:
                 matching_features = gen_features
@@ -925,6 +1057,8 @@ class MSBuildingService:
                     c_lat, c_lon = calculate_centroid(ring)
                     if min_lat <= c_lat <= max_lat and min_lon <= c_lon <= max_lon:
                         if polygon and len(polygon) >= 3 and not point_in_polygon(c_lat, c_lon, polygon):
+                            continue
+                        if road_grid and is_building_in_road_path(c_lat, c_lon, ring, road_grid):
                             continue
                         bldg_idx += 1
                         area_sqm = calculate_polygon_area_sqm(ring)

@@ -56,7 +56,7 @@ import { buildFloodSamples, buildingFloodDepth, BUILDING_FLOOD_THRESHOLD_M, type
 import DisasterIntelligenceChat from "./DisasterIntelligenceChat";
 import { toast } from "sonner";
 import { generateCirclePolygon } from "@/lib/gisUtils";
-import { prepareBuildingFootprints } from "./buildingGeometry";
+import { prepareBuildingFootprints, filterBuildingsClearOfPaths } from "./buildingGeometry";
 import {
   extractNetworks,
   extractBuildings,
@@ -190,6 +190,9 @@ export function CesiumDigitalTwinViewer({
   const srtmLayerRef = useRef<any>(null);
   const activeLoadRef = useRef<string | null>(null);
   const [layerLoadSeconds, setLayerLoadSeconds] = useState<{ networks?: number; buildings?: number }>({});
+  const sceneLoadStartedRef = useRef(performance.now());
+  const [sceneLoadSeconds, setSceneLoadSeconds] = useState<number | null>(null);
+  const [layersComplete, setLayersComplete] = useState(false);
 
   // Rain simulation state
   const [internalRain, setInternalRain] = useState<boolean>(false);
@@ -1080,16 +1083,32 @@ export function CesiumDigitalTwinViewer({
         const polygons = geom.type === "Polygon" ? [geom.coordinates] : geom.type === "MultiPolygon" ? geom.coordinates : [];
         for (const rings of polygons as number[][][][]) {
           if (!rings[0] || rings[0].length < 4) continue;
+          const flatOuter = rings[0].flat();
+          // Draped water surface on terrain — rich water blue
           riverEntitiesRef.current.push(viewer.entities.add({
             name: props.name || "Water body", show: visible,
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(
-                Cesium.Cartesian3.fromDegreesArray(rings[0].flat()),
+                Cesium.Cartesian3.fromDegreesArray(flatOuter),
                 rings.slice(1).map(ring => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())))),
-              material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              material: Cesium.Color.fromCssColorString("#1d4ed8").withAlpha(0.85),
               classificationType: Cesium.ClassificationType.TERRAIN,
-              zIndex: 10,
+              zIndex: 15,
+            },
+          }));
+          // Crisp shoreline edge outline — vivid blue
+          riverEntitiesRef.current.push(viewer.entities.add({
+            name: `${props.name || "Water body"} Shoreline`, show: visible,
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray(flatOuter),
+              width: 3.5,
+              material: new Cesium.PolylineOutlineMaterialProperty({
+                color: Cesium.Color.fromCssColorString("#3b82f6"),
+                outlineColor: Cesium.Color.fromCssColorString("#0f172a"),
+                outlineWidth: 1.0,
+              }),
+              clampToGround: true,
+              zIndex: 20,
             },
           }));
         }
@@ -1100,14 +1119,14 @@ export function CesiumDigitalTwinViewer({
             name: props.name || type, show: visible,
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray(line.flat()),
-              width: Math.max(3, Math.min(12, props.width_m || 4)),
+              width: Math.max(6, Math.min(16, (props.width_m || 4) * 1.8)),
               material: new Cesium.PolylineOutlineMaterialProperty({
-                color: Cesium.Color.fromCssColorString(type === "river" ? "#0284c7" : "#38bdf8"),
-                outlineColor: Cesium.Color.fromCssColorString("#082f49"),
-                outlineWidth: 1.5,
+                color: Cesium.Color.fromCssColorString("#2563eb"),
+                outlineColor: Cesium.Color.fromCssColorString("#0f172a"),
+                outlineWidth: 2.0,
               }),
               clampToGround: true,
-              zIndex: 15,
+              zIndex: 25,
             },
           }));
         }
@@ -1176,7 +1195,7 @@ export function CesiumDigitalTwinViewer({
 
       const activePoly = getActivePolygon();
 
-      prepareBuildingFootprints(buildings, activePoly).forEach((building, idx) => {
+      prepareBuildingFootprints(buildings, activePoly, roadFeatures, riverFeatures).forEach((building, idx) => {
         const source = building.geometry?.coordinates;
         if (!source) return;
         const polygons = building.geometry.type === "Polygon"
@@ -1254,12 +1273,22 @@ export function CesiumDigitalTwinViewer({
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 80000),
             },
+            point: {
+              pixelSize: 6,
+              color: Cesium.Color.fromCssColorString(riskColor),
+              outlineColor: Cesium.Color.fromCssColorString("#0f172a"),
+              outlineWidth: 1.5,
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(2500, 100000),
+            },
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flat()), holes),
-              material: Cesium.Color.fromCssColorString(riskColor).withAlpha(0.92),
+              material: Cesium.Color.fromCssColorString(riskColor).withAlpha(0.95),
               outline: true,
               outlineColor: Cesium.Color.fromCssColorString("#0f172a"),
               outlineWidth: 2.0,
+              height: 0,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               extrudedHeight: height,
               extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
@@ -1469,6 +1498,9 @@ export function CesiumDigitalTwinViewer({
     const key = areaId || JSON.stringify(selectedPolygon);
     if (activeLoadRef.current === key) return;
     activeLoadRef.current = key;
+    if (layersComplete) sceneLoadStartedRef.current = performance.now();
+    setLayersComplete(false);
+    setSceneLoadSeconds(null);
     const requestId = ++networkRequestRef.current;
     networkAbortRef.current?.abort();
     buildingAbortRef.current?.abort();
@@ -1484,17 +1516,28 @@ export function CesiumDigitalTwinViewer({
     const current = () => requestId === networkRequestRef.current && !controller.signal.aborted
       && viewerRef.current && !viewerRef.current.isDestroyed();
     let complete = true;
+    let latestRoads: RoadFeature[] = [];
+    let latestRivers: RiverFeature[] = [];
     const networkJob = async () => {
       try {
         const res = await extractNetworks(params, controller.signal);
         if (!current()) return;
         const roads = res.roads.geojson?.features || [];
         const rivers = res.rivers.geojson?.features || [];
+        latestRoads = roads;
+        latestRivers = rivers;
         setRoadFeatures(roads);
         setRiverFeatures(rivers);
         setExtractedBbox(res.bbox);
         render3DRoads(roads, showRoads);
         render3DRivers(rivers, showRivers);
+        if (buildingEntitiesRef.current.length > 0) {
+          setBuildingFeatures((prev) => {
+            const clean = filterBuildingsClearOfPaths(prev, roads, rivers);
+            render3DBuildings(clean);
+            return clean;
+          });
+        }
         setOsmTileStatus(prev => ({ ...prev, loaded: res.osm_loading?.loaded_tiles ?? 0,
           total: res.osm_loading?.total_tiles ?? 0, roads: roads.length, rivers: rivers.length }));
         setLayerLoadSeconds(prev => ({ ...prev, networks: (performance.now() - started) / 1000 }));
@@ -1514,7 +1557,13 @@ export function CesiumDigitalTwinViewer({
       try {
         const res = await extractBuildings(params, controller.signal);
         if (!current()) return;
-        const buildings = prepareBuildingFootprints(res.buildings.geojson?.features || [], selectedPolygon);
+        const rawBuildings = res.buildings?.geojson?.features || (res.buildings as any)?.features || (res as any)?.features || [];
+        const activeRoads = latestRoads.length > 0 ? latestRoads : roadFeatures;
+        const activeRivers = latestRivers.length > 0 ? latestRivers : riverFeatures;
+        let buildings = prepareBuildingFootprints(rawBuildings, selectedPolygon, activeRoads, activeRivers);
+        if (buildings.length === 0 && rawBuildings.length > 0) {
+          buildings = filterBuildingsClearOfPaths(rawBuildings, activeRoads, activeRivers);
+        }
         setBuildingFeatures(buildings);
         render3DBuildings(buildings);
         const stats = { total: buildings.length, safe: 0, moderate: 0, high: 0, critical: 0 };
@@ -1544,7 +1593,10 @@ export function CesiumDigitalTwinViewer({
       if (current()) {
         await buildingJob();
       }
-      if (current()) networksLoadedRef.current = complete;
+      if (current()) {
+        networksLoadedRef.current = complete;
+        setLayersComplete(complete);
+      }
     } finally {
       window.clearTimeout(timeout);
       if (requestId === networkRequestRef.current) {
@@ -2127,7 +2179,7 @@ export function CesiumDigitalTwinViewer({
           [new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(cleanCoords.flatMap(([lat, lng]) => [lng, lat])))]),
         material: Cesium.Color.BLACK,
         classificationType: Cesium.ClassificationType.TERRAIN,
-        zIndex: 100,
+        zIndex: 1,
       },
     }));
 
@@ -2233,6 +2285,8 @@ export function CesiumDigitalTwinViewer({
         });
 
         viewerRef.current = viewer;
+        (window as any)._dtCesiumViewer = viewer;
+        (window as any).Cesium = Cesium;
         setCesiumViewer(viewer);
 
         // High-performance 60 FPS resolution configuration (prevents GPU fill-rate exhaustion)
@@ -2946,6 +3000,24 @@ export function CesiumDigitalTwinViewer({
   }, [meshNodes, showMeshNodes, deployedSensors]);
 
   // Always validate a selection against Supabase; no browser feature snapshots.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!layersComplete || !viewer || viewer.isDestroyed()) return;
+    let framesReady = 0;
+    const remove = viewer.scene.postRender.addEventListener(() => {
+      const ready = !isInFlightRef.current && viewer.scene.globe.tilesLoaded && viewer.dataSourceDisplay.ready;
+      framesReady = ready ? framesReady + 1 : 0;
+      if (framesReady >= 2) {
+        setSceneLoadSeconds((performance.now() - sceneLoadStartedRef.current) / 1000);
+        remove();
+      } else {
+        viewer.scene.requestRender();
+      }
+    });
+    viewer.scene.requestRender();
+    return remove;
+  }, [layersComplete, cesiumViewer]);
+
   useEffect(() => {
     if (!loading && viewerRef.current && !viewerRef.current.isDestroyed()) {
       const timer = setTimeout(() => scheduleSelectedAreaLoad(), 100);
@@ -3929,7 +4001,7 @@ export function CesiumDigitalTwinViewer({
                 <div className="flex items-center justify-between text-[10px] text-slate-400">
                   <span>{isExtractingNetworks ? "Loading priority OSM data…" : isLoadingBuildings ? "Loading building detail…" : "OSM data complete"}</span>
                   <span className="text-sky-300 font-mono">
-                    {isExtractingNetworks || isLoadingBuildings ? "Loading area" : `Loaded in ${Math.max(layerLoadSeconds.networks || 0, layerLoadSeconds.buildings || 0).toFixed(1)}s`}
+                    {sceneLoadSeconds === null ? "Loading area" : `Loaded in ${sceneLoadSeconds.toFixed(1)}s`}
                   </span>
                 </div>
                 <div className="mt-1 h-1 rounded bg-slate-800 overflow-hidden">
@@ -5279,6 +5351,9 @@ export function CesiumDigitalTwinViewer({
 
       {/* Bottom Right: Live Alt & Flat Walk Guide */}
       <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 pointer-events-none">
+        <span data-testid="digital-twin-load-time" className="bg-slate-900/85 border border-slate-700 px-2 py-1.5 rounded-lg text-[11px] text-sky-300 font-mono">
+          {sceneLoadSeconds === null ? "Loading selected area…" : `Area loaded in ${sceneLoadSeconds.toFixed(1)}s`}
+        </span>
         <div className="pointer-events-auto hidden sm:flex items-center gap-3 bg-slate-900/85 backdrop-blur-md border border-slate-700/70 px-3 py-1.5 rounded-lg shadow-lg text-[11px] text-slate-300 font-mono">
           {viewMode === "flat" && (
             <>

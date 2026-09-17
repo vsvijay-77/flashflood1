@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import networkx as nx
 from services.location_service import bbox_from_radius, haversine_distance_m, point_in_polygon
 from services.osm_tile_loader import osm_tile_loader
+from services.osm_geometry import geometry_intersects_polygon
 
 CACHE_DIR = Path(__file__).parent.parent / "cache" / "roads"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,7 +67,7 @@ class OSMRoadService:
         pass
 
     def _cache_key(self, north: float, south: float, east: float, west: float) -> Path:
-        key_str = f"road_v2_{north:.4f}_{south:.4f}_{east:.4f}_{west:.4f}"
+        key_str = f"road_v3_{north:.6f}_{south:.6f}_{east:.6f}_{west:.6f}"
         hash_val = hashlib.md5(key_str.encode()).hexdigest()
         return CACHE_DIR / f"{hash_val}.json"
 
@@ -86,11 +87,10 @@ class OSMRoadService:
                 scoped_features = []
                 for feat in features:
                     pts = _extract_points(feat.get("geometry", {}))
-                    if any(point_in_polygon(lat, lng, polygon) for lat, lng in pts):
+                    if geometry_intersects_polygon(feat.get("geometry", {}), polygon):
                         scoped_features.append(feat)
                 # If polygon filtering matched features, scope to it; otherwise retain all features
-                if scoped_features:
-                    features = scoped_features
+                features = scoped_features
                 geojson = {
                     "type": "FeatureCollection",
                     "features": features,
@@ -137,7 +137,7 @@ class OSMRoadService:
             self._cache_key(broad_bbox["north"], broad_bbox["south"], broad_bbox["east"], broad_bbox["west"]),
             polygon,
         )
-        if broad_cache:
+        if broad_cache and broad_bbox["north"] >= north and broad_bbox["south"] <= south and broad_bbox["east"] >= east and broad_bbox["west"] <= west:
             return broad_cache
 
         elements = await self.fetch_road_elements_overpass(north, south, east, west)

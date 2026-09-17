@@ -1,20 +1,24 @@
 from datetime import datetime, timezone
 import time
+import json
+import math
 from typing import List, Optional
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from lib.auth import ROLES, current_user, require_roles
-from lib.db import db, supabase
+from lib.db import db, supabase, get_mongo_fallback
 from models.schemas import (
     MessageResponse,
     MobUser,
     MobUserAlertRequest,
+    MobUserBroadcastAlertRequest,
     MobUserEvacuationRequest,
     Notification,
     Report,
     ReportCreate,
+    SimulationReportCreate,
     User,
     UserAdminUpdate,
 )
@@ -175,10 +179,40 @@ async def create_report(
     payload: ReportCreate, user: dict = Depends(require_roles("admin", "gov_officer"))
 ):
     report = Report(**payload.model_dump(), status="ready", size_kb=180 + len(payload.title) * 7)
-    await db.reports.insert_one(report.model_dump())
+    await db.reports.insert_one(report.model_dump(exclude_none=True))
     await db.notifications.insert_one(
         Notification(kind="report_ready", title="Report ready", body=report.title).model_dump()
     )
+    return report
+
+
+@router.post("/reports/simulation", response_model=Report, status_code=201)
+async def save_simulation_report(
+    payload: SimulationReportCreate, user: dict = Depends(require_roles("admin", "gov_officer"))
+):
+    # Deterministic user-scoped ID makes retries safe after a lost response.
+    report_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"simulation:{user['id']}:{payload.simulation_report.runId}"))
+    existing = await db.reports.find_one({"id": report_id})
+    if existing:
+        return Report(**existing)
+    data = payload.simulation_report.model_dump(mode="json")
+    try:
+        encoded = json.dumps(data, allow_nan=False).encode("utf-8")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Simulation values must be finite")
+    if len(encoded) > 15_000_000:
+        raise HTTPException(status_code=413, detail="Simulation report exceeds 15 MB")
+    report = Report(id=report_id, title=payload.title, period=payload.period, zone_name=payload.zone_name,
+                    report_type="Flood Simulation", status="ready", size_kb=math.ceil(len(encoded) / 1024),
+                    simulation_report=data)
+    try:
+        await db.reports.insert_one(report.model_dump(mode="json"))
+    except Exception:
+        # Concurrent retries can race against the primary-key constraint.
+        existing = await db.reports.find_one({"id": report_id})
+        if existing:
+            return Report(**existing)
+        raise HTTPException(status_code=503, detail="Could not save simulation report; retry after checking database migration")
     return report
 
 
@@ -215,10 +249,22 @@ async def send_mob_user_alert(
             "risk_level": payload.risk_level,
             "title": payload.title,
             "detail": payload.detail,
+            "channels": payload.channels or ["call", "message", "in_app"],
+            "dispatch_mode": payload.dispatch_mode or "manual",
             "sent_at": now_iso,
             "active": True,
         }
         prefs["active_alert"] = alert_data
+
+        if payload.evacuation_point:
+            prefs["evacuation_point"] = {
+                "shelter_name": payload.evacuation_point.shelter_name,
+                "latitude": payload.evacuation_point.latitude,
+                "longitude": payload.evacuation_point.longitude,
+                "elevation_m": payload.evacuation_point.elevation_m,
+                "instructions": payload.evacuation_point.instructions or "Proceed to shelter.",
+                "assigned_at": now_iso,
+            }
 
         # 1. Update mob_users
         supabase.table("mob_users").update({"preferences": prefs, "updated_at": now_iso}).eq("id", user_id).execute()
@@ -261,15 +307,209 @@ async def send_mob_user_alert(
             "created_at": datetime.now(timezone.utc),
         })
 
+        # 5. Insert into new db mob_alerts
+        mob_alert_doc = {
+            "id": str(uuid.uuid4()),
+            "alert_code": f"MAL-{int(time.time())}-{str(uuid.uuid4())[:4].upper()}",
+            "user_id": user_id,
+            "recipient_name": target_user.get("full_name") or "Citizen",
+            "recipient_phone": target_user.get("phone_number") or "",
+            "recipient_location": target_user.get("location_name") or "Monitored Zone",
+            "hazard_type": payload.hazard_type,
+            "risk_level": payload.risk_level,
+            "title": payload.title,
+            "detail": payload.detail,
+            "channels": payload.channels or ["call", "message", "in_app"],
+            "dispatch_mode": payload.dispatch_mode or "manual",
+            "monitored_area": payload.monitored_area or "Pollachi Catchment Basin",
+            "evacuation_point": payload.evacuation_point.model_dump() if payload.evacuation_point else None,
+            "status": "delivered",
+            "sent_at": now_iso,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await db.mob_alerts.insert_one(dict(mob_alert_doc))
+        except Exception as alert_db_err:
+            print(f"Notice: db.mob_alerts insert_one: {alert_db_err}")
+        try:
+            mongo = get_mongo_fallback()
+            await mongo["mob_alerts"].insert_one(dict(mob_alert_doc))
+        except Exception as mongo_err:
+            print(f"Notice: mongo mob_alerts insert: {mongo_err}")
+        try:
+            supabase.table("mob_alerts").insert(dict(mob_alert_doc)).execute()
+        except Exception:
+            pass
+
         return {
             "status": "ok",
             "message": f"Alert successfully dispatched to {target_user.get('full_name') or 'Citizen'}",
             "alert": alert_data,
+            "mob_alert": mob_alert_doc,
         }
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to dispatch alert: {str(e)}")
+
+
+@router.post("/mob-users/broadcast-alert")
+async def broadcast_mob_user_alert(
+    payload: MobUserBroadcastAlertRequest,
+    admin: dict = Depends(require_roles("admin", "gov_officer")),
+):
+    """Broadcast emergency alert to citizens (monitored zone, all users, or selected)."""
+    try:
+        res = supabase.table("mob_users").select("*").execute()
+        all_users = res.data or []
+
+        # Filter target recipients
+        target_users = []
+        if payload.target == "monitored_zone":
+            # Target citizens in the requested monitored area or catchment basin
+            selected_area_lower = (payload.monitored_area or "").lower()
+            for u in all_users:
+                loc = (u.get("location_name") or "").lower()
+                lat = u.get("latitude")
+                lng = u.get("longitude")
+                # Either within bounding box [10.50, 10.80] x [76.85, 77.15] or location matches Pollachi/Catchment/Basin
+                in_bbox = lat is not None and lng is not None and (10.50 <= lat <= 10.80) and (76.85 <= lng <= 77.15)
+                in_zone_text = any(k in loc for k in ["pollachi", "catchment", "basin", "sector", "zone", "aliyar", "sholayar", "valparai", "coimbatore"])
+                # Area specific matching if specified
+                in_specific = any(term in loc for term in selected_area_lower.split()) if selected_area_lower else True
+                # If no GPS recorded, default to monitored zone to protect citizen
+                if in_bbox or in_zone_text or in_specific or (lat is None and lng is None):
+                    target_users.append(u)
+        elif payload.target == "selected" and payload.user_ids:
+            selected_ids = set(payload.user_ids)
+            target_users = [u for u in all_users if u.get("id") in selected_ids]
+        else:
+            # "all"
+            target_users = all_users
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        dispatched_count = 0
+        mob_alert_records = []
+
+        for u in target_users:
+            u_id = u.get("id")
+            prefs = u.get("preferences") or {}
+            alert_data = {
+                "hazard_type": payload.hazard_type,
+                "risk_level": payload.risk_level,
+                "title": payload.title,
+                "detail": payload.detail,
+                "channels": payload.channels,
+                "dispatch_mode": payload.dispatch_mode,
+                "sent_at": now_iso,
+                "active": True,
+            }
+            prefs["active_alert"] = alert_data
+
+            if payload.evacuation_point:
+                prefs["evacuation_point"] = {
+                    "shelter_name": payload.evacuation_point.shelter_name,
+                    "latitude": payload.evacuation_point.latitude,
+                    "longitude": payload.evacuation_point.longitude,
+                    "elevation_m": payload.evacuation_point.elevation_m,
+                    "instructions": payload.evacuation_point.instructions or "Proceed to designated high-ground shelter.",
+                    "assigned_at": now_iso,
+                }
+
+            supabase.table("mob_users").update({"preferences": prefs, "updated_at": now_iso}).eq("id", u_id).execute()
+            dispatched_count += 1
+
+            # Prepare alert document for mob_alerts database
+            alert_id = str(uuid.uuid4())
+            mob_alert_records.append({
+                "id": alert_id,
+                "alert_code": f"MAL-{int(time.time())}-{alert_id[:4].upper()}",
+                "user_id": u_id,
+                "recipient_name": u.get("full_name") or "Citizen",
+                "recipient_phone": u.get("phone_number") or "",
+                "recipient_location": u.get("location_name") or "Monitored Zone",
+                "hazard_type": payload.hazard_type,
+                "risk_level": payload.risk_level,
+                "title": payload.title,
+                "detail": payload.detail,
+                "channels": payload.channels,
+                "dispatch_mode": payload.dispatch_mode,
+                "monitored_area": payload.monitored_area or "Pollachi Catchment Basin",
+                "evacuation_point": payload.evacuation_point.model_dump() if payload.evacuation_point else None,
+                "status": "delivered",
+                "sent_at": now_iso,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        # Insert records into mob_alerts database
+        if mob_alert_records:
+            try:
+                await db.mob_alerts.insert_many([dict(r) for r in mob_alert_records])
+            except Exception as ex:
+                print(f"Notice: db.mob_alerts insert_many: {ex}")
+            try:
+                mongo = get_mongo_fallback()
+                await mongo["mob_alerts"].insert_many([dict(r) for r in mob_alert_records])
+            except Exception as mex:
+                print(f"Notice: mongo mob_alerts insert_many: {mex}")
+            try:
+                supabase.table("mob_alerts").insert([dict(r) for r in mob_alert_records]).execute()
+            except Exception:
+                pass
+
+        # Record system notifications
+        try:
+            supabase.table("notifications").insert({
+                "id": str(uuid.uuid4()),
+                "kind": "flood_alert" if payload.hazard_type == "Flash Flood" else "landslide_alert",
+                "title": f"🚨 Broadcast Alert: {payload.title}",
+                "body": f"Dispatched to {dispatched_count} citizens ({payload.target.replace('_', ' ').title()}). {payload.detail}",
+                "read": False,
+            }).execute()
+        except Exception:
+            pass
+
+        await db.notifications.insert_one({
+            "kind": "critical_alert",
+            "title": f"🚨 Broadcast Alert ({payload.target}): {payload.title}",
+            "body": f"Delivered to {dispatched_count} citizens via {', '.join(payload.channels)}. {payload.detail}",
+            "read": False,
+            "created_at": datetime.now(timezone.utc),
+        })
+
+        target_label = f"Citizens in {payload.monitored_area}" if payload.target == "monitored_zone" else "All Citizens" if payload.target == "all" else "Selected Citizens"
+        return {
+            "status": "ok",
+            "message": f"Successfully dispatched emergency alert to {dispatched_count} {target_label} via {', '.join(payload.channels)}",
+            "dispatched_count": dispatched_count,
+            "target": payload.target,
+            "monitored_area": payload.monitored_area,
+            "saved_to_db": "mob_alerts",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to broadcast alert: {str(e)}")
+
+
+@router.get("/mob-alerts")
+async def list_mob_alerts(user: dict = Depends(current_user)):
+    """Fetch recent dispatched citizen alerts from mob_alerts database (Supabase or MongoDB)."""
+    try:
+        res = supabase.table("mob_alerts").select("*").order("sent_at", desc=True).limit(100).execute()
+        if res.data and len(res.data) > 0:
+            return res.data
+    except Exception:
+        pass
+
+    try:
+        mongo = get_mongo_fallback()
+        docs = await mongo["mob_alerts"].find({}, {"_id": 0}).sort("sent_at", -1).to_list(100)
+        return docs
+    except Exception as e:
+        print(f"Notice: list_mob_alerts mongo error: {e}")
+        try:
+            return await db.mob_alerts.find({}, {"_id": 0}).sort("sent_at", -1).to_list(100)
+        except Exception:
+            return []
 
 
 @router.post("/mob-users/{user_id}/evacuation-point")

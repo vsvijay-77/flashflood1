@@ -196,6 +196,7 @@ export interface Report {
   zone_name: string;
   status: string;
   size_kb: number;
+  simulation_report?: import("@/components/simulation/simulationReport").SimulationReportData | null;
   created_at: string;
 }
 
@@ -314,6 +315,8 @@ export interface MobUserPreferences {
     detail: string;
     sent_at: string;
     active: boolean;
+    channels?: string[];
+    dispatch_mode?: string;
   };
   evacuation_point?: {
     shelter_name: string;
@@ -352,6 +355,16 @@ export interface MobUserAlertPayload {
   risk_level: string;
   title: string;
   detail: string;
+  channels?: string[];
+  dispatch_mode?: "manual" | "automatic";
+  monitored_area?: string;
+  evacuation_point?: MobUserEvacuationPayload | null;
+}
+
+export interface MobUserBroadcastAlertPayload extends MobUserAlertPayload {
+  target: "monitored_zone" | "all" | "selected";
+  user_ids?: string[];
+  monitored_area?: string;
 }
 
 export interface MobUserEvacuationPayload {
@@ -360,5 +373,25 @@ export interface MobUserEvacuationPayload {
   longitude: number;
   elevation_m?: number;
   instructions?: string;
+}
+
+export interface MobAlertRecord {
+  id: string;
+  alert_code: string;
+  user_id: string;
+  recipient_name: string;
+  recipient_phone: string;
+  recipient_location?: string;
+  hazard_type: string;
+  risk_level: string;
+  title: string;
+  detail: string;
+  channels: string[];
+  dispatch_mode: string;
+  monitored_area?: string;
+  evacuation_point?: MobUserEvacuationPayload | null;
+  status: string;
+  sent_at: string;
+  created_at?: string;
 }
 

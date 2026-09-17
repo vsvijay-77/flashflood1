@@ -39,7 +39,22 @@ queryClient.getQueryCache().subscribe((event) => {
       try {
         const dehydratedState = dehydrate(queryClient, {
           shouldDehydrateQuery: (query) => {
-            const keyStr = JSON.stringify(query.queryKey);
+            const keyStr = JSON.stringify(query.queryKey).toLowerCase();
+            // Never serialize heavy GIS / digital twin / road / river / building datasets to localStorage (5MB limit)
+            if (
+              keyStr.includes("geo") ||
+              keyStr.includes("network") ||
+              keyStr.includes("building") ||
+              keyStr.includes("river") ||
+              keyStr.includes("road") ||
+              keyStr.includes("twin") ||
+              keyStr.includes("extract") ||
+              keyStr.includes("tile") ||
+              keyStr.includes("forecast") ||
+              keyStr.includes("swmplot")
+            ) {
+              return false;
+            }
             return query.state.status === "success" && !keyStr.includes("password") && !keyStr.includes("auth");
           },
         });
@@ -50,8 +65,10 @@ queryClient.getQueryCache().subscribe((event) => {
             dehydratedState,
           })
         );
-      } catch (e) {
-        console.warn("Browser query cache persist notice:", e);
+      } catch {
+        try {
+          localStorage.removeItem(BROWSER_CACHE_KEY);
+        } catch {}
       }
     }, 400);
   }

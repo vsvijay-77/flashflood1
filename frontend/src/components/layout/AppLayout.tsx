@@ -33,7 +33,6 @@ const MAIN_NAV: NavItem[] = [
 ];
 
 const ADMIN_NAV: NavItem[] = [
-  { label: "Sensor Management", to: "/sensors", icon: Radio, allow: ["admin"] },
   { label: "Users", to: "/users", icon: Users, allow: ["admin"] },
   { label: "System Settings", to: "/settings", icon: Settings, allow: ["admin"] },
 ];

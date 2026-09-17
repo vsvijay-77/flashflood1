@@ -102,4 +102,7 @@ android-sdk/
 
 # Testing workspace artifacts
 /tests/test-results/
+tests/*.png
+tests/**/*.png
+
 

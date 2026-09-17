@@ -31,7 +31,7 @@ export function BatteryAndAlerts() {
   const { data: sosAlerts = [], isLoading, isRefetching, refetch } = useQuery<MobileSosRequest[]>({
     queryKey: ["sos_alerts"],
     queryFn: () => apiGet<MobileSosRequest[]>("/alerts/sos"),
-    refetchInterval: 10000, // auto-refresh every 10 seconds for real-time SOS monitoring
+    refetchInterval: 1000, // auto-refresh every 1 second for live real-time monitoring
   });
 
   const updateStatusMutation = useMutation({

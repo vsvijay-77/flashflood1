@@ -17,6 +17,7 @@ export default defineConfig({
     screenshot: 'on',
     trace: 'on-first-retry',
     headless: true,
+    channel: 'chrome',
     ignoreHTTPSErrors: true,
   },
   projects: [

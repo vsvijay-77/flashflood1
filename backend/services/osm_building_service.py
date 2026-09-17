@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from services.location_service import point_in_polygon
 from services.osm_tile_loader import osm_tile_loader
+from services.osm_geometry import geometry_intersects_polygon, join_rings
 
 
 def _numeric(value: Any) -> Optional[float]:
@@ -88,8 +89,8 @@ class OSMBuildingService:
             if item.get("type") != "way":
                 continue
             coords = [nodes[node_id] for node_id in item.get("nodes", []) if node_id in nodes]
-            if len(coords) >= 3:
-                way_coords[item["id"]] = _closed(coords)
+            if len(coords) >= 2:
+                way_coords[item["id"]] = coords
                 way_tags[item["id"]] = dict(item.get("tags") or {})
 
         features: list[dict[str, Any]] = []
@@ -102,7 +103,7 @@ class OSMBuildingService:
                 if geometry.get("type") == "Polygon"
                 else [point for polygon_rings in rings for ring in polygon_rings for point in ring]
             )
-            if polygon and len(polygon) >= 3 and not any(point_in_polygon(lat, lng, polygon) for lng, lat in flat):
+            if not geometry_intersects_polygon(geometry, polygon):
                 return
             height_m, source = _height(tags)
             features.append({
@@ -121,7 +122,7 @@ class OSMBuildingService:
 
         for way_id, coords in way_coords.items():
             tags = way_tags[way_id]
-            if not tags.get("building") or ("way", way_id) in seen or len(coords) < 4:
+            if not tags.get("building") or ("way", way_id) in seen or len(coords) < 4 or coords[0] != coords[-1]:
                 continue
             seen.add(("way", way_id))
             include({"type": "Polygon", "coordinates": [coords]}, tags, "way", way_id)
@@ -137,26 +138,15 @@ class OSMBuildingService:
             members = relation.get("members") or []
             outer_ways = [way_coords[member["ref"]] for member in members if member.get("type") == "way" and member.get("role", "outer") in ("", "outer") and member.get("ref") in way_coords]
             inner_ways = [way_coords[member["ref"]] for member in members if member.get("type") == "way" and member.get("role") == "inner" and member.get("ref") in way_coords]
-            outers, inners = _join_rings(outer_ways), _join_rings(inner_ways)
+            outers, inners = join_rings(outer_ways), join_rings(inner_ways)
             if not outers:
                 continue
             seen.add(("relation", relation_id))
             # Keep each outer as a polygon; holes are attached to the first
             # outer when available (the common OSM building relation shape).
-            polygons = [[outer, *inners] if index == 0 else [outer] for index, outer in enumerate(outers)]
+            polygons = [[outer, *[hole for hole in inners if point_in_polygon(hole[0][1], hole[0][0], [[point[1], point[0]] for point in outer])]] for outer in outers]
             geometry = {"type": "Polygon", "coordinates": polygons[0]} if len(polygons) == 1 else {"type": "MultiPolygon", "coordinates": polygons}
             include(geometry, dict(relation.get("tags") or {}), "relation", relation_id)
-
-        if len(features) == 0:
-            try:
-                from services.ms_building_service import ms_building_service
-                ms_res = await ms_building_service.get_buildings_for_bbox(
-                    south, west, north, east, polygon=polygon
-                )
-                if ms_res and ms_res.get("features"):
-                    return ms_res, load_status
-            except Exception:
-                pass
 
         return {
             "type": "FeatureCollection",

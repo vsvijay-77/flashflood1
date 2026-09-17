@@ -90,6 +90,11 @@ stop_tracked_process() {
   kill -9 "$pid" 2>/dev/null || true
 }
 
+# ── Ensure Python venv is available ──────────────────────────────
+if [ ! -e "$ROOT/backend/venv" ] && [ -d "$ROOT/.venv" ]; then
+  ln -sfn ../.venv "$ROOT/backend/venv"
+fi
+
 # ── Stop only processes occupying this app's ports ────────────────
 banner "Checking backend files"
 if [ -f "$ROOT/backend/check_local_files.py" ]; then

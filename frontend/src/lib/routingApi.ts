@@ -203,6 +203,8 @@ export async function extractNetworks(params: {
   south?: number;
   east?: number;
   west?: number;
+  area_id?: string;
+  area_key?: string;
 }, signal?: AbortSignal): Promise<NetworkExtractionResponse> {
   return apiPost<NetworkExtractionResponse>("/geo/extract-networks", params, { signal });
 }
@@ -216,6 +218,8 @@ export async function extractBuildings(params: {
   south?: number;
   east?: number;
   west?: number;
+  area_id?: string;
+  area_key?: string;
 }, signal?: AbortSignal): Promise<BuildingExtractionResponse> {
   return apiPost<BuildingExtractionResponse>("/geo/extract-buildings", params, { signal });
 }

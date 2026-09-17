@@ -19,14 +19,15 @@ CACHE_TTL_SECONDS = 24 * 60 * 60
 MAX_CONCURRENCY = 6
 # Keep a new-area request responsive. Endpoint failover is still used, but a
 # dead Overpass mirror must not hold the Digital Twin risk panel for minutes.
-REQUEST_TIMEOUT_SECONDS = 20.0
+REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_ATTEMPTS = 2
 
 ENDPOINTS = (
     # Fast, worldwide Overpass mirrors with reliable global coverage
-    "https://overpass.openstreetmap.fr/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 )
 
@@ -59,6 +60,8 @@ class OSMTileLoader:
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         self._unhealthy_until: dict[str, float] = {}
         self._inflight: dict[str, asyncio.Future] = {}
+        self._map_tasks: dict[str, asyncio.Task] = {}
+        self._map_semaphore = asyncio.Semaphore(2)
 
     @staticmethod
     def tiles_for_bbox(north: float, south: float, east: float, west: float) -> list[Tile]:
@@ -87,7 +90,7 @@ class OSMTileLoader:
 
     @staticmethod
     def _cache_path(dataset: str, tile: Tile) -> Path:
-        digest = hashlib.sha256(f"v1:{dataset}:{tile.key}".encode()).hexdigest()
+        digest = hashlib.sha256(f"v2:{dataset}:{tile.key}".encode()).hexdigest()
         return CACHE_ROOT / dataset / f"{digest}.json"
 
     def _read_cache(self, dataset: str, tile: Tile) -> list[dict[str, Any]] | None:
@@ -124,10 +127,11 @@ class OSMTileLoader:
         key = f"{dataset}:{tile.key}"
         if key in self._inflight:
             # Another coroutine is already fetching this exact tile — await its result
-            return await self._inflight[key]
+            return await asyncio.shield(self._inflight[key])
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
+        future.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
         self._inflight[key] = future
 
         try:
@@ -142,9 +146,65 @@ class OSMTileLoader:
         finally:
             self._inflight.pop(key, None)
 
+    async def _request_map_tile(self, tile: Tile) -> list[dict[str, Any]]:
+        """Small-area fallback using the official OSM map API, shared by layers.
+
+        https://wiki.openstreetmap.org/wiki/API_v0.6#Retrieving_map_data_by_bounding_box
+        Keep requests small and cached; larger queries remain on Overpass.
+        """
+        cached = self._read_cache("map", tile)
+        if cached is not None:
+            return cached
+        task = self._map_tasks.get(tile.key)
+        if task is None:
+            task = asyncio.create_task(self._fetch_map_tile(tile))
+            self._map_tasks[tile.key] = task
+            def done(completed):
+                self._map_tasks.pop(tile.key, None)
+                if not completed.cancelled():
+                    completed.exception()
+            task.add_done_callback(done)
+        return await asyncio.shield(task)
+
+    async def _fetch_map_tile(self, tile: Tile) -> list[dict[str, Any]]:
+        async with self._map_semaphore:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(35, connect=5), headers={"User-Agent": "FlashFloodDigitalTwin/1.0", "Accept": "application/json"}) as client:
+                response = await client.get("https://api.openstreetmap.org/api/0.6/map.json", params={
+                    "bbox": f"{tile.west},{tile.south},{tile.east},{tile.north}",
+                })
+                response.raise_for_status()
+                elements = response.json().get("elements")
+                if not isinstance(elements, list):
+                    raise ValueError("OSM map response has no elements")
+                unique = {(el["type"], el["id"]): el for el in elements}
+                # The map API returns full ways but may omit relation members
+                # outside the bbox. Fetch relevant full relations before caching.
+                for el in elements:
+                    tags = el.get("tags") or {}
+                    relevant = tags.get("building") or tags.get("highway") or tags.get("waterway") or tags.get("natural") == "water" or tags.get("water") or tags.get("landuse") in {"reservoir", "basin"}
+                    if el.get("type") != "relation" or not relevant:
+                        continue
+                    if any((m["type"], m["ref"]) not in unique for m in el.get("members", [])):
+                        full = await client.get(f"https://api.openstreetmap.org/api/0.6/relation/{el['id']}/full.json")
+                        full.raise_for_status()
+                        members = full.json().get("elements")
+                        if not isinstance(members, list):
+                            raise ValueError("Incomplete OSM relation")
+                        unique.update({(m["type"], m["id"]): m for m in members})
+                result = list(unique.values())
+                if any(any(("node", node) not in unique for node in el.get("nodes", [])) for el in result if el["type"] == "way"):
+                    raise ValueError("Incomplete OSM way geometry")
+                self._write_cache("map", tile, result)
+                return result
+
     async def _fetch_tile_from_endpoints(self, dataset: str, tile: Tile, query: str) -> tuple[list[dict[str, Any]], bool]:
-        headers = {"User-Agent": "FlashFloodDigitalTwin/1.0 (contact: admin@ein.gov.in)"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 FlashFloodDigitalTwin/1.0 (contact: admin@ein.gov.in)",
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip, deflate",
+        }
         errors: list[str] = []
+        map_attempted = False
 
         for attempt in range(MAX_ATTEMPTS):
             if attempt:
@@ -153,14 +213,16 @@ class OSMTileLoader:
             for idx, endpoint in enumerate(endpoints):
                 try:
                     async with self._semaphore:
-                        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, headers=headers) as client:
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(70.0 if dataset == "buildings" else REQUEST_TIMEOUT_SECONDS, connect=5.0), headers=headers) as client:
                             response = await client.post(endpoint, data={"data": query})
                     if response.status_code in (429, 502, 503, 504):
                         self._unhealthy_until[endpoint] = time.monotonic() + 60
                         errors.append(f"{tile.key} {response.status_code} {endpoint}")
-                        continue
+                        raise httpx.HTTPStatusError("Overpass temporarily unavailable", request=response.request, response=response)
                     response.raise_for_status()
                     payload = response.json()
+                    if payload.get("remark"):
+                        raise ValueError(f"Incomplete Overpass response: {payload['remark']}")
                     elements = payload.get("elements")
                     if not isinstance(elements, list):
                         raise ValueError("response did not contain an elements list")
@@ -170,6 +232,15 @@ class OSMTileLoader:
                 except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
                     self._unhealthy_until[endpoint] = time.monotonic() + 30
                     errors.append(f"{tile.key} {endpoint}: {exc}")
+                    if not map_attempted and max(tile.north - tile.south, tile.east - tile.west) <= 0.20:
+                        map_attempted = True
+                        try:
+                            elements = await self._request_map_tile(tile)
+                            self._write_cache(dataset, tile, elements)
+                            return elements, False
+                        except (httpx.HTTPError, ValueError) as fallback_error:
+                            errors.append(f"{tile.key} OSM map fallback: {fallback_error}")
+
         raise OSMTileLoadError(errors or [f"{tile.key} failed without a response"])
 
     async def load(
@@ -195,7 +266,8 @@ class OSMTileLoader:
             # Each statement inside an Overpass union must end in a semicolon.
             # Keeping it here avoids a subtle parse error on the final selector.
             selected = selectors.format(bbox=bbox).rstrip(";") + ";"
-            return f"[out:json][timeout:20];({selected});out body;>;out skel qt;"
+            query_timeout = 60 if dataset == "buildings" else 20
+            return f"[out:json][timeout:{query_timeout}];({selected});out body;>;out skel qt;"
 
         async def load_one(tile: Tile) -> tuple[Tile, list[dict[str, Any]] | None, bool, Exception | None]:
             try:
@@ -209,28 +281,34 @@ class OSMTileLoader:
         failures: list[dict[str, Any]] = []
         completed = 0
         cached_tiles = 0
-        for task in asyncio.as_completed(tasks):
-            tile, elements, from_cache, error = await task
-            if error is None and elements is not None:
-                results.append(elements)
-                cached_tiles += int(from_cache)
-                state = "success"
-            else:
-                failures.append({"tile": tile.as_dict(), "error": str(error)})
-                state = "failed"
-            completed += 1
-            if on_progress:
-                update = {
-                    "dataset": dataset,
-                    "completed_tiles": completed,
-                    "total_tiles": len(tiles),
-                    "cached_tiles": cached_tiles,
-                    "state": state,
-                    "tile": tile.as_dict(),
-                }
-                outcome = on_progress(update)
-                if asyncio.iscoroutine(outcome):
-                    await outcome
+        try:
+            for task in asyncio.as_completed(tasks):
+                tile, elements, from_cache, error = await task
+                if error is None and elements is not None:
+                    results.append(elements)
+                    cached_tiles += int(from_cache)
+                    state = "success"
+                else:
+                    failures.append({"tile": tile.as_dict(), "error": str(error)})
+                    state = "failed"
+                completed += 1
+                if on_progress:
+                    update = {
+                        "dataset": dataset,
+                        "completed_tiles": completed,
+                        "total_tiles": len(tiles),
+                        "cached_tiles": cached_tiles,
+                        "state": state,
+                        "tile": tile.as_dict(),
+                    }
+                    outcome = on_progress(update)
+                    if asyncio.iscoroutine(outcome):
+                        await outcome
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         # Never cache or report an incomplete network as a successful empty map.
 
         if failures:
@@ -241,7 +319,9 @@ class OSMTileLoader:
             for element in elements:
                 element_type, osm_id = element.get("type"), element.get("id")
                 if element_type in {"node", "way", "relation"} and isinstance(osm_id, int):
-                    unique[(element_type, osm_id)] = element
+                    key = (element_type, osm_id)
+                    previous = unique.get(key, {})
+                    unique[key] = {**previous, **element, "tags": {**previous.get("tags", {}), **element.get("tags", {})}}
         loaded_count = len(tiles) - len(failures)
         return list(unique.values()), {
             "dataset": dataset,

@@ -12,14 +12,18 @@
  * - Real-time control integration (speed, source rise, pause, reset)
  */
 
+import { predictEdgeDischarge } from "./terrainFlowGnn";
+
 export interface SimulationConfig {
   cols: number;
   rows: number;
   dx: number; // grid cell spacing in meters (approx 8 - 15m)
+  dy?: number;
   manningN?: number; // default ~0.035
   gravity?: number; // 9.81
   cflSafety?: number; // 0.6
   maxSubstepsPerFrame?: number;
+  flowModel?: "physics" | "gnn";
 }
 
 export interface CellEdge {
@@ -45,6 +49,8 @@ export interface WaterPhysicsState {
   initialSourceDepth: Float32Array;
   edges: CellEdge[];
   elapsedSeconds: number;
+  firstArrivalSeconds: Float64Array; // first ≥0.10 m crossing, -1 if not reached
+  peakDepth: Float32Array;
   totalVolumeM3: number;
   injectedVolumeM3: number;
   floodedAreaHectares: number;
@@ -52,6 +58,7 @@ export interface WaterPhysicsState {
 }
 
 export class WaterPhysicsSimulation {
+  private pathMask: Uint8Array;
   private totalOutflow: Float32Array;
   private countX: Uint8Array;
   private countY: Uint8Array;
@@ -63,19 +70,23 @@ export class WaterPhysicsSimulation {
     bedElevations: Float32Array | number[],
     insideMask?: Uint8Array | boolean[],
     sourceMask?: Uint8Array | boolean[],
-    initialDepths?: Float32Array | number[]
+    initialDepths?: Float32Array | number[],
+    pathMask?: Uint8Array,
   ) {
     this.config = {
       cols: config.cols,
       rows: config.rows,
       dx: config.dx,
+      dy: config.dy ?? config.dx,
       manningN: config.manningN ?? 0.032,
       gravity: config.gravity ?? 9.81,
       cflSafety: config.cflSafety ?? 0.6,
       maxSubstepsPerFrame: config.maxSubstepsPerFrame ?? 16,
+      flowModel: config.flowModel ?? "physics",
     };
 
     const totalCells = this.config.cols * this.config.rows;
+    this.pathMask = pathMask ?? new Uint8Array(totalCells);
     this.totalOutflow = new Float32Array(totalCells);
     this.countX = new Uint8Array(totalCells);
     this.countY = new Uint8Array(totalCells);
@@ -144,6 +155,8 @@ export class WaterPhysicsSimulation {
       initialSourceDepth,
       edges,
       elapsedSeconds: 0,
+      firstArrivalSeconds: Float64Array.from(depth, (d, i) => inside[i] && d >= 0.1 ? 0 : -1),
+      peakDepth: new Float32Array(depth),
       totalVolumeM3: 0,
       injectedVolumeM3: 0,
       floodedAreaHectares: 0,
@@ -167,6 +180,8 @@ export class WaterPhysicsSimulation {
     for (const edge of edges) {
       edge.discharge = 0;
     }
+    this.state.firstArrivalSeconds = Float64Array.from(initialDepth, (d, i) => this.state.insideMask[i] && d >= 0.1 ? 0 : -1);
+    this.state.peakDepth.set(initialDepth);
     this.state.elapsedSeconds = 0;
     this.state.injectedVolumeM3 = 0;
     this.updateMetrics();
@@ -177,7 +192,7 @@ export class WaterPhysicsSimulation {
    */
   public injectSourceRise(sourceRiseM: number, dt: number): void {
     const { totalCells, depth, isSource, initialSourceDepth, dx, insideMask } = this.state;
-    const cellArea = dx * dx;
+    const cellArea = dx * this.config.dy;
     const effectiveRise = Math.max(0, sourceRiseM);
 
     for (let i = 0; i < totalCells; i++) {
@@ -195,26 +210,44 @@ export class WaterPhysicsSimulation {
   /**
    * Advances the shallow-water physics by time dt using adaptive CFL sub-stepping.
    */
-  public advance(deltaTime: number, speedMultiplier = 1.0, sourceRiseM = 1.2): void {
-    if (deltaTime <= 0 || speedMultiplier <= 0) return;
+  public advance(deltaTime: number, speedMultiplier = 1.0, sourceRiseM = 1.2, rainfallMmH = 0, budgetMs = Infinity): number {
+    if (![deltaTime, speedMultiplier, sourceRiseM, rainfallMmH].every(Number.isFinite) || deltaTime <= 0 || speedMultiplier <= 0) return 0;
 
     const totalSimTime = deltaTime * speedMultiplier;
+    if (!Number.isFinite(totalSimTime)) return 0;
     let remainingTime = totalSimTime;
+    const startedAt = performance.now();
 
     let stepCount = 0;
-    while (remainingTime > 0 && stepCount < this.config.maxSubstepsPerFrame) {
+    while (remainingTime > 1e-8) {
+      if (stepCount > 0 && Number.isFinite(budgetMs) &&
+          (stepCount >= this.config.maxSubstepsPerFrame || performance.now() - startedAt >= budgetMs)) break;
       const dt = Math.min(remainingTime, this.computeCFLTimestep());
       this.stepPhysics(dt);
       if (sourceRiseM > 0) {
         this.injectSourceRise(sourceRiseM, dt);
       }
+      if (rainfallMmH > 0) {
+        const addedDepth = rainfallMmH / 3_600_000 * dt;
+        for (let index = 0; index < this.state.totalCells; index++) if (this.state.insideMask[index]) {
+          this.state.depth[index] += addedDepth;
+          this.state.injectedVolumeM3 += addedDepth * this.config.dx * this.config.dy;
+        }
+      }
       remainingTime -= dt;
       this.state.elapsedSeconds += dt;
+      for (let i = 0; i < this.state.totalCells; i++) {
+        if (!this.state.insideMask[i]) continue;
+        const d = this.state.depth[i];
+        this.state.peakDepth[i] = Math.max(this.state.peakDepth[i], d);
+        if (d >= 0.1 && this.state.firstArrivalSeconds[i] < 0) this.state.firstArrivalSeconds[i] = this.state.elapsedSeconds;
+      }
       stepCount++;
     }
 
     this.computeCellVelocities();
     this.updateMetrics();
+    return totalSimTime - remainingTime;
   }
 
   /**
@@ -239,24 +272,32 @@ export class WaterPhysicsSimulation {
       // Effective flow depth over highest bed elevation
       const waterDepth = Math.max(headA, headB) - Math.max(bed[a], bed[b]);
 
-      if (waterDepth <= 0.005) {
+      if (waterDepth <= 0.0001) {
         edge.discharge = 0;
         continue;
       }
 
       // Water surface gradient from high to low terrain: (headB - headA)
-      const gradient = (headB - headA) / dx;
+      const distance = edge.isX ? dx : this.config.dy;
+      const gradient = (headB - headA) / distance;
       const friction =
         1 +
         (g * dt * n * n * Math.abs(edge.discharge)) /
           Math.pow(Math.max(0.02, waterDepth), 7 / 3);
 
       // Downhill momentum equation
-      edge.discharge = (edge.discharge - g * waterDepth * dt * gradient) / friction;
+      if (this.config.flowModel === "gnn") {
+        const channel = this.state.isSource[a] || this.state.isSource[b];
+        const path = this.pathMask[a] || this.pathMask[b];
+        const effectiveRoughness = n * (channel ? 0.7 : path ? 0.85 : 1);
+        edge.discharge = -Math.sign(gradient) * predictEdgeDischarge(waterDepth, Math.abs(gradient), effectiveRoughness);
+      } else {
+        edge.discharge = (edge.discharge - g * waterDepth * dt * gradient) / friction;
+      }
 
       // Conservative donor-volume limiting: cannot export more water than is available
       const donor = edge.discharge >= 0 ? a : b;
-      const available = depth[donor] * dx;
+      const available = depth[donor] * distance;
 
       const requested = Math.abs(edge.discharge) * dt;
       const limited = Math.min(requested, available);
@@ -270,10 +311,11 @@ export class WaterPhysicsSimulation {
     totalOutflow.fill(0);
 
     for (const edge of edges) {
+      const distance = edge.isX ? dx : this.config.dy;
       if (edge.discharge > 0) {
-        totalOutflow[edge.from] += edge.discharge * dt;
+        totalOutflow[edge.from] += edge.discharge * dt / distance;
       } else if (edge.discharge < 0) {
-        totalOutflow[edge.to] += -edge.discharge * dt;
+        totalOutflow[edge.to] += -edge.discharge * dt / distance;
       }
     }
 
@@ -282,21 +324,22 @@ export class WaterPhysicsSimulation {
       let flow = edge.discharge * dt;
       if (flow > 0) {
         const donor = edge.from;
-        const avail = depth[donor] * dx;
+        const avail = depth[donor];
         if (totalOutflow[donor] > avail && totalOutflow[donor] > 0) {
           flow *= avail / totalOutflow[donor];
         }
       } else if (flow < 0) {
         const donor = edge.to;
-        const avail = depth[donor] * dx;
+        const avail = depth[donor];
         if (totalOutflow[donor] > avail && totalOutflow[donor] > 0) {
           flow *= avail / totalOutflow[donor];
         }
       }
 
       edge.discharge = flow / dt;
-      delta[edge.from] -= flow / dx;
-      delta[edge.to] += flow / dx;
+      const distance = edge.isX ? dx : this.config.dy;
+      delta[edge.from] -= flow / distance;
+      delta[edge.to] += flow / distance;
     }
 
     // Apply net depth changes to all cells strictly within the marked boundary
@@ -322,13 +365,18 @@ export class WaterPhysicsSimulation {
     let maxWaveSpeed = 0.5;
     for (let i = 0; i < totalCells; i++) {
       if (depth[i] > 0.01) {
-        const c = Math.sqrt(gravity * depth[i]);
+        const c = Math.sqrt(gravity * depth[i]) + Math.hypot(this.state.velocityX[i], this.state.velocityY[i]);
         if (c > maxWaveSpeed) maxWaveSpeed = c;
       }
     }
 
-    const cflDt = (cflSafety * dx) / maxWaveSpeed;
-    return Math.max(0.01, Math.min(0.20, cflDt));
+    for (const edge of this.state.edges) {
+      const donor = edge.discharge >= 0 ? edge.from : edge.to;
+      if (depth[donor] > 0.005) maxWaveSpeed = Math.max(maxWaveSpeed,
+        Math.sqrt(gravity * depth[donor]) + Math.abs(edge.discharge) / depth[donor]);
+    }
+    const cflDt = (cflSafety * Math.min(dx, this.config.dy)) / maxWaveSpeed;
+    return Math.min(0.20, cflDt);
   }
 
   /**
@@ -372,7 +420,7 @@ export class WaterPhysicsSimulation {
    */
   private updateMetrics(): void {
     const { totalCells, depth, dx, insideMask } = this.state;
-    const cellAreaM2 = dx * dx;
+    const cellAreaM2 = dx * this.config.dy;
     let floodedCount = 0;
     let maxD = 0;
     let totalVol = 0;
@@ -386,7 +434,7 @@ export class WaterPhysicsSimulation {
     }
 
     this.state.floodedAreaHectares = (floodedCount * cellAreaM2) / 10000;
-    this.state.maxDepthM = Math.round(maxD * 100) / 100;
-    this.state.totalVolumeM3 = Math.round(totalVol);
+    this.state.maxDepthM = maxD;
+    this.state.totalVolumeM3 = totalVol;
   }
 }

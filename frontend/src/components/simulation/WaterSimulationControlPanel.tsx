@@ -30,6 +30,14 @@ export interface WaterSimulationControlPanelProps {
   elapsedSeconds: number;
   spreadAreaHectares: number;
   maxDepthM: number;
+  isReady: boolean;
+  rainfallMmH: number;
+  onRainfallChange: (value: number) => void;
+  scenarioInflow: boolean;
+  onScenarioInflowChange: (value: boolean) => void;
+  fps: number;
+  effectiveSpeed: number;
+  renderScale: number;
   onStart: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -55,6 +63,14 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
   elapsedSeconds,
   spreadAreaHectares,
   maxDepthM,
+  isReady,
+  rainfallMmH,
+  onRainfallChange,
+  scenarioInflow,
+  onScenarioInflowChange,
+  fps,
+  effectiveSpeed,
+  renderScale,
   onStart,
   onPause,
   onResume,
@@ -77,7 +93,7 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
       role="region"
       aria-label="Water Simulation Controls"
       onWheel={(e) => e.stopPropagation()}
-      className="absolute bottom-5 right-5 z-20 w-88 bg-slate-950/95 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-4 text-slate-100 flex flex-col gap-3.5 select-none animate-in fade-in zoom-in-95 duration-200 overscroll-contain"
+      className="absolute bottom-3 right-3 z-20 w-88 max-w-[calc(100%-1.5rem)] max-h-[calc(100%-5rem)] overflow-y-auto bg-slate-950/95 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-4 text-slate-100 flex flex-col gap-3.5 select-none animate-in fade-in zoom-in-95 duration-200 overscroll-contain"
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
@@ -159,6 +175,7 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
             type="button"
             onClick={isRunning ? onResume : onStart}
             aria-label={isRunning ? "Resume Water" : "Start Water"}
+            disabled={!isReady}
             className="flex items-center justify-center gap-1.5 py-2 px-3 bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 text-white font-bold text-xs rounded-lg transition-all shadow-md shadow-cyan-950 cursor-pointer active:scale-98"
           >
             <Play className="size-3.5 fill-current" />
@@ -245,6 +262,16 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
       </div>
 
       {/* Time Speed Selector: 1x, 10x, 30x, 60x */}
+      <label className="text-[11px] text-slate-300 space-y-2">
+        <span className="flex justify-between"><span>Rainfall input</span><span>{rainfallMmH} mm/h</span></span>
+        <input aria-label="Water rainfall input" type="range" min="0" max="300" step="5" value={rainfallMmH} onChange={event => onRainfallChange(Number(event.target.value))} className="w-full accent-cyan-400" />
+      </label>
+      {isFallbackSource && isReady && (
+        <label className="text-[10px] text-amber-200 flex items-start gap-2">
+          <input type="checkbox" checked={scenarioInflow} onChange={event => onScenarioInflowChange(event.target.checked)} />
+          <span>Add synthetic upslope inflow. No mapped water source intersects this grid; this is not an observed river.</span>
+        </label>
+      )}
       <div className="flex items-center justify-between text-xs">
         <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
           <Clock className="size-3 text-cyan-400" />
@@ -294,6 +321,12 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
       </div>
 
       {/* Attribution and Disclaimer */}
+      <div role="status" aria-label="Water performance" className="text-[10px] font-mono text-cyan-200">
+        {isPaused ? "Paused" : !isRunning ? "Standby" : `${fps} FPS · ${effectiveSpeed.toFixed(1)}× actual · ${renderScale.toFixed(2)} render scale`}
+        {isRunning && !isPaused && fps > 0 && (fps < 28 || effectiveSpeed < speed * 0.75) && (
+          <p className="text-amber-300 font-sans mt-1">Performance limited: render resolution adapts; elapsed time shows actual simulated progress.</p>
+        )}
+      </div>
       <div className="space-y-1 text-[9px] text-slate-400 leading-tight pt-1 border-t border-slate-800">
         <div className="flex items-center justify-between">
           <a
@@ -308,7 +341,7 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
         </div>
         <p className="italic text-slate-400 flex items-start gap-1">
           <Info className="size-2.5 text-cyan-400 shrink-0 mt-0.5" />
-          <span>Interactive terrain-based approximation (not a calibrated flood forecast).</span>
+          <span>DEM-driven approximation, not a calibrated forecast. Source depths are assumed; rainfall is direct input without infiltration. Buildings are visual only, not hydraulic barriers.</span>
         </p>
       </div>
     </div>

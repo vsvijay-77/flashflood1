@@ -1,7 +1,8 @@
 """Routing & Rivers API Router: Real OSM road and river extraction, GNN spatial graph, risk inference, and evacuation routing."""
 import asyncio
+import math
 import networkx as nx
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Query, Body
 
 from pydantic import BaseModel, Field
@@ -11,6 +12,7 @@ from services.osm_road_service import OSMRoadService
 from services.osm_river_service import OSMRiverService
 from services.osm_building_service import OSMBuildingService
 from services.osm_tile_loader import OSMTileLoader, OSMTileLoadError
+from services import area_map_store
 from services.graph_builder import UnifiedGraphBuilder
 from services.routing_service import EvacuationRoutingService
 
@@ -45,6 +47,8 @@ class LocationRequest(BaseModel):
     south: Optional[float] = None
     east: Optional[float] = None
     west: Optional[float] = None
+    area_id: Optional[str] = None
+    area_key: Optional[str] = None
 
 
 class EvacuationRouteRequest(BaseModel):
@@ -64,6 +68,16 @@ class EvacuationRouteRequest(BaseModel):
 
 def _derive_bbox(req: LocationRequest) -> Dict[str, float]:
     """Resolves bounding box from request parameters."""
+    if req.polygon and len(req.polygon) >= 3:
+        latitudes = [point[0] for point in req.polygon]
+        longitudes = [point[1] for point in req.polygon]
+        pad = 0.005  # ~500m context — just enough for roads that cross the border
+        return {
+            "north": max(latitudes) + pad, "south": min(latitudes) - pad,
+            "east": max(longitudes) + pad, "west": min(longitudes) - pad,
+            "center_lat": (max(latitudes) + min(latitudes)) / 2,
+            "center_lng": (max(longitudes) + min(longitudes)) / 2,
+        }
     # 1. Direct bbox — highest priority (viewport-based queries from frontend)
     if req.north is not None and req.south is not None and req.east is not None and req.west is not None:
         clamp_span = 1.0  # Max 1 degree per side to avoid huge queries
@@ -118,7 +132,10 @@ async def extract_networks(payload: LocationRequest = Body(...)):
     Extracts real-world OpenStreetMap road network and river/waterway channels for any selected location.
     Accepts place name, polygon, or coordinates + radius.
     """
-    if payload.place_name:
+    has_geometry = bool(payload.polygon and len(payload.polygon) >= 3) or all(
+        value is not None for value in (payload.north, payload.south, payload.east, payload.west)
+    ) or (payload.lat is not None and payload.lng is not None)
+    if payload.place_name and not has_geometry:
         geocoded = await geocode_place_name(payload.place_name)
         if geocoded:
             bbox = {
@@ -135,77 +152,68 @@ async def extract_networks(payload: LocationRequest = Body(...)):
     else:
         bbox = _derive_bbox(payload)
 
-    north = bbox["north"]
-    south = bbox["south"]
-    east = bbox["east"]
-    west = bbox["west"]
+    area_id = area_map_store.area_id_for(payload)
+    key = area_map_store.boundary_key(payload.polygon, bbox)
+    try:
+        cached = await asyncio.to_thread(area_map_store.load_layers, area_id, key)
+    except Exception as exc:
+        raise HTTPException(503, "Saved map layers are unavailable. Please retry.") from exc
 
-    road_res, river_res = await asyncio.gather(
-        road_service.get_road_network(north, south, east, west, polygon=payload.polygon),
-        river_service.get_river_network(north, south, east, west, polygon=payload.polygon),
-        return_exceptions=True,
+    async def load_layer(name, service):
+        if name in cached:
+            return cached[name], None
+        try:
+            _, geojson = await asyncio.wait_for(service(
+                bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
+            ), timeout=240)
+            await asyncio.to_thread(area_map_store.save_layer, area_id, key, name, geojson)
+            return geojson, None
+        except Exception as exc:
+            return {"type": "FeatureCollection", "features": []}, str(exc)
+
+    (roads, road_error), (rivers, river_error) = await asyncio.gather(
+        load_layer("roads", road_service.get_road_network),
+        load_layer("rivers", river_service.get_river_network),
     )
-
-    if isinstance(road_res, Exception):
-        print(f"[routing_and_rivers] Road extraction warning: {road_res}")
-        road_G = nx.DiGraph()
-        road_geojson = {"type": "FeatureCollection", "features": [], "metadata": {"total_nodes": 0, "total_edges": 0}}
-    else:
-        road_G, road_geojson = road_res
-
-    if isinstance(river_res, Exception):
-        print(f"[routing_and_rivers] River extraction warning: {river_res}")
-        river_G = nx.DiGraph()
-        river_geojson = {"type": "FeatureCollection", "features": [], "metadata": {"total_nodes": 0, "total_edges": 0}}
-    else:
-        river_G, river_geojson = river_res
-
-    center_lat = bbox.get("center_lat", (north + south) / 2.0)
-    center_lng = bbox.get("center_lng", (east + west) / 2.0)
-
-    return {
-        "status": "success",
-        "bbox": bbox,
+    failed = [name for name, error in (("roads", road_error), ("rivers", river_error)) if error is not None]
+    result = {
+        "status": "success", "bbox": bbox,
         "osm_loading": {
-            "complete": True,
-            "total_tiles": len(OSMTileLoader.tiles_for_bbox(north, south, east, west)),
-            "loaded_tiles": len(OSMTileLoader.tiles_for_bbox(north, south, east, west)),
-            "failed_tiles": [],
-            # Buildings load on their own lower-priority request. This lets
-            # flood-critical waterways and evacuation paths appear first.
-            "buildings": {"state": "pending"},
+            "complete": not failed, "total_tiles": 2, "loaded_tiles": 2 - len(failed),
+            "failed_tiles": [], "failed_layers": failed,
+            "source": "supabase_cache" if "roads" in cached and "rivers" in cached else "OpenStreetMap",
         },
-        "roads": {
-            "geojson": road_geojson,
-            "total_nodes": road_G.number_of_nodes(),
-            "total_edges": road_G.number_of_edges(),
-        },
-        "rivers": {
-            "geojson": river_geojson,
-            "total_nodes": river_G.number_of_nodes(),
-            "total_edges": river_G.number_of_edges(),
-        },
+        "roads": {"geojson": roads, "total_nodes": roads.get("metadata", {}).get("total_nodes", 0), "total_edges": len(roads["features"])},
+        "rivers": {"geojson": rivers, "total_nodes": rivers.get("metadata", {}).get("total_nodes", 0), "total_edges": len(rivers["features"])},
     }
+    if "buildings" in cached:
+        result["buildings"] = {"geojson": cached["buildings"], "total_features": len(cached["buildings"]["features"])}
+    return result
 
 
 @router.post("/extract-buildings")
 async def extract_buildings(payload: LocationRequest = Body(...)):
-    """Load complete OSM building footprints after the priority network layers."""
     bbox = _derive_bbox(payload)
+    area_id = area_map_store.area_id_for(payload)
+    key = area_map_store.boundary_key(payload.polygon, bbox)
     try:
-        geojson, tile_status = await building_service.get_buildings(
-            bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
-        )
-    except OSMTileLoadError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"message": "Building data is incomplete.", "failed_tiles": exc.failures},
-        ) from exc
+        cached = await asyncio.to_thread(area_map_store.load_layers, area_id, key)
+        if "buildings" in cached:
+            geojson = cached["buildings"]
+            status = {"complete": True, "source": "supabase_cache", "loaded_tiles": 1, "total_tiles": 1, "failed_tiles": []}
+        else:
+            geojson, status = await asyncio.wait_for(building_service.get_buildings(
+                bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
+            ), timeout=240)
+            if not status.get("complete"):
+                raise RuntimeError("Incomplete building tiles")
+            await asyncio.to_thread(area_map_store.save_layer, area_id, key, "buildings", geojson)
+    except Exception as exc:
+        raise HTTPException(503, "Buildings could not be fully loaded and saved. Please retry.") from exc
     return {
-        "status": "success",
-        "bbox": bbox,
-        "buildings": {"geojson": geojson, "total_features": len(geojson.get("features", []))},
-        "osm_loading": tile_status,
+        "status": "success", "bbox": bbox,
+        "buildings": {"geojson": geojson, "total_features": len(geojson["features"])},
+        "osm_loading": status,
     }
 
 

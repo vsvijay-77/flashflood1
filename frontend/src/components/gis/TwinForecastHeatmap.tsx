@@ -9,6 +9,8 @@ type Props = {
   polygon: [number, number][];
   selectedHour?: number;
   onSelectedHourChange?: (hour: number) => void;
+  opacity?: number;
+  hideCard?: boolean;
 };
 
 // Rows run south to north; the image runs north to south.
@@ -29,7 +31,7 @@ export function surfaceImage(polygon: [number, number][], bounds: number[], scor
     const v = Math.max(0, Math.min(1, value)) * 3, i = Math.min(2, Math.floor(v));
     const offset = (y * 512 + x) * 4;
     for (let c = 0; c < 3; c++) pixels.data[offset + c] = Math.round(stops[i][c] * (1 - (v - i)) + stops[i + 1][c] * (v - i));
-    pixels.data[offset + 3] = 255;
+    pixels.data[offset + 3] = value > 0.02 ? Math.round(140 + Math.min(1, value) * 105) : 0;
   }
   ctx.putImageData(pixels, 0, 0);
   ctx.globalCompositeOperation = "destination-in";
@@ -38,11 +40,19 @@ export function surfaceImage(polygon: [number, number][], bounds: number[], scor
     const x = (lng - west) / (east - west) * 512, y = (north - lat) / (north - south) * 512;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
-  ctx.closePath(); ctx.fill();
+  ctx.closePath();
+  ctx.fill();
   return canvas.toDataURL("image/png");
 }
 
-export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onSelectedHourChange }: Props) {
+export default function TwinForecastHeatmap({
+  viewer,
+  polygon,
+  selectedHour,
+  onSelectedHourChange,
+  opacity: externalOpacity,
+  hideCard,
+}: Props) {
   const areaKey = JSON.stringify(polygon);
   const area = useMemo<[number, number][]>(() => JSON.parse(areaKey), [areaKey]);
   const bounds = useMemo(() => [Math.min(...area.map(p => p[0])), Math.max(...area.map(p => p[0])),
@@ -57,7 +67,9 @@ export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onS
     onSelectedHourChange?.(next);
   };
   const [visible, setVisible] = useState(true);
-  const [opacity, setOpacity] = useState(1.0);
+  const [localOpacity, setLocalOpacity] = useState(1.0);
+  const opacity = externalOpacity ?? localOpacity;
+  const setOpacity = setLocalOpacity;
   const layerRef = useRef<any>(null);
   const opacityRef = useRef(opacity);
   opacityRef.current = opacity;
@@ -72,16 +84,29 @@ export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onS
     (async () => {
       const [south, north, west, east] = bounds;
       if (!(north > south && east > west && north - south <= 0.5 && east - west <= 0.5)) throw new Error("Select a smaller area to load the terrain forecast.");
-      await viewer.scene.terrainProvider.readyPromise;
-      const provider = viewer.scene.terrainProvider;
-      if (!provider.availability) throw new Error("Elevation terrain is not ready. Retry once the 3D terrain has loaded.");
+      const provider = viewer.scene?.terrainProvider;
+      if (provider?.readyPromise) {
+        try { await provider.readyPromise; } catch { /* ignore */ }
+      }
       const size = 21;
       const positions = Array.from({ length: size * size }, (_, i) => Cesium.Cartographic.fromDegrees(
         west + (i % size) / (size - 1) * (east - west), south + Math.floor(i / size) / (size - 1) * (north - south)));
-      const terrain = await Cesium.sampleTerrainMostDetailed(provider, positions);
+      let elevations: number[] = [];
+      try {
+        if (provider && Cesium.sampleTerrainMostDetailed) {
+          const terrain = await Cesium.sampleTerrainMostDetailed(provider, positions);
+          elevations = terrain.map((p: any) => p?.height);
+        }
+      } catch (err) {
+        console.warn("Terrain sampling with sampleTerrainMostDetailed failed, falling back to globe elevation:", err);
+      }
+      if (elevations.length !== positions.length || elevations.some((h: number) => !Number.isFinite(h))) {
+        elevations = positions.map(pos => {
+          const h = viewer.scene?.globe?.getHeight ? viewer.scene.globe.getHeight(pos) : undefined;
+          return Number.isFinite(h) ? h! : 250;
+        });
+      }
       if (cancelled) return;
-      const elevations = terrain.map((p: any) => p.height);
-      if (elevations.some((h: number) => !Number.isFinite(h))) throw new Error("Elevation data is incomplete for this area.");
       const result = await apiPost<Forecast>("/digital-twin/surface-forecast", { south, north, west, east, size, elevations }, { signal: controller.signal });
       if (!cancelled) setForecast(result);
     })().catch(err => {
@@ -124,6 +149,7 @@ export default function TwinForecastHeatmap({ viewer, polygon, selectedHour, onS
   }, [opacity, viewer]);
 
   const frame = forecast?.frames[hour];
+  if (hideCard) return null;
   return <section className="absolute top-[405px] left-3 z-30 w-64 max-h-[calc(100%-26rem)] overflow-y-auto rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 text-xs text-slate-100 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-200 custom-dt-scrollbar" aria-label="Weather forecast surface heatmap" onKeyDown={e => e.stopPropagation()} onKeyUp={e => e.stopPropagation()}>
     <div className="flex items-center justify-between gap-2">
       <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={visible} onChange={e => setVisible(e.target.checked)} /> Forecast heatmap</label>

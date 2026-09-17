@@ -1,7 +1,7 @@
 """Pydantic v2 models. Each has a hand-written TS mirror in frontend/src/lib/types.ts."""
 import uuid
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -268,6 +268,24 @@ class Notification(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class SimulationReportPayload(BaseModel):
+    runId: uuid.UUID
+    startedAt: datetime
+    endedAt: datetime
+    scenario: dict[str, Any]
+    settingsHistory: list[dict[str, Any]] = Field(max_length=10000)
+    buildings: list[dict[str, Any]] = Field(max_length=100000)
+    summary: dict[str, int]
+    method: str = Field(max_length=4000)
+
+
+class SimulationReportCreate(BaseModel):
+    title: str = Field(min_length=3, max_length=300)
+    period: str = Field(max_length=200)
+    zone_name: str = Field(default="", max_length=300)
+    simulation_report: SimulationReportPayload
+
+
 class Report(BaseModel):
     id: str = Field(default_factory=_uid)
     title: str
@@ -276,6 +294,7 @@ class Report(BaseModel):
     zone_name: str = ""
     status: str = "ready"
     size_kb: int = 0
+    simulation_report: Optional[dict[str, Any]] = None
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -307,6 +326,10 @@ class MobUserAlertRequest(BaseModel):
     risk_level: str = "critical"
     title: str = Field(min_length=1)
     detail: str = Field(min_length=1)
+    channels: Optional[List[str]] = ["call", "message", "in_app"]
+    dispatch_mode: Optional[str] = "manual"  # manual | automatic
+    monitored_area: Optional[str] = "Pollachi Catchment Basin"
+    evacuation_point: Optional["MobUserEvacuationRequest"] = None
 
 
 class MobUserEvacuationRequest(BaseModel):
@@ -315,4 +338,17 @@ class MobUserEvacuationRequest(BaseModel):
     longitude: float
     elevation_m: Optional[float] = None
     instructions: Optional[str] = "Proceed immediately to the designated safe elevation zone."
+
+
+class MobUserBroadcastAlertRequest(BaseModel):
+    target: str = "monitored_zone"  # monitored_zone | all | selected
+    user_ids: Optional[List[str]] = None
+    hazard_type: str = "Flash Flood"  # Flash Flood | Landslide
+    risk_level: str = "critical"
+    title: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+    channels: List[str] = ["call", "message", "in_app"]
+    dispatch_mode: str = "manual"  # manual | automatic
+    monitored_area: Optional[str] = "Pollachi Catchment Basin"
+    evacuation_point: Optional[MobUserEvacuationRequest] = None
 

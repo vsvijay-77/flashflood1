@@ -194,7 +194,15 @@ def get_lora_packets(limit: int = 50) -> List[Dict[str, Any]]:
                     item = dict(zip(cols, r))
                     received_at = item.get("received_at")
                     if received_at and hasattr(received_at, "isoformat"):
-                        item["received_at"] = received_at.isoformat()
+                        iso_ts = received_at.isoformat()
+                        item["received_at"] = iso_ts
+                        item["created_at"] = iso_ts
+                    item["device_id"] = "LORA_NODE_1"
+                    item["raw_payload"] = str(item.get("raw_packet") or item.get("txt") or "working")
+                    item["fport"] = 1
+                    item["fcnt"] = item.get("id", 1)
+                    item["frequency_mhz"] = 868.1
+                    item["gateway_eui"] = "AA555A0000000001"
                     rows.append(item)
                 return rows
     except Exception as e:

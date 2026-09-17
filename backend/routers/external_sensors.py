@@ -27,7 +27,7 @@ async def get_summary(user: dict = Depends(current_user)):
 @router.get("/history")
 async def get_history(
     device_id: Optional[str] = Query(None, description="Filter by device ID (e.g. LORA_NODE_1)"),
-    limit: int = Query(150, ge=1, le=500, description="Max rows to return"),
+    limit: int = Query(1000, ge=1, le=2000, description="Max rows to return"),
     user: dict = Depends(current_user),
 ):
     """

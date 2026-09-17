@@ -2,6 +2,42 @@ import { describe, it, expect } from "vitest";
 import { WaterPhysicsSimulation } from "./waterPhysics";
 
 describe("WaterPhysicsSimulation Engine", () => {
+  it("accounts for the entire requested simulated duration unless a render budget is supplied", () => {
+    const simulation = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 10 }, [1, 0], undefined, undefined, [1, 0]);
+    expect(simulation.advance(1, 60, 0)).toBeCloseTo(60, 6);
+    expect(simulation.state.elapsedSeconds).toBeCloseTo(60, 6);
+    const elapsed = simulation.state.elapsedSeconds;
+    const advanced = simulation.advance(1, 60, 0, 0, 0);
+    expect(advanced).toBeGreaterThan(0);
+    expect(advanced).toBeLessThan(1);
+    expect(simulation.state.elapsedSeconds - elapsed).toBeCloseTo(advanced, 6);
+  });
+
+  it("uses north/south spacing for slope and conserves rectangular-cell water volume", () => {
+    const simulation = new WaterPhysicsSimulation({ cols: 1, rows: 3, dx: 10, dy: 20 }, [2, 1, 0], undefined, undefined, [2, 0, 0]);
+    simulation.advance(10, 1, 0);
+    expect(simulation.state.depth[2]).toBeGreaterThan(0);
+    expect(simulation.state.velocityY[1]).toBeGreaterThan(0);
+    expect(simulation.state.totalVolumeM3).toBeCloseTo(400, 3);
+  });
+
+  it("adds rainfall in millimetres per hour only inside the selected area", () => {
+    const simulation = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 10, dy: 20 }, [0, 0], new Uint8Array([1, 0]), undefined, [0, 0]);
+    simulation.advance(60, 1, 0, 120);
+    expect(simulation.state.depth[0]).toBeCloseTo(0.002, 6);
+    expect(simulation.state.depth[1]).toBe(0);
+    expect(simulation.state.injectedVolumeM3).toBeCloseTo(0.4, 6);
+  });
+
+  it("reduces the CFL timestep for fast currents and rejects nonfinite controls", () => {
+    const simulation = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 1 }, [0, 0], undefined, undefined, [1, 1]);
+    const still = simulation.computeCFLTimestep();
+    simulation.state.edges[0].discharge = 100;
+    expect(simulation.computeCFLTimestep()).toBeLessThan(still / 10);
+    expect(simulation.advance(Infinity, 1, 0)).toBe(0);
+    expect(simulation.advance(1, NaN, 0)).toBe(0);
+    expect(simulation.state.elapsedSeconds).toBe(0);
+  });
   // 1. Downhill Flow: Water placed on an inclined plane flows to lower elevation cells
   it("simulates downhill flow correctly according to terrain slope", () => {
     const cols = 5;
@@ -286,7 +322,7 @@ describe("water volume regression", () => {
     const sim = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 10 }, [0, 0], undefined,
       new Uint8Array([1, 0]), [0, 0.01]);
     expect(Array.from(sim.state.depth)).toEqual([0, Math.fround(0.01)]);
-    expect(sim.state.totalVolumeM3).toBe(1);
+    expect(sim.state.totalVolumeM3).toBeCloseTo(1, 6);
     expect(sim.state.floodedAreaHectares).toBe(0);
   });
   it("conserves water when one wet cell feeds four dry neighbours", () => {

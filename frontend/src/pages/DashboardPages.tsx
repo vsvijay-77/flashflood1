@@ -1,3 +1,4 @@
+import { deleteArea } from "@/services/deleteArea";
 import { supabase } from "@/lib/supabase";
 import { useMemo, useState, useEffect, useRef } from "react";
 import L from "leaflet";
@@ -26,6 +27,7 @@ import { AccelerometerGraph } from "@/components/dashboard/AccelerometerGraph";
 
 
 import { BatteryAndAlerts } from "@/components/dashboard/BatteryAndAlerts";
+import { SensorManagementSection } from "@/components/dashboard/SensorManagementSection";
 
 const AXIS = { stroke: "#94A3B8", fontSize: 11 };
 
@@ -129,7 +131,7 @@ export function DashboardPage() {
         <BatteryAndAlerts />
 
         <hr className="border-slate-200" />
-        <EnvironmentalMonitoringSection />
+        <SensorManagementSection />
       </div>
     </div>
   );
@@ -588,9 +590,19 @@ export function GISMonitoringPage() {
 
           setCustomAreas(loaded);
           try {
-            localStorage.setItem("cached_custom_areas", JSON.stringify(loaded.map(({ bounds, ...rest }) => rest)));
-          } catch (e) {
-            console.warn("Failed to persist custom areas to localStorage", e);
+            const lightweight = loaded.map(({ id, name, priority, lat, lng, shape, polygon }) => ({
+              id, name, priority, lat, lng, shape, polygon,
+            }));
+            localStorage.setItem("cached_custom_areas", JSON.stringify(lightweight));
+          } catch {
+            try {
+              for (let i = localStorage.length - 1; i >= 0; i--) {
+                const k = localStorage.key(i);
+                if (k && (k.startsWith("dt_") || k.startsWith("EIN_") || k.startsWith("cached_"))) {
+                  localStorage.removeItem(k);
+                }
+              }
+            } catch {}
           }
         }
       },
@@ -770,11 +782,13 @@ export function GISMonitoringPage() {
                 onClick={async () => {
                   if (!deleteTarget) return;
                   setDeleteLoading(true);
-                  await supabase.from("custom_areas").delete().eq("id", deleteTarget.id);
-                  const safeName = deleteTarget.name.replace(/\s+/g, "_");
-                  localStorage.removeItem(`dt_mesh_nodes_${safeName}`);
-                  localStorage.removeItem(`dt_user_activity_${safeName}`);
-                  localStorage.removeItem(`dt_networks_${safeName}`);
+                  try {
+                    await deleteArea(deleteTarget.id, deleteTarget.name);
+                  } catch {
+                    toast.error("Failed to delete area and its saved layers. Please retry.");
+                    setDeleteLoading(false);
+                    return;
+                  }
                   const filtered = customAreas.filter((a) => a.id !== deleteTarget.id);
                   setCustomAreas(filtered);
                   if (selectedArea?.id === deleteTarget.id) {

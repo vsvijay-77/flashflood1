@@ -112,6 +112,8 @@ export const WaterFragmentShader = /* glsl */ `
   #include <logdepthbuf_pars_fragment>
 
   uniform float uTime;
+  uniform float uFlowTime;
+  uniform float uRainIntensity;
   uniform vec2 uResolution;
   uniform sampler2D uSceneColor; // Live Cesium canvas texture for screen-space refraction
   uniform sampler2D uTerrainHeight; // Terrain heightfield texture for bank ray marching
@@ -156,6 +158,16 @@ export const WaterFragmentShader = /* glsl */ `
     return smoothstep(0.35, 0.7, pattern) * 0.16 * filtered * exp(-depth);
   }
 
+  vec2 surfaceSlope(vec2 point) {
+    vec2 result = ripple(point, vec2(0.8, 0.6), 80.0, 0.04);
+    result += ripple(point, vec2(-0.4, 0.9), 24.0, 0.035);
+    result += ripple(point, vec2(0.9, 0.3), 8.0, 0.07);
+    result += ripple(point, vec2(0.6, -0.8), 2.0, 0.03);
+    result += ripple(point, vec2(-0.7, 0.4), 0.8, 0.022);
+    result += ripple(point, vec2(0.2, 0.9), 0.3, 0.012);
+    return result * max(0.0, uWaveHeight);
+  }
+
   void main() {
     #include <logdepthbuf_fragment>
 
@@ -163,20 +175,26 @@ export const WaterFragmentShader = /* glsl */ `
     if (vInside < 0.99) discard;
 
     // Discard completely dry cells where water has not reached yet
-    if (vDepth < 0.02) discard;
+    if (vDepth < 0.0005) discard;
 
     // Current-advected surface coordinates: ripples travel along simulated hydrodynamic velocity
-    vec2 flowOffset = vVelocity * uTime * 0.35;
-    vec2 p = vWorldPosition.xz - flowOffset;
-    p += vec2(noise(p * 0.045), noise(p * 0.039 + 17.0)) * 5.0;
+    float phase = fract(uFlowTime / 20.0);
+    float secondPhase = fract(phase + 0.5);
+    float blend = abs(phase * 2.0 - 1.0);
+    vec2 p = vWorldPosition.xz - vVelocity * phase * 20.0;
+    vec2 secondPoint = vWorldPosition.xz - vVelocity * secondPhase * 20.0;
 
     // Multi-frequency ripple slope with fwidth derivative anti-shimmering
-    vec2 slope = vec2(0.0);
-    float scale = max(0.2, uWaveHeight);
-    slope += ripple(p, vec2(0.8, 0.6), 80.0, 0.04 * scale);
-    slope += ripple(p, vec2(-0.4, 0.9), 24.0, 0.035 * scale);
-    slope += ripple(p, vec2(0.9, 0.3), 8.0, 0.07 * scale);
-    slope += ripple(p, vec2(0.6, -0.8), 2.0, 0.03 * scale);
+    vec2 slope = mix(surfaceSlope(p), surfaceSlope(secondPoint), blend);
+    vec2 rainPoint = vWorldPosition.xz * 0.7;
+    vec2 rainCell = floor(rainPoint);
+    float rainSeed = fract(sin(dot(rainCell, vec2(127.1, 311.7))) * 43758.5453);
+    float rainAge = fract(uTime * 1.4 + rainSeed);
+    vec2 rainOffset = fract(rainPoint) - vec2(0.5);
+    float rainRadius = length(rainOffset);
+    float rainRing = exp(-pow((rainRadius - rainAge * 0.45) * 28.0, 2.0));
+    float rainDetail = 1.0 - smoothstep(0.15, 0.6, length(fwidth(rainPoint)));
+    slope += rainOffset / max(rainRadius, 0.01) * rainRing * (1.0 - rainAge) * uRainIntensity * 0.16 * rainDetail;
 
     // Dynamic perturbed surface normal
     vec3 geometric = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
@@ -192,7 +210,10 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 sunDir = normalize(uSunDirection);
     vec3 halfVec = normalize(sunDir + viewDir);
     float specAngle = max(0.0, dot(normal, halfVec));
-    float specular = pow(specAngle, 512.0) * 0.18;
+    float roughness = 0.12 + min(uWaveHeight, 2.0) * 0.045;
+    float roughnessSquared = roughness * roughness;
+    float denominator = specAngle * specAngle * (roughnessSquared - 1.0) + 1.0;
+    float specular = min(0.5, roughnessSquared / (3.141593 * denominator * denominator) * 0.008);
     vec3 specHighlight = uSunColor * specular;
 
     // Screen-space refraction: samples live Cesium canvas with normal distortion
@@ -205,7 +226,7 @@ export const WaterFragmentShader = /* glsl */ `
       refractedGround = texture2D(uSceneColor, refractUv).rgb;
     } else {
       // Fallback procedural wet ground bed
-      refractedGround = mix(vec3(0.25, 0.22, 0.17), vec3(0.12, 0.16, 0.14), vBedElevation * 0.01);
+      refractedGround = uWaterColorShallow;
     }
 
     // Depth-based Beer-Lambert absorption (red absorbs fastest -> deep azure)
@@ -231,7 +252,7 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 whiteWater = mix(blueWater, vec3(0.92, 0.95, 0.98), 0.45);
 
     // Shoreline foam: very narrow immediate water margin
-    float shoreFoam = (1.0 - smoothstep(0.006, 0.04, vDepth)) * 0.20;
+    float shoreFoam = (1.0 - smoothstep(0.03, 0.16, vDepth)) * 0.18;
 
     // Froude-number-based whitewater rapids
     float speed = length(vVelocity);
@@ -257,7 +278,7 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 finalColor = blendedWater;
 
     // Opacity: high clarity with deep presence
-    float alpha = smoothstep(0.02, 0.12, vDepth);
+    float alpha = smoothstep(0.0005, 0.025, vDepth) * clamp(0.22 + 0.7 * (1.0 - exp(-vDepth * 2.0)) + fresnel * 0.15, 0.0, 0.98);
 
     gl_FragColor = vec4(finalColor, alpha);
     #include <tonemapping_fragment>
@@ -275,6 +296,8 @@ export function createWaterShaderMaterial(
     fragmentShader: WaterFragmentShader,
     uniforms: {
       uTime: { value: 0 },
+      uFlowTime: { value: 0 },
+      uRainIntensity: { value: 0 },
       uWaveHeight: { value: 0.8 },
       uWindSpeed: { value: 15.0 },
       uResolution: { value: resolution },

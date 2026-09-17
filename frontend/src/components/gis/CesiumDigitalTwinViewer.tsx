@@ -1,3 +1,4 @@
+import { loadSelectedAreaNetworks } from "@/services/selectedAreaNetworks";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -19,6 +20,9 @@ import {
   ArrowRight,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  BarChart2,
   Plus,
   Minus,
   X,
@@ -31,6 +35,7 @@ import {
   Activity,
   Signal,
   Check,
+  CheckCircle2,
   Share2,
   Clock,
   History,
@@ -51,11 +56,13 @@ import {
 } from "lucide-react";
 import CesiumSelectedAreaRainOverlay from "../simulation/CesiumSelectedAreaRainOverlay";
 import TwinForecastHeatmap from "./TwinForecastHeatmap";
-import ThreeWaterSimulation from "../simulation/ThreeWaterSimulation";
+import TwinLandslideHeatmap from "./TwinLandslideHeatmap";
+import ThreeWaterSimulation, { type ThreeWaterSimulationHandle } from "../simulation/ThreeWaterSimulation";
 import DisasterIntelligenceChat from "./DisasterIntelligenceChat";
 import { toast } from "sonner";
 import { generateCirclePolygon } from "@/lib/gisUtils";
-import { filterBuildingsClearOfPaths } from "./buildingGeometry";
+import { buildingTouchesArea, buildingCenter } from "./buildingGeometry";
+import { loadSelectedAreaBuildings } from "@/services/selectedAreaBuildings";
 import {
   extractNetworks,
   extractBuildings,
@@ -86,6 +93,8 @@ export interface DigitalTwinMeshNode {
   battery: number;
   signalDbm: number;
   status: "online" | "warning" | "offline";
+  sensorId?: string;
+  connectedStatus?: string;
 }
 
 export type SensorType = "water_level" | "soil_moisture" | "imu" | "tilt" | "raindrop";
@@ -113,6 +122,7 @@ export interface CesiumDigitalTwinViewerProps {
   latitude: number;
   longitude: number;
   areaName?: string;
+  areaId?: string;
   polygon?: [number, number][];
   height?: string;
   className?: string;
@@ -166,16 +176,42 @@ const networkAreaCache: Record<string, {
   roads: RoadFeature[];
   rivers: RiverFeature[];
   buildings?: any[];
+  buildingsLoadedAt?: number;
   bbox: BoundingBox;
   osmTileStatus?: any;
   timestamp: number;
+  complete?: boolean;
 }> = {};
+
+window.addEventListener("area-deleted", event => {
+  const id = (event as CustomEvent<string>).detail;
+  for (const key of Object.keys(networkAreaCache)) if (key.startsWith(`${id}|`)) delete networkAreaCache[key];
+});
+
+const selectedAreaKey = (boundary: [number, number][]) => `poly_${JSON.stringify(boundary)}`;
+
+const areaNetworkKey = (id: string | undefined, poly: [number, number][] | undefined, lat = 0, lng = 0) => `${id || "unsaved"}|${poly?.length ? selectedAreaKey(poly) : `${lat},${lng}`}`;
+
+const getCachedNetworkEntry = (areaId?: string, poly?: [number, number][], lat?: number, lng?: number) => {
+  return networkAreaCache[areaNetworkKey(areaId, poly, lat, lng)];
+};
+
+const setCachedNetworkEntry = (
+  entry: (typeof networkAreaCache)[string],
+  areaId?: string,
+  poly?: [number, number][],
+  lat?: number,
+  lng?: number,
+) => {
+  networkAreaCache[areaNetworkKey(areaId, poly, lat, lng)] = entry;
+};
 
 export function CesiumDigitalTwinViewer({
   latitude,
   longitude,
   areaName = "Pollachi Basin",
   polygon,
+  areaId,
   height = "600px",
   className = "",
   onViewInGIS,
@@ -198,7 +234,15 @@ export function CesiumDigitalTwinViewer({
   const [cesiumViewer, setCesiumViewer] = useState<any>(null);
   const [forecastActive, setForecastActive] = useState(false);
   const [forecastHour, setForecastHour] = useState(0);
+  const [forecastOpacity, setForecastOpacity] = useState(0.85);
+  const [forecastRailHidden, setForecastRailHidden] = useState(true);
+  const [landslideActive, setLandslideActive] = useState(false);
+  const [landslideHour, setLandslideHour] = useState(0);
+  const [landslideOpacity, setLandslideOpacity] = useState(0.85);
+  const [landslideDayTab, setLandslideDayTab] = useState<"1d" | "2d" | "3d" | "4d" | "5d" | "6d" | "7d">("1d");
   const [waterSimActive, setWaterSimActive] = useState<boolean>(false);
+  const [isFloodPaused, setIsFloodPaused] = useState<boolean>(false);
+  const flashFloodRef = useRef<ThreeWaterSimulationHandle | null>(null);
 
   // Movement flags for WASD and free-style navigation
   const movementFlagsRef = useRef({
@@ -230,6 +274,7 @@ export function CesiumDigitalTwinViewer({
   const [showSrtm30, setShowSrtm30] = useState<boolean>(false);
   const [srtmOpacity, setSrtmOpacity] = useState<number>(0.65);
   const [showSrtmLegend, setShowSrtmLegend] = useState<boolean>(false);
+  const [showLayersStatusBox, setShowLayersStatusBox] = useState<boolean>(true);
  
   // ─── 🛣️ REAL ROAD NETWORK, 🌊 RIVERS & 🚨 EVACUATION ROUTING ───
   const roadEntitiesRef = useRef<any[]>([]);
@@ -241,16 +286,24 @@ export function CesiumDigitalTwinViewer({
   const viewportDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastViewportBboxRef = useRef<string>("");  // Last fetched bbox string for dedup
   const networkRequestRef = useRef(0);
+  const selectedAreaRef = useRef({ latitude, longitude, polygon });
+  selectedAreaRef.current = { latitude, longitude, polygon };
+  const scheduleAreaLoadRef = useRef<(boundary?: [number, number][], immediate?: boolean) => void>(() => {});
   const buildingRequestRef = useRef(0);
   const networkAbortRef = useRef<AbortController | null>(null);
   const buildingAbortRef = useRef<AbortController | null>(null);
+  const buildingAreaRef = useRef<string | null>(null);
+  const buildingRenderRef = useRef(0);
   const isInFlightRef = useRef<boolean>(false);
   const networksLoadedRef = useRef<boolean>(false);
   const isInitialAreaMountRef = useRef<boolean>(true);
+  const lastAreaSignatureRef = useRef<string>("");
 
   const [showRoads, setShowRoads] = useState<boolean>(true);
   const [showRivers, setShowRivers] = useState<boolean>(true);
   const [showBuildings, setShowBuildings] = useState<boolean>(true);
+  const layerVisibilityRef = useRef({ roads: true, rivers: true, buildings: true });
+  layerVisibilityRef.current = { roads: showRoads, rivers: showRivers, buildings: showBuildings };
   const [showBuildingStats, setShowBuildingStats] = useState<boolean>(true);
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingFeature["properties"] | null>(null);
   const [buildingRiskFilter, setBuildingRiskFilter] = useState<"ALL" | "SAFE" | "MODERATE" | "HIGH" | "CRITICAL">("ALL");
@@ -280,7 +333,10 @@ export function CesiumDigitalTwinViewer({
 
   const [searchRadiusKm, setSearchRadiusKm] = useState<number>(5.0);
   const [isExtractingNetworks, setIsExtractingNetworks] = useState<boolean>(false);
+  const [networkError, setNetworkError] = useState<string | null>(null);
   const [isLoadingBuildings, setIsLoadingBuildings] = useState<boolean>(false);
+  const [buildingLoadStatus, setBuildingLoadStatus] = useState("");
+  const [buildingLoadError, setBuildingLoadError] = useState<string | null>(null);
   const [osmTileStatus, setOsmTileStatus] = useState<{ loaded: number; total: number; roads: number; rivers: number; buildings: number }>({ loaded: 0, total: 0, roads: 0, rivers: 0, buildings: 0 });
   const [isCalculatingRoute, setIsCalculatingRoute] = useState<boolean>(false);
   const [isPredictingRisk, setIsPredictingRisk] = useState<boolean>(false);
@@ -304,12 +360,36 @@ export function CesiumDigitalTwinViewer({
   const [isDeleteMode, setIsDeleteMode] = useState<boolean>(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // Sensor ID prompt modal state for adding master and slave nodes
+  const [sensorPromptModal, setSensorPromptModal] = useState<{
+    open: boolean;
+    nodeType: "master" | "slave";
+    lat: number;
+    lng: number;
+    sensorId: string;
+  }>({
+    open: false,
+    nodeType: "master",
+    lat: 0,
+    lng: 0,
+    sensorId: "node1",
+  });
+  const [stagedSensorId, setStagedSensorId] = useState<string>("node1");
+  const [lastConnectedSensorMsg, setLastConnectedSensorMsg] = useState<string | null>(null);
+  const [sensorConnectedOnce, setSensorConnectedOnce] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(`dt_sensor_connected_${areaName || "default"}`) === "true";
+    } catch {
+      return false;
+    }
+  });
+
   const safeName = (areaName || "default").replace(/\s+/g, "_");
   const storageKey = `dt_mesh_nodes_${safeName}`;
   const activityStorageKey = `dt_user_activity_${safeName}`;
   // v6 invalidates center/viewport data saved by older viewers. Only complete
   // selected-polygon responses may be restored for an area.
-  const networksStorageKey = `dt_networks_v7_${safeName}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
+  const networksStorageKey = `dt_networks_v9_${safeName}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
 
   // Purge old v1/v2 cache entries for this area (stale data from old code)
   try {
@@ -389,14 +469,23 @@ export function CesiumDigitalTwinViewer({
   const handleToggleRain = () => {
     const next = !rainActive;
     setInternalRain(next);
-    if (onToggleRain) {
-      onToggleRain(next);
-    }
+    onToggleRain?.(next);
+    setWaterSimActive(next);
     if (next) {
-      setActivePanelTab("slave");
-      setShowMeshPanel(true);
+      flashFloodRef.current?.startSimulation();
+    } else {
+      flashFloodRef.current?.pauseSimulation();
     }
   };
+
+  useEffect(() => {
+    if (isRaining !== undefined) {
+      setWaterSimActive(isRaining);
+      if (isRaining) {
+        flashFloodRef.current?.startSimulation();
+      }
+    }
+  }, [isRaining]);
 
   const masterNode = meshNodes.find((n) => n.type === "master");
   const slaveNodes = meshNodes.filter((n) => n.type === "slave");
@@ -542,11 +631,13 @@ export function CesiumDigitalTwinViewer({
 
   // Compute active polygon coordinates [[lat, lng], ...]
   const getActivePolygon = (): [number, number][] => {
-    if (polygon && polygon.length >= 3) {
-      return polygon;
+    if (polygon && polygon.length >= 3) return polygon;
+    const selected = selectedAreaRef.current;
+    if (selected.polygon && selected.polygon.length >= 3) {
+      return selected.polygon;
     }
     // High-resolution 16-point natural basin perimeter around center coordinates (~1.2 km radius)
-    return generateCirclePolygon(latitude, longitude, 1200, 16);
+    return generateCirclePolygon(selected.latitude, selected.longitude, 1200, 16);
   };
 
   const isPointInPolygon = (lat: number, lng: number, poly: [number, number][]): boolean => {
@@ -960,6 +1051,7 @@ export function CesiumDigitalTwinViewer({
 
   // ─── 🛣️ 3D ROAD NETWORK RENDERING ───
   const render3DRoads = (roads: RoadFeature[], visible: boolean) => {
+    visible = layerVisibilityRef.current.roads;
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
 
@@ -971,7 +1063,6 @@ export function CesiumDigitalTwinViewer({
       roadEntitiesRef.current = [];
 
       if (!roads || roads.length === 0) {
-        console.log(`[DT] render3DRoads: skipped (count=${roads?.length || 0})`);
         return;
       }
 
@@ -993,17 +1084,7 @@ export function CesiumDigitalTwinViewer({
         const coords = road.geometry?.coordinates;
         if (!coords || coords.length < 2) return;
 
-        let clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
-        if (clippedSegments.length === 0) {
-          const anyInside = (coords as [number, number][]).some(
-            ([lng, lat]) =>
-              lat >= minPolyLat - padLat && lat <= maxPolyLat + padLat &&
-              lng >= minPolyLng - padLng && lng <= maxPolyLng + padLng
-          );
-          if (anyInside) {
-            clippedSegments = [coords as [number, number][]];
-          }
-        }
+        const clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
         if (clippedSegments.length === 0) return;
 
         const rType = road.properties?.road_type || "residential";
@@ -1067,7 +1148,6 @@ export function CesiumDigitalTwinViewer({
                 outlineWidth: outlineWidth,
               }),
               clampToGround: true,
-              zIndex: 30,
             },
           });
           roadEntitiesRef.current.push(ent);
@@ -1082,6 +1162,7 @@ export function CesiumDigitalTwinViewer({
 
   // ─── 🌊 3D RIVER & WATER BODY RENDERING ───
   const render3DRivers = (rivers: RiverFeature[], visible: boolean) => {
+    visible = layerVisibilityRef.current.rivers;
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
 
@@ -1093,7 +1174,6 @@ export function CesiumDigitalTwinViewer({
       riverEntitiesRef.current = [];
 
       if (!rivers || rivers.length === 0) {
-        console.log(`[DT] render3DRivers: skipped (count=${rivers?.length || 0})`);
         return;
       }
 
@@ -1124,6 +1204,26 @@ export function CesiumDigitalTwinViewer({
         const polygons = geom?.type === "Polygon" ? [geom.coordinates] : geom?.type === "MultiPolygon" ? geom.coordinates : [];
         for (const rings of polygons as number[][][][]) {
           if (!rings || !rings[0] || rings[0].length < 3) continue;
+
+          // STRICT BOUNDARY CHECK: Never render water bodies floating outside the selected area!
+          if (activePoly && activePoly.length >= 3) {
+            const hasPointInside = rings[0].some(([lng, lat]) => isPointInPolygon(lat, lng, activePoly));
+            const hasEdgeIntersect = rings[0].some((p1, idx) => {
+              const p2 = rings[0][(idx + 1) % rings[0].length];
+              for (let k = 0; k < activePoly.length; k++) {
+                const c1 = activePoly[k];
+                const c2 = activePoly[(k + 1) % activePoly.length];
+                if (lineSegmentIntersection(p1[0], p1[1], p2[0], p2[1], c1[1], c1[0], c2[1], c2[0])) {
+                  return true;
+                }
+              }
+              return false;
+            });
+            if (!hasPointInside && !hasEdgeIntersect) {
+              continue;
+            }
+          }
+
           const outerRing = rings[0].flat();
           if (outerRing.length < 6) continue;
           const holes = rings.slice(1).map((ring: number[][]) => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())));
@@ -1133,10 +1233,20 @@ export function CesiumDigitalTwinViewer({
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outerRing), holes),
               material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
+              height: 0,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               classificationType: Cesium.ClassificationType.TERRAIN,
-              zIndex: 10,
             },
+            label: props.name ? {
+              text: `💧 ${props.name}`,
+              font: "bold 12px sans-serif",
+              fillColor: Cesium.Color.fromCssColorString("#38bdf8"),
+              outlineColor: Cesium.Color.fromCssColorString("#082f49"),
+              outlineWidth: 3,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 60000),
+            } : undefined,
           });
           riverEntitiesRef.current.push(ent);
         }
@@ -1152,6 +1262,12 @@ export function CesiumDigitalTwinViewer({
             (Math.abs(line[0][0] - line[line.length - 1][0]) < 1e-4 && Math.abs(line[0][1] - line[line.length - 1][1]) < 1e-4)
           );
           if (isWaterBody && isClosed) {
+            if (activePoly && activePoly.length >= 3) {
+              const hasPointInside = line.some(([lng, lat]) => isPointInPolygon(lat, lng, activePoly));
+              if (!hasPointInside) {
+                continue;
+              }
+            }
             const flatRing = line.flat();
             if (flatRing.length >= 6) {
               const ent = viewer.entities.add({
@@ -1160,9 +1276,9 @@ export function CesiumDigitalTwinViewer({
                 polygon: {
                   hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(flatRing)),
                   material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
+                  height: 0,
                   heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                   classificationType: Cesium.ClassificationType.TERRAIN,
-                  zIndex: 10,
                 },
               });
               riverEntitiesRef.current.push(ent);
@@ -1170,17 +1286,7 @@ export function CesiumDigitalTwinViewer({
             }
           }
 
-          let clippedSegments = clipPolylineToPolygon(line, activePoly);
-          if (clippedSegments.length === 0) {
-            const anyInside = line.some(
-              ([lng, lat]) =>
-                lat >= minPolyLat - padLat && lat <= maxPolyLat + padLat &&
-                lng >= minPolyLng - padLng && lng <= maxPolyLng + padLng
-            );
-            if (anyInside) {
-              clippedSegments = [line];
-            }
-          }
+          const clippedSegments = clipPolylineToPolygon(line, activePoly);
           if (clippedSegments.length === 0) continue;
 
           const isMain = wType === "river" || wType === "canal" || Boolean(props.is_main_river);
@@ -1202,7 +1308,6 @@ export function CesiumDigitalTwinViewer({
                   outlineWidth: 1.5,
                 }),
                 clampToGround: true,
-                zIndex: 15,
               },
             });
             riverEntitiesRef.current.push(ent);
@@ -1217,21 +1322,24 @@ export function CesiumDigitalTwinViewer({
   };
 
   // ─── 🏢 MICROSOFT GLOBAL ML BUILDING FOOTPRINTS (3D EXTRUDED & RISK-COLORED) ───
-  const render3DBuildings = (buildings: BuildingFeature[]) => {
+  const render3DBuildings = async (buildings: BuildingFeature[]) => {
+    const generation = ++buildingRenderRef.current;
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
-
-    viewer.entities.suspendEvents();
-    try {
       buildingEntitiesRef.current.forEach((entity) => {
         try { viewer.entities.remove(entity); } catch (e) {}
       });
       buildingEntitiesRef.current = [];
 
       const activePoly = getActivePolygon();
-      const isSimFlooding = Boolean(waterSimActive || (rainActive && simRainIntensity && simRainIntensity > 35));
-
-      buildings.forEach((building, idx) => {
+      let failed = 0;
+      for (let offset = 0; offset < buildings.length; offset += 40) {
+        if (generation !== buildingRenderRef.current || viewer.isDestroyed()) return;
+        viewer.entities.suspendEvents();
+        try {
+      buildings.slice(offset, offset + 40).forEach((building, batchIndex) => {
+        const idx = offset + batchIndex;
+        try {
         const source = building.geometry?.coordinates;
         if (!source) return;
         const polygons = building.geometry.type === "Polygon"
@@ -1243,17 +1351,14 @@ export function CesiumDigitalTwinViewer({
           if (!outer || outer.length < 4) return;
 
           // Compute exact centroid [lat, lon]
-          const cLat = typeof building.properties?.lat === "number" && !isNaN(building.properties.lat)
-            ? building.properties.lat
-            : outer.reduce((sum, p) => sum + p[1], 0) / outer.length;
-          const cLon = typeof building.properties?.lon === "number" && !isNaN(building.properties.lon)
-            ? building.properties.lon
-            : outer.reduce((sum, p) => sum + p[0], 0) / outer.length;
+          const center = buildingCenter(outer);
+          const cLat = center.lat;
+          const cLon = center.lon;
 
           // STRICT FILTER: Only render houses strictly inside the marked area
-          if (activePoly && !isPointInPolygon(cLat, cLon, activePoly)) return;
+          if (activePoly && !buildingTouchesArea(rings, activePoly)) return;
 
-          const holes = rings.slice(1).map((ring) => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())));
+          const holes = rings.slice(1).map((ring) => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flatMap(point => point.slice(0, 2)))));
 
 
           // User Requirement: Extrusion height logic
@@ -1287,33 +1392,82 @@ export function CesiumDigitalTwinViewer({
             evacuation_zone: building.properties?.evacuation_zone || "Zone B (Monitored Area)",
           };
 
+          // CORRECT Cesium extrusion pattern for terrain-following 3D buildings:
+          // - height: 0 + RELATIVE_TO_GROUND → base sits AT terrain surface (works at any elevation)
+          // - extrudedHeight: X + RELATIVE_TO_GROUND → top is X metres ABOVE terrain surface
+          // WRONG pattern (causes spikes): CLAMP_TO_GROUND base + absolute extrudedHeight
+          // because extrudedHeight=6 at terrain=1500m → top is at 6m ASL → underground → spike artifacts
           const entity = viewer.entities.add({
             name: `🏢 ${enrichedProps.name}`,
-            show: showBuildings,
+            show: layerVisibilityRef.current.buildings,
             polygon: {
-              hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flat()), holes),
-              material: Cesium.Color.fromCssColorString("#f97316").withAlpha(0.92),
-              outline: true,
-              outlineColor: Cesium.Color.fromCssColorString("#c2410c"),
-              outlineWidth: 2.0,
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flatMap(point => point.slice(0, 2))), holes),
+              material: Cesium.Color.fromCssColorString("#f97316").withAlpha(0.88),
+              // Base: 0 metres above terrain (AT ground level) — works at any MSL elevation
+              height: 0,
+              heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+              // Top: building height metres ABOVE terrain surface
               extrudedHeight: height,
               extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 80000),
+              perPositionHeight: false,
+              outline: false,
+              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 60000),
+            },
+            // Rooftop label & building marker — visible from overhead surveillance distance
+            label: {
+              text: `🏠`,
+              font: "12px system-ui, sans-serif",
+              fillColor: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.fromCssColorString("#7c2d12"),
+              outlineWidth: 2,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+              pixelOffset: new Cesium.Cartesian2(0, -6),
+              heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+              show: layerVisibilityRef.current.buildings,
+              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 25000),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            position: Cesium.Cartesian3.fromDegrees(cLon, cLat, height),
+          });
+
+          // Separate outline polyline clamped to ground for clear boundary visibility
+          const outlineCoords = outer.flatMap(point => point.slice(0, 2));
+          const outlineEntity = viewer.entities.add({
+            show: layerVisibilityRef.current.buildings,
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray(outlineCoords),
+              width: 2.0,
+              material: Cesium.Color.fromCssColorString("#ea580c").withAlpha(0.95),
+              clampToGround: true,
+              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 45000),
             },
           });
+          (outlineEntity as any)._buildingOutline = true;
+          buildingEntitiesRef.current.push(outlineEntity);
 
           // Attach picking metadata for click popup
           (entity as any)._buildingData = enrichedProps;
           (entity as any)._buildingId = enrichedProps.id;
           buildingEntitiesRef.current.push(entity);
         });
+        } catch (error) {
+          failed++;
+          console.warn("Building footprint could not be rendered", building.properties?.id, error);
+        }
       });
-    } finally {
+        } finally {
       viewer.entities.resumeEvents();
       viewer.scene.requestRender();
-      console.log(`[DT] render3DBuildings: added ${buildingEntitiesRef.current.length} Microsoft 3D building entities`);
-    }
+        }
+        setBuildingLoadStatus(`Placing buildings on terrain · ${Math.min(offset + 40, buildings.length)} / ${buildings.length}`);
+        await new Promise(resolve => setTimeout(resolve, 16));
+      }
+      if (generation !== buildingRenderRef.current || viewer.isDestroyed()) return;
+      setBuildingLoadStatus(failed ? `${failed} building footprints could not be rendered.` : `${buildings.length} building footprints loaded`);
+      console.log(`[DT] render3DBuildings: added ${buildingEntitiesRef.current.length} entities to viewer`);
+      viewer.scene.requestRender();
   };
 
 
@@ -1506,20 +1660,18 @@ export function CesiumDigitalTwinViewer({
 
     const controller = new AbortController();
     networkAbortRef.current = controller;
-    const timeout = window.setTimeout(() => controller.abort(), 90_000);
+    const timeout = window.setTimeout(() => controller.abort(), 750_000);
 
     const viewportBbox = bboxOverride || getViewportBbox();
     const activePoly = polygonOverride || (polygon && polygon.length >= 3 ? polygon : getActivePolygon());
     const selectedPolygon = activePoly && activePoly.length >= 3 ? activePoly : undefined;
 
-    const areaCacheKey = selectedPolygon
-      ? `poly_${selectedPolygon.map(([pLat, pLng]) => `${pLat.toFixed(4)},${pLng.toFixed(4)}`).join(";")}`
-      : `coord_${latitude.toFixed(3)}_${longitude.toFixed(3)}`;
+    const areaCacheKey = areaNetworkKey(areaId, selectedPolygon, latitude, longitude);
 
     // STALE-WHILE-REVALIDATE: If cached, load and display INSTANTLY (0 ms)!
-    const cachedEntry = networkAreaCache[areaCacheKey];
+    const cachedEntry = getCachedNetworkEntry(areaId, selectedPolygon, latitude, longitude);
     if (cachedEntry && (cachedEntry.roads.length > 0 || cachedEntry.rivers.length > 0)) {
-      networksLoadedRef.current = true;
+      networksLoadedRef.current = cachedEntry.complete === true;
       setExtractedBbox(cachedEntry.bbox);
       setRoadFeatures(cachedEntry.roads);
       setRiverFeatures(cachedEntry.rivers);
@@ -1535,10 +1687,11 @@ export function CesiumDigitalTwinViewer({
       setIsExtractingNetworks(false);
 
       // If cache is fresh (< 30 minutes old), check if buildings need loading
-      if (Date.now() - cachedEntry.timestamp < 30 * 60 * 1000) {
+      if (cachedEntry.complete && Date.now() - cachedEntry.timestamp < 30 * 60 * 1000) {
         window.clearTimeout(timeout);
+        networkAbortRef.current = null;
         // If cached entry has roads/rivers but no buildings yet, trigger building loading now!
-        if (!cachedEntry.buildings || cachedEntry.buildings.length === 0) {
+        if (!cachedEntry.buildingsLoadedAt || Date.now() - cachedEntry.buildingsLoadedAt > 30 * 60 * 1000) {
           const params: Parameters<typeof extractNetworks>[0] = selectedPolygon
             ? {
                 polygon: selectedPolygon,
@@ -1546,6 +1699,8 @@ export function CesiumDigitalTwinViewer({
                 lng: longitude,
                 radius_km: searchRadiusKm,
                 place_name: searchOverride || areaName || undefined,
+                area_id: areaId,
+                area_key: areaId || areaCacheKey,
               }
             : viewportBbox
             ? {
@@ -1555,12 +1710,16 @@ export function CesiumDigitalTwinViewer({
                 west: viewportBbox.west,
                 lat: latitude,
                 lng: longitude,
+                area_id: areaId,
+                area_key: areaId || areaCacheKey,
               }
             : {
                 lat: latitude,
                 lng: longitude,
                 radius_km: searchRadiusKm,
                 place_name: searchOverride || areaName || undefined,
+                area_id: areaId,
+                area_key: areaId || areaCacheKey,
               };
           void loadBuildings(params, cachedEntry.roads, cachedEntry.rivers, cachedEntry.bbox, areaCacheKey);
         }
@@ -1571,6 +1730,7 @@ export function CesiumDigitalTwinViewer({
     }
 
     try {
+      setNetworkError(null);
       const params: Parameters<typeof extractNetworks>[0] = selectedPolygon
         ? {
             polygon: selectedPolygon,
@@ -1578,6 +1738,8 @@ export function CesiumDigitalTwinViewer({
             lng: longitude,
             radius_km: searchRadiusKm,
             place_name: searchOverride || areaName || undefined,
+            area_id: areaId,
+            area_key: areaId || areaCacheKey,
           }
         : viewportBbox
         ? {
@@ -1587,20 +1749,25 @@ export function CesiumDigitalTwinViewer({
             west: viewportBbox.west,
             lat: latitude,
             lng: longitude,
+            area_id: areaId,
+            area_key: areaId || areaCacheKey,
           }
         : {
             lat: latitude,
             lng: longitude,
             radius_km: searchRadiusKm,
             place_name: searchOverride || areaName || undefined,
+            area_id: areaId,
+            area_key: areaId || areaCacheKey,
           };
 
       console.log(`[DT] Fetching complete selected-area network: ${selectedPolygon ? `${selectedPolygon.length} boundary points` : viewportBbox ? `${viewportBbox.south.toFixed(3)},${viewportBbox.west.toFixed(3)} → ${viewportBbox.north.toFixed(3)},${viewportBbox.east.toFixed(3)}` : `center ${latitude},${longitude} r=${searchRadiusKm}km`}`);
 
-      const res = await extractNetworks(params, controller.signal);
+      const res = await loadSelectedAreaNetworks(params, controller.signal);
 
       // Never let a late response from an older request clear the completed selected-area scene.
       if (requestId !== networkRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) {
+        console.warn(`[DT] Discarded extract-networks response: requestId=${requestId}, current=${networkRequestRef.current}, viewerDestroyed=${!viewerRef.current || viewerRef.current.isDestroyed()}`);
         return;
       }
 
@@ -1608,28 +1775,33 @@ export function CesiumDigitalTwinViewer({
         const roads = res.roads.geojson?.features || [];
         const rivers = res.rivers.geojson?.features || [];
         const tileStatus = res.osm_loading;
+        const complete = tileStatus?.complete !== false;
+        setNetworkError(complete ? null : "Some map layers failed to load. Retry to finish this area.");
         const statusObj = {
           loaded: tileStatus?.loaded_tiles ?? 0,
           total: tileStatus?.total_tiles ?? 0,
           roads: roads.length,
           rivers: rivers.length,
-          buildings: networkAreaCache[areaCacheKey]?.buildings?.length || 0,
+          buildings: networkAreaCache[areaCacheKey]?.buildings?.length || cachedEntry?.buildings?.length || 0,
         };
         setOsmTileStatus(statusObj);
 
-        if (roads.length > 0 || rivers.length > 0) {
-          networksLoadedRef.current = true;
+        if (complete || roads.length > 0 || rivers.length > 0) {
+          networksLoadedRef.current = complete;
           setExtractedBbox(res.bbox);
 
           // Update in-memory cache, preserving existing buildings
-          networkAreaCache[areaCacheKey] = {
+          const entryToStore = {
             roads,
             rivers,
             bbox: res.bbox,
             osmTileStatus: statusObj,
             buildings: networkAreaCache[areaCacheKey]?.buildings || cachedEntry?.buildings,
+            buildingsLoadedAt: networkAreaCache[areaCacheKey]?.buildingsLoadedAt || cachedEntry?.buildingsLoadedAt,
             timestamp: Date.now(),
+            complete,
           };
+          setCachedNetworkEntry(entryToStore, areaId, selectedPolygon, latitude, longitude);
         }
 
         setRoadFeatures(roads);
@@ -1637,6 +1809,9 @@ export function CesiumDigitalTwinViewer({
 
         render3DRoads(roads, showRoads);
         render3DRivers(rivers, showRivers);
+
+        // Check if network response includes buildings from DB cache
+        const cachedDbBuildings: BuildingFeature[] = (res as any).buildings?.geojson?.features || [];
 
         // User feedback
         if (roads.length > 0 || rivers.length > 0) {
@@ -1648,13 +1823,33 @@ export function CesiumDigitalTwinViewer({
           let desc = `Loaded ${roads.length} paths`;
           if (riverCount > 0) desc += `, ${riverCount} rivers`;
           if (waterBodiesCount > 0) desc += `, ${waterBodiesCount} water bodies`;
+          if (cachedDbBuildings.length > 0) desc += `, ${cachedDbBuildings.length} buildings`;
           toast.success(desc);
         } else {
           toast.info("No roads, rivers, or water bodies found in this area from OpenStreetMap");
         }
 
         handlePredictRisk(res.bbox);
-        void loadBuildings(params, roads, rivers, res.bbox, areaCacheKey);
+
+
+        if (res.buildings) {
+          // Buildings already available from DB cache — render immediately, no separate fetch needed
+          setBuildingFeatures(cachedDbBuildings);
+          setOsmTileStatus(prev => ({ ...prev, buildings: cachedDbBuildings.length }));
+          void render3DBuildings(cachedDbBuildings);
+          const entry = networkAreaCache[areaCacheKey];
+          if (entry) {
+            entry.buildings = cachedDbBuildings;
+            entry.buildingsLoadedAt = Date.now();
+          }
+          // If the cached layer was empty, still try loading fresh buildings from OSM
+          if (cachedDbBuildings.length === 0) {
+            void loadBuildings(params, roads, rivers, res.bbox, areaCacheKey);
+          }
+        } else {
+          // Buildings not in Supabase yet — load from OSM and save
+          void loadBuildings(params, roads, rivers, res.bbox, areaCacheKey);
+        }
       } else {
         toast.error("Network extraction failed — check backend connection");
       }
@@ -1671,11 +1866,16 @@ export function CesiumDigitalTwinViewer({
         return;
       }
       console.error("Failed to extract road/river networks:", err);
+      setNetworkError("Paths or waterways could not be loaded. Retry this area.");
       toast.error("Could not load roads/rivers — check your internet connection or try a different area");
     } finally {
       window.clearTimeout(timeout);
       if (requestId === networkRequestRef.current) {
+        networkAbortRef.current = null;
         setIsExtractingNetworks(false);
+        if (controller.signal.aborted && !networksLoadedRef.current) {
+          setNetworkError("Map loading timed out. Retry this area.");
+        }
       }
     }
   };
@@ -1687,14 +1887,23 @@ export function CesiumDigitalTwinViewer({
     bbox: BoundingBox,
     areaCacheKey?: string,
   ) => {
+    if (buildingAreaRef.current === areaCacheKey && buildingAbortRef.current && !buildingAbortRef.current.signal.aborted) return;
+    // Only skip if buildings are already loaded in cache AND the cache is fresh (< 30 min)
+    // Don't skip just because a load is in-flight — abort the old one and start fresh
+    const cachedForArea = areaCacheKey ? networkAreaCache[areaCacheKey] : undefined;
+    if (areaCacheKey && cachedForArea?.buildingsLoadedAt && cachedForArea.buildings
+        && (Date.now() - cachedForArea.buildingsLoadedAt < 30 * 60 * 1000)) {
+      return;
+    }
     const buildingRequestId = ++buildingRequestRef.current;
     if (buildingAbortRef.current) {
       try { buildingAbortRef.current.abort(); } catch (e) {}
     }
     const controller = new AbortController();
     buildingAbortRef.current = controller;
-    const timeout = window.setTimeout(() => controller.abort(), 90_000);
+    buildingAreaRef.current = areaCacheKey ?? null;
     setIsLoadingBuildings(true);
+    setBuildingLoadError(null);
     try {
       // 🎯 STRICT MARKED AREA ONLY: Use the exact marked polygon
       const activePoly = (params as any)?.polygon && (params as any).polygon.length >= 3
@@ -1709,67 +1918,27 @@ export function CesiumDigitalTwinViewer({
       const minLon = Math.min(...polyLngs);
       const maxLon = Math.max(...polyLngs);
 
-      let rawCandidates: BuildingFeature[] = [];
+      const rawCandidates = await loadSelectedAreaBuildings(
+        activePoly,
+        controller.signal,
+        message => {
+          if (buildingRequestId === buildingRequestRef.current) setBuildingLoadStatus(message);
+        },
+        areaId,
+        areaCacheKey
+      );
 
-      // 1. Fetch real Microsoft Global ML Building Footprints for the marked area
-      try {
-        const msRes = await fetchMicrosoftBuildings(
-          {
-            minLat,
-            minLon,
-            maxLat,
-            maxLon,
-            polygon: activePoly,
-            water_level_m: waterSimActive ? 2.5 : 0.0,
-            max_buildings: 3500,
-          },
-          controller.signal
-        );
-
-        if (msRes && msRes.features && msRes.features.length > 0) {
-          rawCandidates = msRes.features;
-        }
-      } catch (msErr: any) {
-        console.warn("Microsoft building footprints fetch error, checking OSM fallback:", msErr);
-      }
-
-      // 2. Fallback to OSM extraction if Microsoft dataset query returned 0 features
-      if (rawCandidates.length === 0) {
-        const res = await extractBuildings(
-          {
-            ...params,
-            polygon: activePoly,
-            north: maxLat,
-            south: minLat,
-            east: maxLon,
-            west: minLon,
-          },
-          controller.signal
-        );
-        rawCandidates = res.buildings.geojson?.features || [];
-      }
-
-      // 3. 🎯 STRICT FILTER: Keep houses ONLY inside the marked area polygon
-      const markedAreaBuildings = rawCandidates.filter((b) => {
-        const coords = b.geometry?.coordinates;
-        if (!coords) return false;
-        const ring = b.geometry.type === "Polygon"
-          ? (coords as number[][][])[0]
-          : (coords as number[][][][])[0]?.[0];
-        if (!ring || ring.length < 3) return false;
-
-        const cLat = typeof b.properties?.lat === "number" && !isNaN(b.properties.lat)
-          ? b.properties.lat
-          : ring.reduce((sum, p) => sum + p[1], 0) / ring.length;
-        const cLon = typeof b.properties?.lon === "number" && !isNaN(b.properties.lon)
-          ? b.properties.lon
-          : ring.reduce((sum, p) => sum + p[0], 0) / ring.length;
-
-        return isPointInPolygon(cLat, cLon, activePoly);
+      // 3. 🎯 STRICT FILTER: Keep houses inside the marked area polygon
+      let markedAreaBuildings = rawCandidates.filter((b) => {
+        const coordinates = b.geometry?.coordinates;
+        if (!coordinates) return false;
+        const parts = b.geometry.type === "Polygon" ? [coordinates as number[][][]] : coordinates as number[][][][];
+        return parts.some(rings => rings[0]?.length >= 3 && buildingTouchesArea(rings, activePoly));
       });
 
+
       // 4. 🛣️ STRICT PATH & RIVER CLEARANCE: Remove any buildings touching or inside roads/waterways
-      const clearBuildings: BuildingFeature[] = filterBuildingsClearOfPaths(markedAreaBuildings, roads, rivers).map((b) => ({
+      const clearBuildings: BuildingFeature[] = markedAreaBuildings.map((b) => ({
         ...b,
         properties: {
           ...b.properties,
@@ -1791,29 +1960,26 @@ export function CesiumDigitalTwinViewer({
         return;
       }
 
+      setBuildingLoadStatus(`${clearBuildings.length} building footprints loaded`);
       setBuildingFeatures(clearBuildings);
       setBuildingStats(stats);
       setOsmTileStatus((prev) => ({
         ...prev,
         buildings: clearBuildings.length,
       }));
-      render3DBuildings(clearBuildings);
+      await render3DBuildings(clearBuildings);
+      if (buildingRequestId !== buildingRequestRef.current || controller.signal.aborted) return;
 
       if (areaCacheKey) {
-        const entry = networkAreaCache[areaCacheKey];
+        const entry = networkAreaCache[areaCacheKey] ??= { roads, rivers, bbox, timestamp: 0, complete: false };
         if (entry) {
           entry.buildings = clearBuildings;
+          entry.buildingsLoadedAt = Date.now();
         }
       }
-      try {
-        const cacheKey = `dt_networks_${areaName || `${latitude.toFixed(3)}_${longitude.toFixed(3)}`}`;
-        localStorage.setItem(cacheKey, JSON.stringify({
-          roads,
-          rivers,
-          buildings: clearBuildings,
-          bbox,
-          timestamp: Date.now(),
-        }));
+      const completedEntry = areaCacheKey ? networkAreaCache[areaCacheKey] : undefined;
+      if (completedEntry?.complete) try {
+        localStorage.setItem(networksStorageKey, JSON.stringify({ ...completedEntry, areaKey: areaCacheKey }));
       } catch (e) {}
 
     } catch (err: any) {
@@ -1829,10 +1995,17 @@ export function CesiumDigitalTwinViewer({
         return;
       }
       console.error("Failed to extract building footprints:", err);
+      if (buildingRequestId !== buildingRequestRef.current) return;
+      setBuildingLoadError("Building provider unavailable after retries. Existing footprints are preserved.");
       toast.warning("Paths and waterways are ready; building detail is still unavailable");
     } finally {
-      window.clearTimeout(timeout);
-      if (buildingRequestId === buildingRequestRef.current) setIsLoadingBuildings(false);
+      if (buildingRequestId === buildingRequestRef.current) {
+        buildingAbortRef.current = null;
+        setIsLoadingBuildings(false);
+        // Keep buildingAreaRef pointing to the last area so the guard at the top
+        // of loadBuildings can skip a duplicate call for the same completed area.
+        // It is reset to null only when switching areas (networkRequestRef bump).
+      }
     }
   };
 
@@ -1842,11 +2015,11 @@ export function CesiumDigitalTwinViewer({
   const scheduleSelectedAreaLoad = (polygonOverride?: [number, number][], forceImmediate = false) => {
     if (viewportDebounceRef.current) clearTimeout(viewportDebounceRef.current);
     const trigger = () => {
-      const selectedPolygon = polygonOverride || (polygon && polygon.length >= 3 ? polygon : getActivePolygon());
+      const selectedPolygon = polygonOverride || getActivePolygon();
       const areaKey = selectedPolygon && selectedPolygon.length >= 3
-        ? selectedPolygon.map(([pLat, pLng]) => `${pLat.toFixed(5)},${pLng.toFixed(5)}`).join(";")
+        ? selectedAreaKey(selectedPolygon)
         : `${latitude.toFixed(4)},${longitude.toFixed(4)}`;
-      if (areaKey === lastViewportBboxRef.current && networksLoadedRef.current && roadEntitiesRef.current.length > 0 && buildingEntitiesRef.current.length > 0) return;
+      if (areaKey === lastViewportBboxRef.current && (networkAbortRef.current && !networkAbortRef.current.signal.aborted || networksLoadedRef.current)) return;
       lastViewportBboxRef.current = areaKey;
       handleExtractNetworks(undefined, undefined, selectedPolygon);
     };
@@ -1857,6 +2030,8 @@ export function CesiumDigitalTwinViewer({
       viewportDebounceRef.current = setTimeout(trigger, 250);
     }
   };
+
+  scheduleAreaLoadRef.current = scheduleSelectedAreaLoad;
 
   const handlePredictRisk = async (bbox?: BoundingBox | null) => {
     setIsPredictingRisk(true);
@@ -1970,15 +2145,15 @@ export function CesiumDigitalTwinViewer({
           heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
         },
         label: {
-          text: "Master Node • Connected",
+          text: `${master.sensorId || "node1"} • Sensor connected successfully`,
           font: "bold 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
           scale: 0.5,
-          fillColor: Cesium.Color.fromCssColorString("#fef08a"),
+          fillColor: Cesium.Color.fromCssColorString("#34d399"),
           outlineColor: Cesium.Color.BLACK,
           outlineWidth: 4,
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           showBackground: true,
-          backgroundColor: Cesium.Color.fromCssColorString("#451a03").withAlpha(0.92),
+          backgroundColor: Cesium.Color.fromCssColorString("#064e3b").withAlpha(0.94),
           backgroundPadding: new Cesium.Cartesian2(8, 4),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
           pixelOffset: new Cesium.Cartesian2(0, -32),
@@ -2016,7 +2191,7 @@ export function CesiumDigitalTwinViewer({
           heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
         },
         label: {
-          text: `Slave Node #${idx + 1} • Connected`,
+          text: `${slave.sensorId || `node${idx + 2}`} • Sensor connected successfully`,
           font: "bold 24px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
           scale: 0.5,
           fillColor: Cesium.Color.fromCssColorString("#67e8f9"),
@@ -2024,7 +2199,7 @@ export function CesiumDigitalTwinViewer({
           outlineWidth: 4,
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           showBackground: true,
-          backgroundColor: Cesium.Color.fromCssColorString("#083344").withAlpha(0.92),
+          backgroundColor: Cesium.Color.fromCssColorString("#083344").withAlpha(0.94),
           backgroundPadding: new Cesium.Cartesian2(8, 4),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
           pixelOffset: new Cesium.Cartesian2(0, -26),
@@ -2179,10 +2354,107 @@ export function CesiumDigitalTwinViewer({
     });
   };
 
+  const confirmSensorPlacement = (
+    type: "master" | "slave",
+    lat: number,
+    lng: number,
+    sensorId: string = "node1"
+  ) => {
+    const finalSensorId = sensorId.trim() || "node1";
+    if (type === "master") {
+      const masterExists = meshNodes.some((n) => n.type === "master");
+      if (masterExists) {
+        setMeshNodes((prev) =>
+          prev.map((n) =>
+            n.type === "master"
+              ? { ...n, lat, lng, sensorId: finalSensorId, connectedStatus: "Sensor connected successfully" }
+              : n
+          )
+        );
+        logUserActivity(
+          "Relocated Master Gateway",
+          `Master node (${finalSensorId}) updated at (${lat.toFixed(5)}° N, ${lng.toFixed(5)}° E)`
+        );
+      } else {
+        const newMaster: DigitalTwinMeshNode = {
+          id: "node-master",
+          name: `Master Gateway (${finalSensorId})`,
+          type: "master",
+          lat,
+          lng,
+          role: "Central Gateway & Telemetry Master",
+          battery: 100,
+          signalDbm: -45,
+          status: "online",
+          sensorId: finalSensorId,
+          connectedStatus: "Sensor connected successfully",
+        };
+        setMeshNodes((prev) => [newMaster, ...prev]);
+        setSelectedNodeId(newMaster.id);
+        logUserActivity(
+          "Placed Master Gateway",
+          `Positioned Master (${finalSensorId}) at (${lat.toFixed(5)}° N, ${lng.toFixed(5)}° E)`,
+          newMaster
+        );
+      }
+    } else {
+      const newIdx = meshNodes.filter((n) => n.type === "slave").length + 1;
+      const newSlave: DigitalTwinMeshNode = {
+        id: `node-slave-${Date.now()}`,
+        name: `Slave Node ${newIdx} (${finalSensorId})`,
+        type: "slave",
+        lat,
+        lng,
+        role: "Slave Node",
+        battery: 98,
+        signalDbm: -66,
+        status: "online",
+        sensorId: finalSensorId,
+        connectedStatus: "Sensor connected successfully",
+      };
+      setMeshNodes((prev) => [...prev, newSlave]);
+      setSelectedNodeId(newSlave.id);
+      logUserActivity(
+        "Added Slave Node",
+        `Placed ${newSlave.name} (${finalSensorId}) at (${lat.toFixed(5)}° N, ${lng.toFixed(5)}° E)`,
+        newSlave
+      );
+    }
+    setStagedSensorId(finalSensorId);
+    setSensorConnectedOnce(true);
+    try {
+      localStorage.setItem(`dt_sensor_connected_${areaName || "default"}`, "true");
+    } catch {}
+    setLastConnectedSensorMsg(`Sensor connected successfully (ID: ${finalSensorId})`);
+    toast.success("Sensor connected successfully");
+    setSensorPromptModal((prev) => ({ ...prev, open: false }));
+    setIsPickingLocation(null);
+  };
+
+  const handleConnectSensorOneTime = (idToConnect?: string) => {
+    const finalId = (idToConnect || stagedSensorId || "node1").trim() || "node1";
+    setStagedSensorId(finalId);
+    setSensorConnectedOnce(true);
+    try {
+      localStorage.setItem(`dt_sensor_connected_${areaName || "default"}`, "true");
+    } catch {}
+    setLastConnectedSensorMsg(`Sensor connected successfully (ID: ${finalId})`);
+    toast.success("Sensor connected successfully");
+
+    // Update any existing master/slave nodes with this sensorId
+    setMeshNodes((prev) =>
+      prev.map((n) => ({
+        ...n,
+        sensorId: n.sensorId || finalId,
+        connectedStatus: "Sensor connected successfully",
+      }))
+    );
+  };
+
   const addMasterAtCenter = () => {
     const master: DigitalTwinMeshNode = {
       id: "node-master",
-      name: "Basin Central Gateway Alpha",
+      name: "Basin Central Gateway Alpha (node1)",
       type: "master",
       lat: Number(latitude.toFixed(6)),
       lng: Number(longitude.toFixed(6)),
@@ -2190,8 +2462,12 @@ export function CesiumDigitalTwinViewer({
       battery: 100,
       signalDbm: -45,
       status: "online",
+      sensorId: "node1",
+      connectedStatus: "Sensor connected successfully",
     };
     setMeshNodes((prev) => [master, ...prev.filter((n) => n.type !== "master")]);
+    setLastConnectedSensorMsg("Sensor connected successfully (ID: node1)");
+    toast.success("Sensor connected successfully");
     logUserActivity("Added Master Gateway", `Placed at center coords (${latitude.toFixed(5)}° N, ${longitude.toFixed(5)}° E)`, master);
   };
 
@@ -2450,12 +2726,80 @@ export function CesiumDigitalTwinViewer({
             outlineWidth: 2,
           }),
           clampToGround: true,
-          zIndex: 10000,
         },
       });
       maskEntitiesRef.current.push(borderEnt);
     } catch (e) {
       console.warn("[DT] Border entity error:", e);
+    }
+  };
+
+  // ─── 🎯 SMART CAMERA DESTINATION: Frames custom polygon or regional basin accurately ───
+  const getCameraDestinationForArea = (
+    mode: "3d" | "topdown" = "3d",
+    targetPoly?: [number, number][],
+    targetLat?: number,
+    targetLng?: number
+  ) => {
+    const lat = targetLat ?? latitude;
+    const lng = targetLng ?? longitude;
+    const poly = targetPoly ?? getActivePolygon();
+
+    if (poly && poly.length >= 3) {
+      const lats = poly.map(([la]) => la);
+      const lngs = poly.map(([, lo]) => lo);
+      const minLa = Math.min(...lats);
+      const maxLa = Math.max(...lats);
+      const minLo = Math.min(...lngs);
+      const maxLo = Math.max(...lngs);
+      const cLat = (minLa + maxLa) / 2;
+      const cLng = (minLo + maxLo) / 2;
+      const dLatM = (maxLa - minLa) * 111320;
+      const dLngM = (maxLo - minLo) * 111320 * Math.cos((cLat * Math.PI) / 180);
+      const diagM = Math.hypot(dLatM, dLngM);
+
+      if (mode === "topdown") {
+        const topHeight = Math.max(500, Math.min(8500, diagM * 2.0));
+        return {
+          destination: Cesium.Cartesian3.fromDegrees(cLng, cLat, topHeight),
+          orientation: {
+            heading: Cesium.Math.toRadians(0),
+            pitch: Cesium.Math.toRadians(-88),
+            roll: 0.0,
+          },
+        };
+      } else {
+        const targetAlt = Math.max(450, Math.min(6500, diagM * 1.5));
+        const latOffset = (targetAlt * 0.72) / 111320;
+        return {
+          destination: Cesium.Cartesian3.fromDegrees(cLng, cLat - latOffset, targetAlt),
+          orientation: {
+            heading: Cesium.Math.toRadians(0),
+            pitch: Cesium.Math.toRadians(-45),
+            roll: 0.0,
+          },
+        };
+      }
+    }
+
+    if (mode === "topdown") {
+      return {
+        destination: Cesium.Cartesian3.fromDegrees(lng, lat, 8000),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-88),
+          roll: 0.0,
+        },
+      };
+    } else {
+      return {
+        destination: Cesium.Cartesian3.fromDegrees(lng, lat - 0.045, 6500),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-45),
+          roll: 0.0,
+        },
+      };
     }
   };
 
@@ -2625,16 +2969,12 @@ export function CesiumDigitalTwinViewer({
         render3DMeshNodes(meshNodes);
 
 
-        // 🚀 Ultra-Smooth Cinematic Entry: From Orbital Horizon to 3D Oblique Basin View
+        // 🚀 Smooth Cinematic Entry: Direct Monitored Basin / Polygon 3D Oblique View
+        const initTarget = getCameraDestinationForArea("3d", getActivePolygon(), latitude, longitude);
         isInFlightRef.current = true;
-        // 1. Initial view: Clean regional orbital vista (~1,600 km) angled gently toward target topography
         viewer.camera.setView({
-          destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.22, 1600000),
-          orientation: {
-            heading: Cesium.Math.toRadians(0),
-            pitch: Cesium.Math.toRadians(-75),
-            roll: 0.0,
-          },
+          destination: initTarget.destination,
+          orientation: initTarget.orientation,
         });
 
         // 2. Allow the initial WebGL frame & terrain tiles to render before gently dissolving the loading veil
@@ -2644,23 +2984,19 @@ export function CesiumDigitalTwinViewer({
             // Smoothly dissolve the loading veil
             setLoading(false);
 
-            // 3. Single continuous, uninterrupted cinematic flight into high-resolution 3D oblique perspective (6,500m at -45° tilt)
+            // 3. Smooth cinematic flight into high-resolution 3D oblique perspective
             viewerRef.current.camera.flyTo({
-              destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.045, 6500),
-              orientation: {
-                heading: Cesium.Math.toRadians(0),
-                pitch: Cesium.Math.toRadians(-45),
-                roll: 0.0,
-              },
-              duration: 3.2,
+              destination: initTarget.destination,
+              orientation: initTarget.orientation,
+              duration: 1.2,
               easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
               complete: () => {
                 isInFlightRef.current = false;
-                scheduleSelectedAreaLoad();
+                scheduleAreaLoadRef.current();
               },
               cancel: () => {
                 isInFlightRef.current = false;
-                scheduleSelectedAreaLoad();
+                scheduleAreaLoadRef.current();
               },
             });
           }, 120);
@@ -2950,6 +3286,7 @@ export function CesiumDigitalTwinViewer({
         sampleGroundElevation(longitude, latitude);
 
         setLoading(false);
+        scheduleAreaLoadRef.current(undefined, true);
       } catch (err: any) {
         console.error("Initialization error:", err);
         if (!isDisposed) {
@@ -2966,6 +3303,7 @@ export function CesiumDigitalTwinViewer({
       removePointerListeners();
       networkAbortRef.current?.abort();
       buildingAbortRef.current?.abort();
+      buildingRenderRef.current++;
       if (orbitListenerRef.current) {
         orbitListenerRef.current();
         orbitListenerRef.current = null;
@@ -2998,8 +3336,11 @@ export function CesiumDigitalTwinViewer({
 
   // React to Latitude / Longitude / Polygon changes
   useEffect(() => {
+    const polyCoords = getActivePolygon();
+    const areaSig = `${areaId || ""}_${areaName || ""}_${latitude.toFixed(4)}_${longitude.toFixed(4)}_${JSON.stringify(polyCoords)}`;
     if (isInitialAreaMountRef.current) {
       isInitialAreaMountRef.current = false;
+      lastAreaSignatureRef.current = areaSig;
       return;
     }
 
@@ -3015,11 +3356,23 @@ export function CesiumDigitalTwinViewer({
 
     if (isOrbiting) stopOrbit();
 
-    const polyCoords = getActivePolygon();
+    if (lastAreaSignatureRef.current === areaSig) {
+      // Area has not actually changed; preserve in-flight loads and scene entities
+      return;
+    }
+    lastAreaSignatureRef.current = areaSig;
+    setShowLayersStatusBox(true);
+
     // Refresh the white outer mask around the new active polygon
     updateWhiteMask(polyCoords, longitude, latitude);
 
     // Cancel any previous area's in-flight network requests safely
+    networkRequestRef.current++;
+    buildingRequestRef.current++;
+    buildingRenderRef.current++;
+    setIsLoadingBuildings(false);
+    setBuildingLoadStatus("");
+    setBuildingLoadError(null);
     if (networkAbortRef.current) {
       try { networkAbortRef.current.abort(); } catch (e) {}
     }
@@ -3027,10 +3380,7 @@ export function CesiumDigitalTwinViewer({
       try { buildingAbortRef.current.abort(); } catch (e) {}
     }
 
-    const areaCacheKey = polyCoords && polyCoords.length >= 3
-      ? `poly_${polyCoords.map(([pLat, pLng]) => `${pLat.toFixed(4)},${pLng.toFixed(4)}`).join(";")}`
-      : `coord_${latitude.toFixed(3)}_${longitude.toFixed(3)}`;
-    const cached = networkAreaCache[areaCacheKey];
+    const cached = getCachedNetworkEntry(areaId, polyCoords, latitude, longitude);
 
     if (cached) {
       // Instant restore from cache: render immediately!
@@ -3041,14 +3391,23 @@ export function CesiumDigitalTwinViewer({
       if (cached.buildings) {
         setBuildingFeatures(cached.buildings);
         render3DBuildings(cached.buildings);
+      } else {
+        setBuildingFeatures([]);
+        render3DBuildings([]);
       }
       setExtractedBbox(cached.bbox);
-      networksLoadedRef.current = true;
+      networksLoadedRef.current = cached.complete === true;
     } else {
       // Clear previous entities while flying to the unvisited area
       setRoadFeatures([]);
       setRiverFeatures([]);
       setBuildingFeatures([]);
+      render3DRoads([], showRoads);
+      render3DRivers([], showRivers);
+      render3DBuildings([]);
+      setOsmTileStatus({ loaded: 0, total: 0, roads: 0, rivers: 0, buildings: 0 });
+      setBuildingStats({ total: 0, safe: 0, moderate: 0, high: 0, critical: 0 });
+      setNetworkError(null);
       setEvacuationRoute(null);
       networksLoadedRef.current = false;
     }
@@ -3059,14 +3418,29 @@ export function CesiumDigitalTwinViewer({
 
     const onFlyComplete = () => {
       isInFlightRef.current = false;
+      const v = viewerRef.current;
+      if (v && !v.isDestroyed() && v.camera?.positionCartographic) {
+        setCamAltitude(Math.round(v.camera.positionCartographic.height));
+      }
     };
 
     isInFlightRef.current = true;
     if (viewMode === "flat") {
       switchToFlatView().finally(onFlyComplete);
+    } else if (polyCoords && polyCoords.length >= 3) {
+      const positions = polyCoords.map(([la, lo]) => Cesium.Cartesian3.fromDegrees(lo, la, 0));
+      const boundingSphere = Cesium.BoundingSphere.fromPoints(positions);
+      boundingSphere.radius = Math.max(150, boundingSphere.radius * 1.3);
+      const pitch = viewMode === "topdown" ? Cesium.Math.toRadians(-88) : Cesium.Math.toRadians(-45);
+      viewer.camera.flyToBoundingSphere(boundingSphere, {
+        offset: new Cesium.HeadingPitchRange(Cesium.Math.toRadians(0), pitch, 0),
+        duration: 1.8,
+        complete: onFlyComplete,
+        cancel: onFlyComplete,
+      });
     } else if (viewMode === "topdown") {
       viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 8500),
+        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 8000),
         orientation: {
           heading: Cesium.Math.toRadians(0),
           pitch: Cesium.Math.toRadians(-88),
@@ -3123,15 +3497,26 @@ export function CesiumDigitalTwinViewer({
     setViewMode("3d");
     applyControllerSettings("3d");
 
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.045, 6500),
-      orientation: {
-        heading: Cesium.Math.toRadians(0),
-        pitch: Cesium.Math.toRadians(-45),
-        roll: 0.0,
-      },
-      duration: 1.5,
-    });
+    const poly = getActivePolygon();
+    if (poly && poly.length >= 3) {
+      const positions = poly.map(([la, lo]) => Cesium.Cartesian3.fromDegrees(lo, la, 0));
+      const boundingSphere = Cesium.BoundingSphere.fromPoints(positions);
+      boundingSphere.radius = Math.max(150, boundingSphere.radius * 1.3);
+      viewer.camera.flyToBoundingSphere(boundingSphere, {
+        offset: new Cesium.HeadingPitchRange(Cesium.Math.toRadians(0), Cesium.Math.toRadians(-45), 0),
+        duration: 1.5,
+      });
+    } else {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude - 0.045, 6500),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-45),
+          roll: 0.0,
+        },
+        duration: 1.5,
+      });
+    }
   };
 
   // 🛰️ TOP-DOWN SATELLITE (Nadir perspective with Google Maps controls)
@@ -3143,15 +3528,26 @@ export function CesiumDigitalTwinViewer({
     setViewMode("topdown");
     applyControllerSettings("topdown");
 
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 8000),
-      orientation: {
-        heading: Cesium.Math.toRadians(0),
-        pitch: Cesium.Math.toRadians(-88),
-        roll: 0.0,
-      },
-      duration: 1.4,
-    });
+    const poly = getActivePolygon();
+    if (poly && poly.length >= 3) {
+      const positions = poly.map(([la, lo]) => Cesium.Cartesian3.fromDegrees(lo, la, 0));
+      const boundingSphere = Cesium.BoundingSphere.fromPoints(positions);
+      boundingSphere.radius = Math.max(150, boundingSphere.radius * 1.3);
+      viewer.camera.flyToBoundingSphere(boundingSphere, {
+        offset: new Cesium.HeadingPitchRange(Cesium.Math.toRadians(0), Cesium.Math.toRadians(-88), 0),
+        duration: 1.4,
+      });
+    } else {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 8000),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-88),
+          roll: 0.0,
+        },
+        duration: 1.4,
+      });
+    }
   };
 
   // 360° Terrain Orbit
@@ -3278,7 +3674,7 @@ export function CesiumDigitalTwinViewer({
             const ageMs = Date.now() - (cached.timestamp || 0);
             const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
             const hasData = Array.isArray(cached.roads) && Array.isArray(cached.rivers) && Array.isArray(cached.buildings);
-            if (ageMs < MAX_AGE_MS && hasData) {
+            if (ageMs < MAX_AGE_MS && hasData && cached.complete && cached.areaKey === areaNetworkKey(areaId, getActivePolygon(), latitude, longitude)) {
               // Use cached data — skip API call
               console.log(`[DT] Using cached networks: ${cached.roads.length} roads, ${cached.rivers.length} rivers`);
               networksLoadedRef.current = true;
@@ -3290,9 +3686,12 @@ export function CesiumDigitalTwinViewer({
               render3DRoads(cached.roads, showRoads);
               render3DRivers(cached.rivers, showRivers);
               render3DBuildings(cached.buildings);
-              lastViewportBboxRef.current = getActivePolygon()
-                .map(([areaLat, areaLng]) => `${areaLat.toFixed(5)},${areaLng.toFixed(5)}`)
-                .join(";");
+              lastViewportBboxRef.current = selectedAreaKey(getActivePolygon());
+              const cachedAreaKey = areaNetworkKey(areaId, getActivePolygon(), latitude, longitude);
+              networkAreaCache[cachedAreaKey] = cached;
+              if (!cached.buildingsLoadedAt || Date.now() - cached.buildingsLoadedAt > 30 * 60 * 1000) {
+                void loadBuildings({ polygon: getActivePolygon() }, cached.roads, cached.rivers, cached.bbox, cachedAreaKey);
+              }
               if (cached.bbox) handlePredictRisk(cached.bbox);
               return;
             }
@@ -3305,7 +3704,7 @@ export function CesiumDigitalTwinViewer({
         // callback also calls scheduleSelectedAreaLoad, but if the component
         // mounts after an area change or the flight has already finished, this
         // fallback ensures networks are always loaded.
-        if (!networksLoadedRef.current && !isInFlightRef.current) {
+        if (!networksLoadedRef.current) {
           scheduleSelectedAreaLoad();
         }
       }, 800);
@@ -3347,13 +3746,6 @@ export function CesiumDigitalTwinViewer({
       });
     }
   }, [showBuildings]);
-
-  // Re-render buildings dynamically when flood simulation or rain state toggles
-  useEffect(() => {
-    if (buildingFeatures.length > 0) {
-      render3DBuildings(buildingFeatures);
-    }
-  }, [waterSimActive, isRaining]);
 
   // Interactive 3D Terrain & Entity Click Handler (Buildings, Mesh Nodes, Place, Delete)
   useEffect(() => {
@@ -3409,60 +3801,13 @@ export function CesiumDigitalTwinViewer({
           const clickLat = Number(Cesium.Math.toDegrees(carto.latitude).toFixed(6));
 
           if (isPickingLocation === "master") {
-            const masterExists = meshNodes.some((n) => n.type === "master");
-            if (masterExists) {
-              setMeshNodes((prev) =>
-                prev.map((n) =>
-                  n.type === "master" ? { ...n, lat: clickLat, lng: clickLng } : n
-                )
-              );
-              logUserActivity(
-                "Relocated Master Gateway",
-                `Moved to coords (${clickLat.toFixed(5)}° N, ${clickLng.toFixed(5)}° E)`
-              );
-            } else {
-              const newMaster: DigitalTwinMeshNode = {
-                id: "node-master",
-                name: "Master Gateway",
-                type: "master",
-                lat: clickLat,
-                lng: clickLng,
-                role: "Master Gateway",
-                battery: 100,
-                signalDbm: -45,
-                status: "online",
-              };
-              setMeshNodes((prev) => [newMaster, ...prev]);
-              setSelectedNodeId(newMaster.id);
-              logUserActivity(
-                "Placed Master Gateway",
-                `Positioned at (${clickLat.toFixed(5)}° N, ${clickLng.toFixed(5)}° E)`,
-                newMaster
-              );
-              setNewNodeName("");
-            }
-          } else if (isPickingLocation === "slave") {
-            // Add new Slave Node
-            const newIdx = meshNodes.filter((n) => n.type === "slave").length + 1;
-            const newSlave: DigitalTwinMeshNode = {
-              id: `node-slave-${Date.now()}`,
-              name: `Slave Node ${newIdx}`,
-              type: "slave",
-              lat: clickLat,
-              lng: clickLng,
-              role: "Slave Node",
-              battery: 98,
-              signalDbm: -66,
-              status: "online",
-            };
-            setMeshNodes((prev) => [...prev, newSlave]);
-            setSelectedNodeId(newSlave.id);
-            logUserActivity(
-              "Added Slave Node",
-              `Placed ${newSlave.name} at (${clickLat.toFixed(5)}° N, ${clickLng.toFixed(5)}° E)`,
-              newSlave
-            );
+            confirmSensorPlacement("master", clickLat, clickLng, stagedSensorId || "node1");
             setNewNodeName("");
+            return;
+          } else if (isPickingLocation === "slave") {
+            confirmSensorPlacement("slave", clickLat, clickLng, stagedSensorId || "node1");
+            setNewNodeName("");
+            return;
           } else {
             // Sensor placement: STRICT CONDITION: First slave node must be placed! All sensors connect to a slave.
             const slaves = meshNodes.filter((n) => n.type === "slave");
@@ -3534,7 +3879,7 @@ export function CesiumDigitalTwinViewer({
         clickHandler.destroy();
       } catch (e) {}
     };
-  }, [isPickingLocation, isDeleteMode, newNodeName, newNodeRole, meshNodes, deployedSensors]);
+  }, [isPickingLocation, isDeleteMode, newNodeName, newNodeRole, meshNodes, deployedSensors, stagedSensorId]);
 
 
 
@@ -3600,185 +3945,646 @@ export function CesiumDigitalTwinViewer({
       {/* Cesium WebGL Viewport */}
       <div ref={cesiumContainerRef} className="w-full h-full bg-black" />
 
-      {/* 🌤️ Weather Forecast Box on Left Rail (Shifted 50px down: top-[105px], 100% Opacity) */}
-      <div className="absolute top-[105px] left-3 z-20 w-64 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2 animate-in fade-in slide-in-from-left-2 duration-200">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-          <div className="flex items-center gap-1.5">
-            <CloudRain className="size-4 text-cyan-400" />
-            <span className="text-xs font-bold text-cyan-200">Weather Forecast</span>
-          </div>
-          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-            Live Overview
-          </span>
-        </div>
-
-        {/* Weather Metrics: Condition, Rainfall Rate, Temp, Humidity, Wind */}
-        <div className="space-y-1.5 bg-slate-900 p-2 rounded-lg border border-slate-800 text-[10px]">
-          <div className="grid grid-cols-2 gap-1.5 pb-1 border-b border-slate-800/80">
-            <div>
-              <span className="text-slate-400 block text-[9px]">Condition</span>
-              <span className="font-semibold text-white truncate block">
-                {weatherDayTab === "1d"
-                  ? "Moderate Rain"
-                  : weatherDayTab === "2d"
-                  ? "Heavy Rain"
-                  : weatherDayTab === "3d"
-                  ? "Storm Alert"
-                  : weatherDayTab === "4d"
-                  ? "Thunderstorm"
-                  : weatherDayTab === "5d"
-                  ? "Passing Showers"
-                  : weatherDayTab === "6d"
-                  ? "Light Drizzle"
-                  : "Clear Sky"}
-              </span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[9px]">Rainfall Rate</span>
-              <span className="font-mono text-cyan-300 font-bold">
-                {weatherDayTab === "1d"
-                  ? "12.4 mm/h"
-                  : weatherDayTab === "2d"
-                  ? "28.5 mm/h"
-                  : weatherDayTab === "3d"
-                  ? "54.2 mm/h"
-                  : weatherDayTab === "4d"
-                  ? "68.0 mm/h"
-                  : weatherDayTab === "5d"
-                  ? "18.3 mm/h"
-                  : weatherDayTab === "6d"
-                  ? "4.1 mm/h"
-                  : "0.0 mm/h"}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-1 pt-0.5 text-center text-[9px]">
-            <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
-              <span className="text-slate-400 block text-[8px]">Temp</span>
-              <span className="font-mono text-cyan-300 font-bold">
-                {weatherDayTab === "1d" ? "27.4 °C" : weatherDayTab === "2d" ? "24.1 °C" : weatherDayTab === "3d" ? "23.0 °C" : "29.2 °C"}
-              </span>
-            </div>
-            <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
-              <span className="text-slate-400 block text-[8px]">Humidity</span>
-              <span className="font-mono text-cyan-300 font-bold">
-                {weatherDayTab === "1d" ? "82%" : weatherDayTab === "2d" ? "94%" : weatherDayTab === "3d" ? "98%" : "71%"}
-              </span>
-            </div>
-            <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
-              <span className="text-slate-400 block text-[8px]">Wind</span>
-              <span className="font-mono text-cyan-300 font-bold">
-                {weatherDayTab === "1d" ? "14.2 km/h" : weatherDayTab === "2d" ? "28.0 km/h" : weatherDayTab === "3d" ? "36.5 km/h" : "10.1 km/h"}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 🌊 Forecast Heatmap Box (20px Spaced Below Weather Forecast: top-[275px], 100% Opacity) */}
-      <div className="absolute top-[275px] left-3 z-20 w-64 rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2 animate-in fade-in slide-in-from-left-2 duration-200">
-        <div
-          onClick={() => {
-            enterFullscreen();
-            if (!forecastActive) setForecastActive(true);
-          }}
-          className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5 cursor-pointer group hover:border-cyan-500/50 transition-colors"
-          title="Click to view Forecast Heatmap in Fullscreen"
-        >
-          <div className="flex items-center gap-1.5">
-            <Waves className="size-4 text-cyan-400 group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-bold text-cyan-200 group-hover:text-white">Forecast Heatmap</span>
-          </div>
+      {/* Left Rail: Weather, Flood, and Landslide Forecast Panels or Collapsed Right Arrow (>) Trigger */}
+      {forecastRailHidden ? (
+        /* Collapsed > Arrow Button: Positioned exactly 30px below Flat View toolbar */
+        <div className="absolute top-[93px] left-3 z-30 animate-in fade-in slide-in-from-left-2 duration-200 flex items-center">
           <button
             type="button"
-            aria-pressed={forecastActive}
-            onClick={(e) => {
-              e.stopPropagation();
-              enterFullscreen();
-              setForecastActive((prev) => !prev);
-            }}
-            className={`flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer shadow-sm ${
-              forecastActive
-                ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 ring-1 ring-cyan-300"
-                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-            }`}
-            title={forecastActive ? "Forecast Heatmap Visible (Click to turn Off)" : "Forecast Heatmap Off (Click to turn Visible & Fullscreen)"}
+            data-testid="forecast-toggle-btn"
+            onClick={() => setForecastRailHidden(false)}
+            className="size-9 flex items-center justify-center rounded-xl bg-slate-950/95 hover:bg-slate-900 border border-cyan-500/60 shadow-2xl text-cyan-300 hover:text-white transition-all backdrop-blur-md cursor-pointer group"
+            title="Expand Flood Intelligence"
           >
-            {forecastActive ? (
-              <>
-                <Eye className="size-3 text-slate-950" />
-                <span>Visible</span>
-              </>
-            ) : (
-              <>
-                <EyeOff className="size-3 text-slate-400" />
-                <span>Off</span>
-              </>
-            )}
+            <ChevronRight className="size-5 text-cyan-400 group-hover:translate-x-0.5 transition-transform" />
           </button>
         </div>
-
-        {/* 1d, 2d, 3d, 4d, 5d, 6d, 7d Forecast Horizon Buttons */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[9px] text-slate-400 font-semibold">
-            <span>Forecast Horizon</span>
-            <span className="font-mono text-cyan-300 font-bold">{weatherDayTab}</span>
+      ) : (
+        /* Expanded Forecast Rail: Starting with Flood Intelligence header bar */
+        <div className="absolute top-[93px] left-3 z-30 w-64 flex flex-col gap-2 max-h-[calc(100%-240px)] overflow-y-auto custom-dt-scrollbar pr-0.5 animate-in fade-in slide-in-from-left-2 duration-200 pointer-events-auto">
+          {/* Header Bar: Flood Intelligence Title and Collapse Toggle */}
+          <div className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-slate-950/95 border border-cyan-500/50 backdrop-blur-md shadow-xl shrink-0">
+            <div className="flex items-center gap-1.5 text-cyan-300">
+              <Waves className="size-3.5 text-cyan-400" />
+              <span className="text-[11px] font-bold text-cyan-200">Flood Intelligence</span>
+            </div>
+            <button
+              type="button"
+              data-testid="forecast-toggle-btn"
+              onClick={() => setForecastRailHidden(true)}
+              className="size-6 flex items-center justify-center rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+              title="Hide Forecasts"
+            >
+              <ChevronLeft className="size-3.5" />
+            </button>
           </div>
-          <div className="grid grid-cols-7 gap-1">
-            {(["1d", "2d", "3d", "4d", "5d", "6d", "7d"] as const).map((day, idx) => (
+
+          {/* 🌤️ Weather Forecast Box */}
+          <div className="rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+              <div className="flex items-center gap-1.5">
+                <CloudRain className="size-4 text-cyan-400" />
+                <span className="text-xs font-bold text-cyan-200">Weather Forecast</span>
+              </div>
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+                Live Overview
+              </span>
+            </div>
+
+            {/* Weather Metrics: Condition, Rainfall Rate, Temp, Humidity, Wind */}
+            <div className="space-y-1.5 bg-slate-900 p-2 rounded-lg border border-slate-800 text-[10px]">
+              <div className="grid grid-cols-2 gap-1.5 pb-1 border-b border-slate-800/80">
+                <div>
+                  <span className="text-slate-400 block text-[9px]">Condition</span>
+                  <span className="font-semibold text-white truncate block">
+                    {weatherDayTab === "1d"
+                      ? "Moderate Rain"
+                      : weatherDayTab === "2d"
+                      ? "Heavy Rain"
+                      : weatherDayTab === "3d"
+                      ? "Storm Alert"
+                      : weatherDayTab === "4d"
+                      ? "Thunderstorm"
+                      : weatherDayTab === "5d"
+                      ? "Passing Showers"
+                      : weatherDayTab === "6d"
+                      ? "Light Drizzle"
+                      : "Clear Sky"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[9px]">Rainfall Rate</span>
+                  <span className="font-mono text-cyan-300 font-bold">
+                    {weatherDayTab === "1d"
+                      ? "12.4 mm/h"
+                      : weatherDayTab === "2d"
+                      ? "28.5 mm/h"
+                      : weatherDayTab === "3d"
+                      ? "54.2 mm/h"
+                      : weatherDayTab === "4d"
+                      ? "68.0 mm/h"
+                      : weatherDayTab === "5d"
+                      ? "18.3 mm/h"
+                      : weatherDayTab === "6d"
+                      ? "4.1 mm/h"
+                      : "0.0 mm/h"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1 pt-0.5 text-center text-[9px]">
+                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+                  <span className="text-slate-400 block text-[8px]">Temp</span>
+                  <span className="font-mono text-cyan-300 font-bold">
+                    {weatherDayTab === "1d" ? "27.4 °C" : weatherDayTab === "2d" ? "24.1 °C" : weatherDayTab === "3d" ? "23.0 °C" : "29.2 °C"}
+                  </span>
+                </div>
+                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+                  <span className="text-slate-400 block text-[8px]">Humidity</span>
+                  <span className="font-mono text-cyan-300 font-bold">
+                    {weatherDayTab === "1d" ? "82%" : weatherDayTab === "2d" ? "94%" : weatherDayTab === "3d" ? "98%" : "71%"}
+                  </span>
+                </div>
+                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+                  <span className="text-slate-400 block text-[8px]">Wind</span>
+                  <span className="font-mono text-cyan-300 font-bold">
+                    {weatherDayTab === "1d" ? "14.2 km/h" : weatherDayTab === "2d" ? "28.0 km/h" : weatherDayTab === "3d" ? "36.5 km/h" : "10.1 km/h"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 🌊 Flood Forecast Heatmap Box */}
+          <div className="rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2">
+            <div
+              onClick={() => {
+                if (!forecastActive) setForecastActive(true);
+              }}
+              className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5 cursor-pointer group hover:border-cyan-500/50 transition-colors"
+              title="Forecast Heatmap Controls"
+            >
+              <div className="flex items-center gap-1.5">
+                <Waves className="size-4 text-cyan-400 group-hover:scale-110 transition-transform" />
+                <span className="text-xs font-bold text-cyan-200 group-hover:text-white">Forecast Heatmap</span>
+              </div>
               <button
-                key={day}
                 type="button"
-                onClick={() => {
-                  enterFullscreen();
-                  setWeatherDayTab(day);
-                  setForecastHour(idx * 2);
-                  if (!forecastActive) setForecastActive(true);
+                data-testid="flood-visible-toggle"
+                aria-pressed={forecastActive}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setForecastActive((prev) => !prev);
                 }}
-                className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
-                  weatherDayTab === day
-                    ? "bg-cyan-500 text-slate-950 ring-1 ring-cyan-300 shadow-sm"
-                    : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
+                className={`flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer shadow-sm ${
+                  forecastActive
+                    ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 ring-1 ring-cyan-300"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
                 }`}
+                title={forecastActive ? "Forecast Heatmap Visible (Click to turn Off)" : "Forecast Heatmap Off (Click to turn Visible & Fullscreen)"}
               >
-                {day}
+                {forecastActive ? (
+                  <>
+                    <Eye className="size-3 text-slate-950" />
+                    <span>Visible</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="size-3 text-slate-400" />
+                    <span>Off</span>
+                  </>
+                )}
               </button>
-            ))}
+            </div>
+
+            {/* 1d, 2d, 3d, 4d, 5d, 6d, 7d Forecast Horizon Buttons */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[9px] text-slate-400 font-semibold">
+                <span>Forecast Horizon</span>
+                <span className="font-mono text-cyan-300 font-bold">{weatherDayTab}</span>
+              </div>
+              <div className="grid grid-cols-7 gap-1">
+                {(["1d", "2d", "3d", "4d", "5d", "6d", "7d"] as const).map((day, idx) => (
+                  <button
+                    key={day}
+                    type="button"
+                    data-testid={`flood-horizon-${day}`}
+                    onClick={() => {
+                      setWeatherDayTab(day);
+                      setForecastHour(idx * 2);
+                      if (!forecastActive) setForecastActive(true);
+                    }}
+                    className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
+                      weatherDayTab === day
+                        ? "bg-cyan-500 text-slate-950 ring-1 ring-cyan-300 shadow-sm"
+                        : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
+                    }`}
+                  >
+                    {day}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Flood Hydrological Risk Metrics (same structure as Landslide) */}
+            <div className="space-y-1 bg-slate-900 p-2 rounded-lg border border-slate-800 text-[10px]">
+              <div className="grid grid-cols-2 gap-1.5 pb-1 border-b border-slate-800/80">
+                <div>
+                  <span className="text-slate-400 block text-[9px]">Inundation Level</span>
+                  <span className={`font-mono font-bold ${
+                    weatherDayTab === "3d" || weatherDayTab === "4d"
+                      ? "text-red-400"
+                      : weatherDayTab === "2d" || weatherDayTab === "5d"
+                      ? "text-cyan-400"
+                      : "text-emerald-400"
+                  }`}>
+                    {weatherDayTab === "1d"
+                      ? "0.42m (Normal)"
+                      : weatherDayTab === "2d"
+                      ? "0.85m (Moderate)"
+                      : weatherDayTab === "3d"
+                      ? "2.14m (Severe)"
+                      : weatherDayTab === "4d"
+                      ? "2.86m (Critical)"
+                      : weatherDayTab === "5d"
+                      ? "1.20m (Elevated)"
+                      : weatherDayTab === "6d"
+                      ? "0.55m (Minor)"
+                      : "0.20m (Safe)"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[9px]">Inundation Risk</span>
+                  <span className={`font-mono font-bold ${
+                    weatherDayTab === "3d" || weatherDayTab === "4d"
+                      ? "text-red-400"
+                      : weatherDayTab === "2d" || weatherDayTab === "5d"
+                      ? "text-cyan-400"
+                      : "text-emerald-400"
+                  }`}>
+                    {weatherDayTab === "1d"
+                      ? "15% Low"
+                      : weatherDayTab === "2d"
+                      ? "42% Moderate"
+                      : weatherDayTab === "3d"
+                      ? "82% High"
+                      : weatherDayTab === "4d"
+                      ? "95% Extreme"
+                      : weatherDayTab === "5d"
+                      ? "58% Elevated"
+                      : weatherDayTab === "6d"
+                      ? "20% Low"
+                      : "4% Safe"}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-1 pt-0.5 text-[9px]">
+                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+                  <span className="text-slate-400 block text-[8px]">Peak Discharge</span>
+                  <span className="font-mono text-cyan-300 font-bold">
+                    {weatherDayTab === "3d" || weatherDayTab === "4d" ? "342 m³/s" : "46 m³/s"}
+                  </span>
+                </div>
+                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+                  <span className="text-slate-400 block text-[8px]">Crit Lowlands (&lt;2m)</span>
+                  <span className="font-mono text-cyan-300 font-bold">
+                    {weatherDayTab === "3d" || weatherDayTab === "4d" ? "11 Sectors" : "2 Sectors"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Heatmap Settings when Flood Forecast is ON */}
+            {forecastActive && (
+              <div className="pt-2 border-t border-slate-800/80 space-y-2 text-[10px] animate-in fade-in duration-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400 font-medium">Timeline Scrubber</span>
+                  <span className="font-mono text-cyan-300 font-bold">+{forecastHour * 2}h (Frame {forecastHour})</span>
+                </div>
+                <input
+                  aria-label="Flood forecast hour"
+                  type="range"
+                  min={0}
+                  max={24}
+                  step={1}
+                  value={forecastHour}
+                  onChange={(e) => setForecastHour(Number(e.target.value))}
+                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                />
+
+                {/* Relative Flood Hazard Color Gradient Ramp */}
+                <div>
+                  <div
+                    className="h-2 rounded"
+                    style={{ background: "linear-gradient(to right, #2563eb, #06b6d4, #facc15, #dc2626)" }}
+                  />
+                  <div className="mt-0.5 flex justify-between text-[8px] text-slate-400 font-mono">
+                    <span>Low · 0.0</span>
+                    <span>Flood Hazard Index</span>
+                    <span>High · 1.0</span>
+                  </div>
+                </div>
+
+                {/* Opacity Slider */}
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <span className="text-slate-400 text-[9px]">Opacity</span>
+                  <input
+                    aria-label="Flood heatmap opacity"
+                    type="range"
+                    min={0.1}
+                    max={1.0}
+                    step={0.05}
+                    value={forecastOpacity}
+                    onChange={(e) => setForecastOpacity(Number(e.target.value))}
+                    className="w-24 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                  />
+                  <span className="font-mono text-cyan-300 text-[9px] font-bold w-7 text-right">
+                    {Math.round(forecastOpacity * 100)}%
+                  </span>
+                </div>
+                <p className="text-[8px] text-slate-500 leading-tight">
+                  Open-Meteo GNN estimate + terrain depth variation
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ⛰️ Landslide Forecast Box (Below flood forecast, same like flood one) */}
+          <div className="rounded-xl border border-amber-500/50 bg-slate-950 opacity-100 p-3 shadow-2xl text-white space-y-2">
+            <div
+              onClick={() => {
+                setLandslideActive((prev) => !prev);
+              }}
+              className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5 cursor-pointer group hover:border-amber-500/50 transition-colors"
+              title="Landslide Forecast Heatmap Controls"
+            >
+              <div className="flex items-center gap-1.5">
+                <Mountain className="size-4 text-amber-400 group-hover:scale-110 transition-transform" />
+                <span className="text-xs font-bold text-amber-200 group-hover:text-white">Landslide Forecast</span>
+              </div>
+              <button
+                type="button"
+                data-testid="landslide-visible-toggle"
+                aria-pressed={landslideActive}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLandslideActive((prev) => !prev);
+                }}
+                className={`flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer shadow-sm ${
+                  landslideActive
+                    ? "bg-amber-500 hover:bg-amber-400 text-slate-950 ring-1 ring-amber-300 font-bold"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+                }`}
+                title={landslideActive ? "Landslide Forecast Visible (Click to turn Off)" : "Landslide Forecast Off (Click to turn Visible & Fullscreen)"}
+              >
+                {landslideActive ? (
+                  <>
+                    <Eye className="size-3 text-slate-950" />
+                    <span>Visible</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="size-3 text-slate-400" />
+                    <span>Off</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* 1d, 2d, 3d, 4d, 5d, 6d, 7d Landslide Forecast Horizon Buttons */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[9px] text-slate-400 font-semibold">
+                <span>Hazard Horizon</span>
+                <span className="font-mono text-amber-300 font-bold">{landslideDayTab}</span>
+              </div>
+              <div className="grid grid-cols-7 gap-1">
+                {(["1d", "2d", "3d", "4d", "5d", "6d", "7d"] as const).map((day, idx) => (
+                  <button
+                    key={day}
+                    type="button"
+                    data-testid={`landslide-horizon-${day}`}
+                    onClick={() => {
+                      setLandslideDayTab(day);
+                      setLandslideHour(idx * 2);
+                      if (!landslideActive) setLandslideActive(true);
+                    }}
+                    className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
+                      landslideDayTab === day
+                        ? "bg-amber-500 text-slate-950 ring-1 ring-amber-300 shadow-sm font-bold"
+                        : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
+                    }`}
+                  >
+                    {day}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Landslide Geotechnical Risk Metrics */}
+            <div className="space-y-1 bg-slate-900 p-2 rounded-lg border border-slate-800 text-[10px]">
+              <div className="grid grid-cols-2 gap-1.5 pb-1 border-b border-slate-800/80">
+                <div>
+                  <span className="text-slate-400 block text-[9px]">Slope Stability (FS)</span>
+                  <span className={`font-mono font-bold ${
+                    landslideDayTab === "3d" || landslideDayTab === "4d"
+                      ? "text-red-400"
+                      : landslideDayTab === "2d" || landslideDayTab === "5d"
+                      ? "text-amber-400"
+                      : "text-emerald-400"
+                  }`}>
+                    {landslideDayTab === "1d"
+                      ? "1.42 (Stable)"
+                      : landslideDayTab === "2d"
+                      ? "1.14 (Moderate)"
+                      : landslideDayTab === "3d"
+                      ? "0.88 (Failure)"
+                      : landslideDayTab === "4d"
+                      ? "0.74 (Critical)"
+                      : landslideDayTab === "5d"
+                      ? "1.06 (Alert)"
+                      : landslideDayTab === "6d"
+                      ? "1.35 (Marginal)"
+                      : "1.65 (Stable)"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[9px]">Failure Risk</span>
+                  <span className={`font-mono font-bold ${
+                    landslideDayTab === "3d" || landslideDayTab === "4d"
+                      ? "text-red-400"
+                      : landslideDayTab === "2d" || landslideDayTab === "5d"
+                      ? "text-amber-400"
+                      : "text-emerald-400"
+                  }`}>
+                    {landslideDayTab === "1d"
+                      ? "18% Low"
+                      : landslideDayTab === "2d"
+                      ? "46% Moderate"
+                      : landslideDayTab === "3d"
+                      ? "78% High"
+                      : landslideDayTab === "4d"
+                      ? "91% Extreme"
+                      : landslideDayTab === "5d"
+                      ? "52% Elevated"
+                      : landslideDayTab === "6d"
+                      ? "24% Low"
+                      : "6% Safe"}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-1 pt-0.5 text-[9px]">
+                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+                  <span className="text-slate-400 block text-[8px]">Pore Pressure</span>
+                  <span className="font-mono text-amber-300 font-bold">
+                    {landslideDayTab === "3d" || landslideDayTab === "4d" ? "42.8 kPa" : "18.4 kPa"}
+                  </span>
+                </div>
+                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
+                  <span className="text-slate-400 block text-[8px]">Crit Slopes (&gt;30°)</span>
+                  <span className="font-mono text-amber-300 font-bold">
+                    {landslideDayTab === "3d" || landslideDayTab === "4d" ? "14 Sectors" : "3 Sectors"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Heatmap Settings when Landslide Forecast is ON */}
+            {landslideActive && (
+              <div className="pt-2 border-t border-slate-800/80 space-y-2 text-[10px] animate-in fade-in duration-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400 font-medium">Timeline Scrubber</span>
+                  <span className="font-mono text-amber-300 font-bold">+{landslideHour * 2}h (Frame {landslideHour})</span>
+                </div>
+                <input
+                  aria-label="Landslide forecast hour"
+                  type="range"
+                  min={0}
+                  max={24}
+                  step={1}
+                  value={landslideHour}
+                  onChange={(e) => setLandslideHour(Number(e.target.value))}
+                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                />
+
+                {/* Slope Instability Color Gradient Ramp */}
+                <div>
+                  <div
+                    className="h-2 rounded"
+                    style={{ background: "linear-gradient(to right, #10b981, #f59e0b, #ea580c, #dc2626)" }}
+                  />
+                  <div className="mt-0.5 flex justify-between text-[8px] text-slate-400 font-mono">
+                    <span>Stable (FS&gt;1.5)</span>
+                    <span>Slope Instability</span>
+                    <span>Critical (FS&lt;1.0)</span>
+                  </div>
+                </div>
+
+                {/* Opacity Slider */}
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <span className="text-slate-400 text-[9px]">Opacity</span>
+                  <input
+                    aria-label="Landslide heatmap opacity"
+                    type="range"
+                    min={0.1}
+                    max={1.0}
+                    step={0.05}
+                    value={landslideOpacity}
+                    onChange={(e) => setLandslideOpacity(Number(e.target.value))}
+                    className="w-24 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                  />
+                  <span className="font-mono text-amber-300 text-[9px] font-bold w-7 text-right">
+                    {Math.round(landslideOpacity * 100)}%
+                  </span>
+                </div>
+                <p className="text-[8px] text-slate-500 leading-tight">
+                  Infinite slope factor of safety (c&apos;, &phi;, m, &beta;) + DEM saturation
+                </p>
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      )}
 
-      {/* 🌧️ 3D Cesium Selected Area Rain Simulation Overlay (Restricted 100% strictly inside selected boundary) */}
+      {forecastActive && (
+        <TwinForecastHeatmap
+          viewer={cesiumViewer || viewerRef.current}
+          polygon={getActivePolygon()}
+          selectedHour={forecastHour}
+          onSelectedHourChange={setForecastHour}
+          opacity={forecastOpacity}
+          hideCard={true}
+        />
+      )}
+
+      {/* ⛰️ Landslide Hazard Heatmap Surface Overlay */}
+      {landslideActive && (
+        <TwinLandslideHeatmap
+          viewer={cesiumViewer || viewerRef.current}
+          polygon={getActivePolygon()}
+          selectedHour={landslideHour}
+          onSelectedHourChange={setLandslideHour}
+          opacity={landslideOpacity}
+          hideCard={true}
+          onClose={() => setLandslideActive(false)}
+        />
+      )}
+
+
+      {/* 🌧️ Atmospheric Rain Simulation Overlay (active in 3D, Flat View, and Top-Down) */}
       <CesiumSelectedAreaRainOverlay
         viewer={cesiumViewer || viewerRef.current}
         polygonCoords={getActivePolygon()}
-        active={Boolean(rainActive)}
+        active={rainActive || waterSimActive}
+        isPaused={isFloodPaused}
         intensityMm={simRainIntensity}
         windSpeedKmh={simWindSpeed}
         groundHeight={groundHeightMeters}
         isFlatView={viewMode === "flat"}
       />
 
-      {forecastActive && <TwinForecastHeatmap
-        viewer={cesiumViewer || viewerRef.current}
-        polygon={getActivePolygon()}
-        selectedHour={forecastHour}
-        onSelectedHourChange={setForecastHour}
-      />}
-
       {/* 🌊 3D Realistic Three.js Water Simulation (OSM Water Bodies + DEM Shallow-Water Flow) */}
       <ThreeWaterSimulation
+        ref={flashFloodRef}
         cesiumViewer={cesiumViewer || viewerRef.current}
         centerLat={latitude}
         centerLng={longitude}
         baseElevation={groundHeightMeters}
         polygonCoords={getActivePolygon()}
-        active={waterSimActive}
-        onClose={() => setWaterSimActive(false)}
+        active={waterSimActive || rainActive}
+        riverFeatures={riverFeatures}
+        roadFeatures={roadFeatures}
+        buildingFeatures={buildingFeatures}
+        rainfallMmH={simRainIntensity}
+        windSpeedKmh={simWindSpeed}
+        isFlatView={viewMode === "flat"}
+        onPauseChange={setIsFloodPaused}
+        onClose={() => {
+          setWaterSimActive(false);
+          setInternalRain(false);
+          setIsFloodPaused(false);
+          onToggleRain?.(false);
+        }}
       />
 
-      {/* 🌟 Smooth Cinematic Loading Fade-Out Veil */}
+      {/* 🗺️ Selected Area Map Layers Status Box */}
+      {!loading && showLayersStatusBox && (
+        <div
+          role="status"
+          aria-label="Selected area map layers"
+          className={`absolute z-30 pointer-events-auto ${
+            forecastRailHidden ? "top-[138px] left-3" : "top-[138px] left-[276px]"
+          } min-w-[280px] max-w-[calc(100%-1.5rem)] rounded-xl border border-slate-700/80 bg-slate-950/90 backdrop-blur-md px-3.5 py-2.5 shadow-xl transition-all duration-200`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-medium">
+              {isExtractingNetworks || isLoadingBuildings ? (
+                <Loader2 className="size-3.5 animate-spin text-cyan-400 shrink-0" />
+              ) : (
+                <Layers className="size-3.5 text-cyan-400 shrink-0" />
+              )}
+              <div className="flex items-center gap-2 flex-wrap text-slate-200">
+                <span>
+                  <strong className="text-white font-semibold">{osmTileStatus.roads}</strong> paths
+                </span>
+                <span className="text-slate-600">·</span>
+                <span>
+                  <strong className="text-white font-semibold">{osmTileStatus.rivers}</strong> waterways
+                </span>
+                <span className="text-slate-600">·</span>
+                <span>
+                  <strong className="text-white font-semibold">{osmTileStatus.buildings}</strong> buildings
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid="close-layers-status-btn"
+              aria-label="Close layers status"
+              className="text-slate-400 hover:text-white p-1 rounded transition-colors ml-auto shrink-0 cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation();
+                console.log("[DT] Layers status box closed");
+                setShowLayersStatusBox(false);
+              }}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+          <div className="pl-[22px] mt-1 text-[11px] text-slate-400 leading-tight">
+            {networkError ? (
+              <span className="text-amber-200">
+                {networkError}{" "}
+                <button
+                  type="button"
+                  className="underline font-semibold hover:text-amber-100 cursor-pointer ml-1"
+                  onClick={() => {
+                    lastViewportBboxRef.current = "";
+                    handleExtractNetworks();
+                  }}
+                >
+                  Retry layers
+                </button>
+              </span>
+            ) : isExtractingNetworks ? (
+              "Loading selected-area paths and waterways…"
+            ) : isLoadingBuildings ? (
+              buildingLoadStatus || "Loading building footprints…"
+            ) : (
+              "Mapped features · heights estimated where unavailable"
+            )}
+          </div>
+          <div className="mt-2 pl-[22px] text-[11px] text-slate-300">
+            {buildingLoadError ? <span className="text-amber-200">{buildingLoadError} </span> : !isLoadingBuildings && buildingLoadStatus ? <span>{buildingLoadStatus} · </span> : null}
+            <button type="button" disabled={isLoadingBuildings} className="underline disabled:opacity-50" onClick={() => {
+              const boundary = getActivePolygon();
+              const areaKey = areaNetworkKey(areaId, boundary, latitude, longitude);
+              const bounds = { north: Math.max(...boundary.map(point => point[0])), south: Math.min(...boundary.map(point => point[0])), east: Math.max(...boundary.map(point => point[1])), west: Math.min(...boundary.map(point => point[1])) };
+              networkAreaCache[areaKey] ??= { roads: roadFeatures, rivers: riverFeatures, bbox: bounds, timestamp: 0, complete: networksLoadedRef.current };
+              void loadBuildings({ polygon: boundary }, roadFeatures, riverFeatures, bounds, areaKey);
+            }}>{isLoadingBuildings ? "Buildings are still loading…" : "Reload buildings only"}</button>
+          </div>
+        </div>
+      )}
       <div
         className={`absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center gap-3.5 z-30 text-white transition-opacity duration-700 ease-out pointer-events-none ${
           loading ? "opacity-100 pointer-events-auto" : "opacity-0"
@@ -3940,189 +4746,39 @@ export function CesiumDigitalTwinViewer({
 
         <div className="w-px h-5 bg-slate-700 mx-0.5" />
 
-        {/* ⚙️ SIMULATION CONTROLS (SENSORS: MASTER/SLAVE & ENVIRONMENT: RAIN/INTENSITY) */}
-        <div className="relative" ref={simulationDropdownRef}>
-          <button
-            onClick={() => {
-              enterFullscreen();
-              setSimulationMenuOpen((prev) => !prev);
-            }}
-            title="Simulation: Sensors (Master, Slave) & Environment (Rain, Rain Intensity)"
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all ${
-              showMeshPanel || simulationMenuOpen
-                ? "bg-cyan-600 text-white ring-1 ring-cyan-400 shadow-sm"
-                : "hover:bg-slate-800 text-cyan-300 hover:text-white"
-            }`}
-          >
-            <Sliders className="size-3.5 text-cyan-300" />
-            <span>Simulation</span>
-            <ChevronDown
-              className={`size-3 text-cyan-200 transition-transform duration-150 ${
-                simulationMenuOpen ? "rotate-180" : ""
-              }`}
-            />
-            {rainActive && (
-              <span className="flex h-1.5 w-1.5 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-cyan-400"></span>
-              </span>
-            )}
-          </button>
-
-          {simulationMenuOpen && (
-            <div
-              onWheel={(e) => e.stopPropagation()}
-              onTouchMove={(e) => e.stopPropagation()}
-              style={{ maxHeight: isFullscreen ? "82vh" : "calc(100% - 60px)" }}
-              className="absolute top-full mt-1.5 right-0 w-84 bg-slate-900/98 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-3 z-50 animate-in fade-in-50 zoom-in-95 duration-150 flex flex-col gap-2.5 text-left overflow-y-auto overscroll-contain custom-dt-scrollbar"
-            >
-
-
-              {/* MASTER / SLAVE / SENSOR MESH */}
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5 flex items-center justify-between">
-                  <span>IoT Sensor Mesh</span>
-                  <span className="text-[9px] text-cyan-400 font-mono">
-                    {meshNodes.length} nodes · {deployedSensors.length} sensors
-                  </span>
-                </div>
-                <div
-                  onClick={() => {
-                    enterFullscreen();
-                    setSimulationMenuOpen(false);
-                    setShowEvacPanel(false);
-                    setShowRainPanel(false);
-                    setShowMeshPanel(true);
-                  }}
-                  className="p-2 bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-cyan-500/50 rounded-lg flex items-center justify-between cursor-pointer transition-all group"
-                >
-                  <div>
-                    <div className="text-xs font-semibold text-white group-hover:text-cyan-300">
-                      IoT Mesh Nodes & Sensors
-                    </div>
-                    <div className="text-[10px] text-slate-400">
-                      {meshNodes.length > 0
-                        ? `${masterNode ? "1 Master" : "0 Master"}, ${slaveNodes.length} Slaves, ${deployedSensors.length} Sensors`
-                        : "Click to place Master, Slaves & Sensors"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowEvacPanel(false);
-                      setShowRainPanel(false);
-                      setShowMeshPanel(true);
-                    }}
-                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                      showMeshPanel
-                        ? "bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-xs"
-                        : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700"
-                    }`}
-                  >
-                    {showMeshPanel ? "Active" : "Open"}
-                  </button>
-                </div>
-              </div>
-
-              {/* DIVIDER */}
-              <div className="border-t border-slate-800" />
-
-              {/* RAIN */}
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
-                  Rain
-                </div>
-                <div
-                  onClick={() => {
-                    enterFullscreen();
-                    setSimulationMenuOpen(false);
-                    setShowEvacPanel(false);
-                    setShowMeshPanel(false);
-                    setShowRainPanel(true);
-                    if (!rainActive) {
-                      handleToggleRain();
-                    }
-                  }}
-                  className="p-2 bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500/50 rounded-lg flex items-center justify-between cursor-pointer transition-all group"
-                >
-                  <div>
-                    <div className="text-xs font-semibold text-white group-hover:text-sky-300">Rain Simulation</div>
-                    <div className="text-[10px] text-slate-400">
-                      {rainActive ? `${simRainIntensity} mm/h active` : "Off"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowRainPanel(true);
-                      setShowMeshPanel(false);
-                      handleToggleRain();
-                    }}
-                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                      rainActive
-                        ? "bg-sky-500 hover:bg-sky-400 text-slate-950 shadow-xs"
-                        : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-                    }`}
-                  >
-                    {rainActive ? "Active (Stop)" : "Start"}
-                  </button>
-                </div>
-              </div>
-
-              {/* DIVIDER */}
-              <div className="border-t border-slate-800" />
-
-              {/* 4. WATER */}
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-0.5">
-                  Water
-                </div>
-                <div
-                  onClick={() => {
-                    enterFullscreen();
-                    setSimulationMenuOpen(false);
-                    setShowEvacPanel(false);
-                    setShowMeshPanel(false);
-                    setShowRainPanel(false);
-                    setWaterSimActive(true);
-                  }}
-                  className="p-2 bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-teal-500/50 rounded-lg flex items-center justify-between cursor-pointer transition-all group"
-                >
-                  <div>
-                    <div className="text-xs font-semibold text-white group-hover:text-teal-300">Water Simulation</div>
-                    <div className="text-[10px] text-slate-400">
-                      {waterSimActive ? "3D Flow active" : "Off"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      enterFullscreen();
-                      setSimulationMenuOpen(false);
-                      setShowMeshPanel(false);
-                      setShowRainPanel(false);
-                      setWaterSimActive((prev) => !prev);
-                    }}
-                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                      waterSimActive
-                        ? "bg-teal-600 hover:bg-teal-500 text-white shadow-xs"
-                        : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-                    }`}
-                  >
-                    {waterSimActive ? "Active (Stop)" : "Start"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          data-testid="simulation-menu-btn"
+          onClick={() => {
+            setShowEvacPanel(false);
+            setShowMeshPanel(false);
+            if (waterSimActive) {
+              flashFloodRef.current?.closeSimulation();
+            } else {
+              setWaterSimActive(true);
+              setInternalRain(true);
+              onToggleRain?.(true);
+              flashFloodRef.current?.startSimulation();
+            }
+          }}
+          title={waterSimActive ? "End Flash Flood & Save Simulation Report" : "Start Flash Flood & Rain Simulation"}
+          className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold cursor-pointer transition-all ${
+            waterSimActive
+              ? "bg-cyan-600 text-white ring-2 ring-cyan-300 shadow-md shadow-cyan-950"
+              : "bg-cyan-700 hover:bg-cyan-600 text-white"
+          }`}
+        >
+          <CloudRain className="size-4" />
+          <span>{waterSimActive ? (isFloodPaused ? "Flood Paused" : "Flash Flood") : "Flash Flood"}</span>
+          {waterSimActive && (isFloodPaused ? (
+            <span className="size-2 rounded-full bg-amber-400 ml-0.5" title="Paused" />
+          ) : (
+            <span className="size-2 rounded-full bg-cyan-300 animate-ping ml-0.5" />
+          ))}
+        </button>
+        <button type="button" data-testid="open-mesh-panel-btn" onClick={() => setShowMeshPanel(previous => !previous)} className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold text-cyan-200 hover:bg-slate-800">
+          <Network className="size-3.5" /><span>Sensors</span>
+        </button>
 
 
         {/* 🚨 EVACUATION & RISK ROUTING BUTTON */}
@@ -4280,7 +4936,7 @@ export function CesiumDigitalTwinViewer({
 
               <div className="bg-slate-900/60 px-2 py-1.5 rounded border border-slate-800/80">
                 <div className="flex items-center justify-between text-[10px] text-slate-400">
-                  <span>{isExtractingNetworks ? "Loading priority OSM data…" : isLoadingBuildings ? "Loading building detail…" : "OSM data complete"}</span>
+                  <span>{isExtractingNetworks ? "Loading paths and waterways…" : isLoadingBuildings ? "Loading building detail…" : networkError ? "Map data incomplete" : "Available map data loaded"}</span>
                   <span className="text-sky-300 font-mono">
                     {isExtractingNetworks || isLoadingBuildings ? "Fetching tiles" : osmTileStatus.total ? `${osmTileStatus.loaded}/${osmTileStatus.total} tiles` : "Cached"}
                   </span>
@@ -4685,6 +5341,23 @@ export function CesiumDigitalTwinViewer({
 
             {/* 📍 Click Map to Place Section */}
             <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 space-y-2">
+              {lastConnectedSensorMsg && (
+                <div
+                  data-testid="sensor-connected-banner"
+                  className="flex items-center gap-2 p-2 bg-emerald-950/80 border border-emerald-500/40 rounded-lg text-emerald-300 text-xs font-semibold animate-in fade-in"
+                >
+                  <CheckCircle2 className="size-4 text-emerald-400 shrink-0" />
+                  <div className="flex-1 text-[11px] leading-tight font-medium">{lastConnectedSensorMsg}</div>
+                  <button
+                    type="button"
+                    onClick={() => setLastConnectedSensorMsg(null)}
+                    className="text-emerald-400/60 hover:text-emerald-300 text-xs px-1 cursor-pointer"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
               <div className="text-[11px] font-bold text-cyan-300 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
                   <MapPin className="size-3.5 text-cyan-400" />
@@ -4700,7 +5373,21 @@ export function CesiumDigitalTwinViewer({
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setIsPickingLocation("master")}
+                  data-testid="drop-master-btn"
+                  onClick={() => {
+                    if (!sensorConnectedOnce) {
+                      setSensorPromptModal({
+                        open: true,
+                        nodeType: "master",
+                        lat: Number(latitude.toFixed(6)),
+                        lng: Number(longitude.toFixed(6)),
+                        sensorId: stagedSensorId || "node1",
+                      });
+                    } else {
+                      setIsPickingLocation(isPickingLocation === "master" ? null : "master");
+                      toast.info(`Click on 3D map to place Master Gateway (${stagedSensorId || "node1"})`);
+                    }
+                  }}
                   className={`p-2 rounded-lg text-xs font-semibold cursor-pointer border text-left transition-all ${
                     isPickingLocation === "master"
                       ? "bg-amber-950/90 border-amber-400 ring-2 ring-amber-500 text-white"
@@ -4712,13 +5399,27 @@ export function CesiumDigitalTwinViewer({
                     <span>+ Drop Master</span>
                   </div>
                   <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
-                    Central LoRaWAN Gateway node
+                    Central LoRaWAN Gateway ({stagedSensorId || "node1"})
                   </div>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setIsPickingLocation("slave")}
+                  data-testid="drop-slave-btn"
+                  onClick={() => {
+                    if (!sensorConnectedOnce) {
+                      setSensorPromptModal({
+                        open: true,
+                        nodeType: "slave",
+                        lat: Number((latitude + 0.003).toFixed(6)),
+                        lng: Number((longitude + 0.003).toFixed(6)),
+                        sensorId: stagedSensorId || "node1",
+                      });
+                    } else {
+                      setIsPickingLocation(isPickingLocation === "slave" ? null : "slave");
+                      toast.info(`Click on 3D map to place Slave node (${stagedSensorId || "node1"})`);
+                    }
+                  }}
                   className={`p-2 rounded-lg text-xs font-semibold cursor-pointer border text-left transition-all ${
                     isPickingLocation === "slave"
                       ? "bg-cyan-950/90 border-cyan-400 ring-2 ring-cyan-500 text-white"
@@ -4730,9 +5431,69 @@ export function CesiumDigitalTwinViewer({
                     <span>+ Drop Slave</span>
                   </div>
                   <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">
-                    Relay Slave node for sensors
+                    Relay Slave node ({stagedSensorId || "node1"})
                   </div>
                 </button>
+              </div>
+
+              {/* In Slave / Below that: Ask ID & Connect Option (Ask One Time) */}
+              <div
+                data-testid="sensor-id-connect-box"
+                className="p-2.5 bg-slate-900/95 border border-cyan-500/40 rounded-xl space-y-2 shadow-inner"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-bold text-cyan-300 flex items-center gap-1.5">
+                    <Cpu className="size-3.5 text-cyan-400" />
+                    <span>Sensor ID & Connect Option</span>
+                  </div>
+                  {sensorConnectedOnce ? (
+                    <span className="text-[9px] bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-800 font-mono font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="size-2.5 text-emerald-400" />
+                      <span>Connected ({stagedSensorId || "node1"})</span>
+                    </span>
+                  ) : (
+                    <span className="text-[9px] bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-800 font-mono">
+                      Connect Once
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      data-testid="inline-sensor-id-input"
+                      value={stagedSensorId}
+                      onChange={(e) => setStagedSensorId(e.target.value)}
+                      placeholder="e.g. node1"
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-cyan-500/50 focus:border-cyan-400 rounded-lg text-xs font-mono text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-400 transition-all"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleConnectSensorOneTime();
+                        }
+                      }}
+                    />
+                    <span className="absolute right-2 top-1.5 text-[9px] font-mono text-cyan-400/80">
+                      ID
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    data-testid="inline-connect-sensor-btn"
+                    onClick={() => handleConnectSensorOneTime()}
+                    className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:from-emerald-700 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1 cursor-pointer shrink-0 shadow-sm"
+                  >
+                    <CheckCircle2 className="size-3.5" />
+                    <span>{sensorConnectedOnce ? "Connected" : "Connect"}</span>
+                  </button>
+                </div>
+
+                <p className="text-[10px] text-slate-400 leading-tight">
+                  {sensorConnectedOnce
+                    ? `Sensor ID [${stagedSensorId || "node1"}] is connected. Master and Slave nodes will auto-use this ID.`
+                    : `Enter Sensor ID once (default node1) and click Connect. Master & Slave nodes will connect without asking again.`}
+                </p>
               </div>
 
               {/* Quick Preset Sensor buttons */}
@@ -4846,161 +5607,6 @@ export function CesiumDigitalTwinViewer({
         </div>
       )}
 
-      {/* 🌧️ STANDALONE RAIN SIMULATION PANEL (Shows ONLY Rain without Simulation Studio) */}
-      {showRainPanel && (
-        <div
-          onWheel={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-          style={{ maxHeight: isFullscreen ? "85vh" : "calc(100% - 70px)" }}
-          className={`absolute z-30 w-88 bg-slate-900/95 backdrop-blur-md border border-sky-500/50 rounded-xl p-3.5 shadow-2xl text-white flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden overscroll-contain ${
-            showSrtm30 && showSrtmLegend
-              ? "top-[320px] right-3"
-              : "top-14 right-3"
-          }`}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-slate-700/80 pb-2.5 shrink-0">
-            <div className="flex items-center gap-2">
-              <div className="size-6 rounded-md bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400">
-                <CloudRain className="size-3.5" />
-              </div>
-              <div>
-                <div className="text-xs font-bold text-white leading-tight">Rain Simulation</div>
-                <div className="text-[10px] text-slate-400">Atmospheric Precipitation Engine</div>
-              </div>
-            </div>
-            <button
-              onClick={() => setShowRainPanel(false)}
-              className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-              title="Close Rain Simulation Panel"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-
-          {/* Rain Content */}
-          <div 
-            onWheel={(e) => e.stopPropagation()}
-            onTouchMove={(e) => e.stopPropagation()}
-            className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1.5 overscroll-contain custom-dt-scrollbar"
-          >
-            {/* Rain Status Card */}
-            <div className="bg-gradient-to-br from-sky-950/40 via-slate-800/80 to-slate-900/90 rounded-xl p-3 border border-sky-500/50 space-y-3 shadow-md">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="size-7 rounded-lg bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300">
-                    <CloudRain className="size-4" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-white">Precipitation Engine</div>
-                    <div className="text-[10px] text-sky-300/80">Selected Polygon Area</div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleToggleRain}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all ${
-                    rainActive
-                      ? "bg-sky-500 hover:bg-sky-400 text-slate-950 shadow-md shadow-sky-900/50"
-                      : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
-                  }`}
-                >
-                  {rainActive ? "Stop Rain" : "Start Rain"}
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/70">
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Status</span>
-                  <span className={`font-bold ${rainActive ? "text-emerald-400" : "text-slate-400"}`}>
-                    {rainActive ? "Pouring In Basin" : "Standby / Inactive"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Rainfall Rate</span>
-                  <span className="font-bold text-sky-300">{simRainIntensity} mm/h</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-cyan-800/70 bg-slate-950/70 p-3">
-              <label className="block text-[11px] font-semibold text-cyan-200">
-                Common forecast time · +{forecastHour}h
-                <input aria-label="Common forecast time" className="mt-1.5 w-full accent-cyan-400" type="range"
-                  min={0} max={11} step={1} value={forecastHour}
-                  onChange={event => setForecastHour(Number(event.target.value))} />
-              </label>
-              <p className="mt-1 text-[10px] text-slate-400">This time is shared with the GNN heatmap.</p>
-            </div>
-
-            {/* Rain Intensity Section */}
-            <div className="bg-slate-800/60 rounded-xl p-3 border border-slate-700/60 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                  <Sliders className="size-3.5 text-sky-400" />
-                  <span>Rain Intensity</span>
-                </div>
-                <span className="text-xs font-mono font-extrabold text-sky-300 bg-sky-950 px-2 py-0.5 rounded border border-sky-600/40">
-                  {simRainIntensity} mm/h
-                </span>
-              </div>
-
-              <input
-                type="range"
-                min={10}
-                max={150}
-                step={5}
-                value={simRainIntensity}
-                onChange={(e) => setSimRainIntensity(Number(e.target.value))}
-                className="w-full accent-sky-400 h-1.5 bg-slate-900 rounded-lg cursor-pointer"
-              />
-
-              <div className="grid grid-cols-3 gap-1.5">
-                {[
-                  { label: "Light", val: 30 },
-                  { label: "Heavy", val: 75 },
-                  { label: "Extreme", val: 120 },
-                ].map((p) => (
-                  <button
-                    key={p.label}
-                    type="button"
-                    onClick={() => setSimRainIntensity(p.val)}
-                    className={`text-xs py-1 rounded font-semibold transition-all cursor-pointer ${
-                      simRainIntensity === p.val
-                        ? "bg-sky-600 text-white font-bold shadow-xs"
-                        : "bg-slate-900/80 text-slate-300 hover:bg-slate-700 hover:text-white"
-                    }`}
-                  >
-                    {p.label} ({p.val})
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Wind Speed Section */}
-            <div className="bg-slate-800/60 rounded-xl p-3 border border-slate-700/60 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-200">Wind Dynamics</span>
-                <span className="text-xs font-mono text-slate-300">{simWindSpeed} km/h</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={60}
-                step={2}
-                value={simWindSpeed}
-                onChange={(e) => setSimWindSpeed(Number(e.target.value))}
-                className="w-full accent-cyan-400 h-1.5 bg-slate-900 rounded-lg cursor-pointer"
-              />
-              <div className="flex justify-between text-[9px] text-slate-400">
-                <span>Calm (0)</span>
-                <span>Breeze (30)</span>
-                <span>Gale (60 km/h)</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* 🗑️ CLICK-TO-DELETE BANNER */}
       {isDeleteMode && (
@@ -5152,7 +5758,7 @@ export function CesiumDigitalTwinViewer({
 
       {/* 📊 BUILDING FOOTPRINT ANALYTICS STATS PANEL */}
       {showBuildings && showBuildingStats && buildingFeatures.length > 0 && (
-        <div className="absolute top-14 left-3 z-20 w-80 bg-slate-900/95 backdrop-blur-md border border-orange-500/40 rounded-xl p-3 shadow-2xl text-white animate-in fade-in slide-in-from-top-2 duration-200">
+        <div className={`absolute top-14 ${forecastRailHidden ? "left-14" : "left-[276px]"} z-20 w-80 bg-slate-900/95 backdrop-blur-md border border-orange-500/40 rounded-xl p-3 shadow-2xl text-white animate-in fade-in slide-in-from-top-2 duration-200 transition-all`}>
           <div className="flex items-center justify-between border-b border-slate-700/70 pb-2">
             <div className="flex items-center gap-2">
               <div className="p-1 rounded bg-orange-500/20 border border-orange-500/40">
@@ -5183,7 +5789,7 @@ export function CesiumDigitalTwinViewer({
               <span className="size-2.5 rounded-full bg-orange-500 animate-pulse" />
               <div>
                 <div className="text-xs font-semibold text-orange-200">
-                  All Houses Monitored
+                  Mapped Building Footprints
                 </div>
                 <div className="text-[10px] text-slate-400">
                   Uniform Orange Twin Footprints
@@ -5194,14 +5800,14 @@ export function CesiumDigitalTwinViewer({
               <div className="text-base font-extrabold text-orange-400 font-mono">
                 {buildingFeatures.length}
               </div>
-              <div className="text-[9px] text-orange-300/80 font-medium">Clear of Paths</div>
+              <div className="text-[9px] text-orange-300/80 font-medium">3D Extruded Footprints</div>
             </div>
           </div>
 
           <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400 px-0.5">
             <span className="flex items-center gap-1">
               <span className="size-1.5 rounded-full bg-emerald-400" />
-              Path Clearance: Verified
+              Heights may be estimated
             </span>
             <span className="text-slate-500 font-mono">3D Extrusion Active</span>
           </div>
@@ -5542,6 +6148,128 @@ export function CesiumDigitalTwinViewer({
           </span>
         </div>
       </div>
+
+      {/* Sensor ID Prompt Modal for Master / Slave Nodes */}
+      {sensorPromptModal.open && (
+        <div
+          data-testid="sensor-id-modal"
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setSensorPromptModal((prev) => ({ ...prev, open: false }));
+            }
+          }}
+        >
+          <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl shadow-2xl max-w-md w-full p-6 text-slate-100 relative space-y-4">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`p-2.5 rounded-xl border ${
+                    sensorPromptModal.nodeType === "master"
+                      ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                      : "bg-cyan-500/10 border-cyan-500/30 text-cyan-400"
+                  }`}
+                >
+                  {sensorPromptModal.nodeType === "master" ? (
+                    <Radio className="size-6" />
+                  ) : (
+                    <Cpu className="size-6" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-wide">
+                    {sensorPromptModal.nodeType === "master"
+                      ? "Add Master Gateway Node"
+                      : "Add Slave Relay Node"}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Assign Sensor ID for live telemetry & DB monitoring
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-sensor-modal-btn"
+                onClick={() => setSensorPromptModal((prev) => ({ ...prev, open: false }))}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2 bg-slate-950/60 p-4 rounded-xl border border-slate-800">
+              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                Sensor ID <span className="text-cyan-400">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  data-testid="sensor-id-input"
+                  value={sensorPromptModal.sensorId}
+                  onChange={(e) =>
+                    setSensorPromptModal((prev) => ({ ...prev, sensorId: e.target.value }))
+                  }
+                  placeholder="e.g. node1"
+                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-cyan-500/50 rounded-lg text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition-all placeholder:text-slate-500"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      confirmSensorPlacement(
+                        sensorPromptModal.nodeType,
+                        sensorPromptModal.lat,
+                        sensorPromptModal.lng,
+                        sensorPromptModal.sensorId
+                      );
+                    }
+                  }}
+                />
+                <span className="absolute right-3 top-2.5 text-[11px] font-mono text-cyan-400/80 bg-cyan-950/80 px-1.5 py-0.5 rounded border border-cyan-800/40">
+                  Target Node
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Default ID is <code className="text-cyan-300 font-bold bg-cyan-950 px-1 py-0.5 rounded">node1</code>. Live telemetry packets from this sensor will stream continuously into the digital twin & dashboard.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                type="button"
+                data-testid="confirm-connect-sensor-btn"
+                onClick={() =>
+                  confirmSensorPlacement(
+                    sensorPromptModal.nodeType,
+                    sensorPromptModal.lat,
+                    sensorPromptModal.lng,
+                    sensorPromptModal.sensorId
+                  )
+                }
+                className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg hover:shadow-emerald-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CheckCircle2 className="size-4" />
+                <span>Connect Sensor & Deploy Node</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="pick-location-sensor-btn"
+                onClick={() => {
+                  setStagedSensorId(sensorPromptModal.sensorId || "node1");
+                  setIsPickingLocation(sensorPromptModal.nodeType);
+                  setSensorPromptModal((prev) => ({ ...prev, open: false }));
+                  toast.info(
+                    `Sensor ID [${sensorPromptModal.sensorId || "node1"}] staged! Click anywhere on the 3D map to place.`
+                  );
+                }}
+                className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-slate-600 text-slate-300 font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <MapPin className="size-3.5 text-amber-400" />
+                <span>Click Specific Location on 3D Globe</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

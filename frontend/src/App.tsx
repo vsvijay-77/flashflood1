@@ -26,7 +26,6 @@ const DigitalTwinPage = lazy(() => import("@/pages/OpsPages").then(m => ({ defau
 const ProfilePage = lazy(() => import("@/pages/OpsPages").then(m => ({ default: m.ProfilePage })));
 const ReportsPage = lazy(() => import("@/pages/OpsPages").then(m => ({ default: m.ReportsPage })));
 const RiskAssessmentPage = lazy(() => import("@/pages/OpsPages").then(m => ({ default: m.RiskAssessmentPage })));
-const SensorManagementPage = lazy(() => import("@/pages/OpsPages").then(m => ({ default: m.SensorManagementPage })));
 const SettingsPage = lazy(() => import("@/pages/OpsPages").then(m => ({ default: m.SettingsPage })));
 const UserManagementPage = lazy(() => import("@/pages/OpsPages").then(m => ({ default: m.UserManagementPage })));
 
@@ -60,7 +59,7 @@ export default function App() {
             <Route path="/alerts" element={<RoleBasedRoute allow={["admin", "gov_officer", "field_officer"]}><AlertsPage /></RoleBasedRoute>} />
             <Route path="/analytics" element={<RoleBasedRoute allow={["admin", "gov_officer"]}><AnalyticsPage /></RoleBasedRoute>} />
             <Route path="/reports" element={<ReportsPage />} />
-            <Route path="/sensors" element={<RoleBasedRoute allow={["admin"]}><SensorManagementPage /></RoleBasedRoute>} />
+            <Route path="/sensors" element={<Navigate to="/dashboard" replace />} />
             <Route path="/users" element={<RoleBasedRoute allow={["admin"]}><UserManagementPage /></RoleBasedRoute>} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/profile" element={<ProfilePage />} />

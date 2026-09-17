@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import networkx as nx
 from services.location_service import bbox_from_radius, haversine_distance_m, point_in_polygon
 from services.osm_tile_loader import osm_tile_loader
+from services.osm_geometry import geometry_intersects_polygon, join_rings, expand_polygon
 
 CACHE_DIR = Path(__file__).parent.parent / "cache" / "rivers"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,7 +60,7 @@ class OSMRiverService:
         pass
 
     def _cache_key(self, north: float, south: float, east: float, west: float) -> Path:
-        key_str = f"river_v2_{north:.4f}_{south:.4f}_{east:.4f}_{west:.4f}"
+        key_str = f"river_v4_{north:.6f}_{south:.6f}_{east:.6f}_{west:.6f}"
         hash_val = hashlib.md5(key_str.encode()).hexdigest()
         return CACHE_DIR / f"{hash_val}.json"
 
@@ -76,13 +77,12 @@ class OSMRiverService:
 
             features = geojson.get("features", [])
             if polygon and len(polygon) >= 3:
+                expanded_poly = expand_polygon(polygon, 0.025)
                 scoped_features = []
                 for feat in features:
-                    pts = _extract_points(feat.get("geometry", {}))
-                    if any(point_in_polygon(lat, lng, polygon) for lat, lng in pts):
+                    if geometry_intersects_polygon(feat.get("geometry", {}), expanded_poly):
                         scoped_features.append(feat)
-                if scoped_features:
-                    features = scoped_features
+                features = scoped_features
                 geojson = {
                     "type": "FeatureCollection",
                     "features": features,
@@ -129,21 +129,10 @@ class OSMRiverService:
             self._cache_key(broad_bbox["north"], broad_bbox["south"], broad_bbox["east"], broad_bbox["west"]),
             polygon,
         )
-        if broad_cache:
+        if broad_cache and broad_bbox["north"] >= north and broad_bbox["south"] <= south and broad_bbox["east"] >= east and broad_bbox["west"] <= west:
             return broad_cache
 
-        try:
-            elements = await self.fetch_waterway_elements_overpass(north, south, east, west)
-        except Exception as exc:
-            print(f"[OSMRiverService] Live waterway fetch error: {exc}")
-            if cache_file.exists():
-                try:
-                    with open(cache_file, "r") as f:
-                        cached = json.load(f)
-                    return self._reconstruct_graph(cached), cached.get("geojson", {})
-                except Exception:
-                    pass
-            elements = []
+        elements = await self.fetch_waterway_elements_overpass(north, south, east, west)
 
         if not elements:
             G = nx.DiGraph()
@@ -168,6 +157,28 @@ class OSMRiverService:
         # Generate full-way GeoJSON — all nodes per way → continuous polylines
         features = []
         seen_way_ids = set()
+        way_coordinates = {
+            element["id"]: [[nodes_dict[node][1], nodes_dict[node][0]] for node in element.get("nodes", []) if node in nodes_dict]
+            for element in elements if element.get("type") == "way"
+        }
+        for relation in elements:
+            tags = relation.get("tags", {})
+            if relation.get("type") != "relation" or tags.get("type") != "multipolygon":
+                continue
+            if not (tags.get("natural") == "water" or tags.get("water") or tags.get("landuse") in ("reservoir", "basin") or tags.get("waterway") == "riverbank"):
+                continue
+            members = [member for member in relation.get("members", []) if member.get("type") == "way"]
+            outer = join_rings([way_coordinates.get(member["ref"], []) for member in members if member.get("role") != "inner"])
+            inner = join_rings([way_coordinates.get(member["ref"], []) for member in members if member.get("role") == "inner"])
+            if not outer:
+                continue
+            polygons = [[ring, *[hole for hole in inner if point_in_polygon(hole[0][1], hole[0][0], [[point[1], point[0]] for point in ring])]] for ring in outer]
+            features.append({
+                "type": "Feature",
+                "properties": {"id": f"relation-{relation['id']}", "name": tags.get("name", ""), "waterway_type": tags.get("water", "water"), "is_water_body": True, "width_m": 0, "length_m": 0},
+                "geometry": {"type": "Polygon" if len(polygons) == 1 else "MultiPolygon", "coordinates": polygons[0] if len(polygons) == 1 else polygons},
+            })
+            seen_way_ids.update(member["ref"] for member in members)
 
         for el in elements:
             if el.get("type") != "way" or el["id"] in seen_way_ids:
@@ -216,6 +227,18 @@ class OSMRiverService:
             is_main_river = ww_type in ("river", "canal") and not is_water_body
             name = tags.get("name", "")
 
+            # If it is a closed ring representing a water body, emit as Polygon so 3D water surface can render
+            is_closed = len(coords) >= 4 and (
+                coords[0] == coords[-1] or
+                (abs(coords[0][0] - coords[-1][0]) < 1e-5 and abs(coords[0][1] - coords[-1][1]) < 1e-5)
+            )
+            if is_water_body and is_closed:
+                geom_type = "Polygon"
+                geom_coords = [coords]
+            else:
+                geom_type = "LineString"
+                geom_coords = coords
+
             features.append({
                 "type": "Feature",
                 "properties": {
@@ -224,12 +247,12 @@ class OSMRiverService:
                     "waterway_type": ww_type,
                     "is_water_body": is_water_body,
                     "is_main_river": is_main_river,
-                    "width_m": WATERWAY_WIDTHS.get(ww_type, 3.0),
+                    "width_m": self._waterway_width(tags, ww_type),
                     "length_m": 0.0,  # Computed client-side if needed
                 },
                 "geometry": {
-                    "type": "LineString",
-                    "coordinates": coords,
+                    "type": geom_type,
+                    "coordinates": geom_coords,
                 },
             })
 
@@ -244,6 +267,16 @@ class OSMRiverService:
 
         self._save_cache(cache_file, G, geojson)
         return G, geojson
+
+    @staticmethod
+    def _waterway_width(tags, waterway_type):
+        try:
+            width = float(str(tags.get("width", "")).split()[0])
+            if width > 0:
+                return min(width, 500)
+        except (ValueError, IndexError):
+            pass
+        return 18.0 if waterway_type == "river" else 5.0
 
     def _build_graph(
         self,

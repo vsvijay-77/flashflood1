@@ -1,3 +1,4 @@
+import { loadSelectedAreaNetworks } from "@/services/selectedAreaNetworks";
 import { useEffect, useRef, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import L from "leaflet";
@@ -34,6 +35,7 @@ import {
   CloudRain,
 } from "lucide-react";
 import SelectedAreaRainOverlay from "../simulation/SelectedAreaRainOverlay";
+import { loadSelectedAreaBuildings } from "@/services/selectedAreaBuildings";
 
 const RISK_COLORS: Record<string, { stroke: string; fill: string }> = {
   critical: { stroke: "#DC2626", fill: "#EF4444" },
@@ -119,6 +121,9 @@ export default function GISMap({
   const holder = useRef<HTMLDivElement | null>(null);
   const map = useRef<L.Map | null>(null);
   const overlay = useRef<L.LayerGroup | null>(null);
+  const selectedFeaturesLayer = useRef<L.LayerGroup | null>(null);
+  const [featureReload, setFeatureReload] = useState(0);
+  const [featureStatus, setFeatureStatus] = useState({ pending: 0, paths: 0, water: 0, buildings: 0, error: "" });
   const drawLayer = useRef<L.LayerGroup | null>(null);
   const searchLayer = useRef<L.LayerGroup | null>(null);
   const tiles = useRef<L.TileLayer | null>(null);
@@ -439,6 +444,7 @@ export default function GISMap({
     map.current = instance;
     setMapInstance(instance);
     overlay.current = L.layerGroup().addTo(instance);
+    selectedFeaturesLayer.current = L.layerGroup().addTo(instance);
     drawLayer.current = L.layerGroup().addTo(instance);
     searchLayer.current = L.layerGroup().addTo(instance);
 
@@ -459,6 +465,7 @@ export default function GISMap({
       map.current = null;
       setMapInstance(null);
       overlay.current = null;
+      selectedFeaturesLayer.current = null;
       drawLayer.current = null;
       searchLayer.current = null;
       tiles.current = null;
@@ -1186,6 +1193,43 @@ export default function GISMap({
     }
   }, [customAreas, selectedArea, layers.customAreas, layers.areaLabels, layers.boundaries]);
 
+  useEffect(() => {
+    const group = selectedFeaturesLayer.current;
+    if (!group || !mapInstance) return;
+    group.clearLayers();
+    if (!selectedAreaCoords || selectedAreaCoords.length < 3) return;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(750_000)]);
+    setFeatureStatus({ pending: 2, paths: 0, water: 0, buildings: 0, error: "" });
+    const failed = (name: string) => {
+      if (!controller.signal.aborted) setFeatureStatus(current => ({ ...current, error: current.error + name + " unavailable. " }));
+    };
+    const finish = () => {
+      if (!controller.signal.aborted) setFeatureStatus(current => ({ ...current, pending: Math.max(0, current.pending - 1) }));
+    };
+    void loadSelectedAreaNetworks({ polygon: selectedAreaCoords, area_id: selectedArea?.id }, signal).then(result => {
+      if (controller.signal.aborted) return;
+      if (result.status !== "success") throw new Error("Network extraction failed");
+      const roads = result.roads.geojson.features;
+      const water = result.rivers.geojson.features;
+      L.geoJSON({ type: "FeatureCollection", features: roads } as GeoJSON.FeatureCollection, {
+        style: { color: "#f59e0b", weight: 3, opacity: 0.95 }, interactive: false,
+      }).addTo(group);
+      L.geoJSON({ type: "FeatureCollection", features: water } as GeoJSON.FeatureCollection, {
+        style: { color: "#0284c7", weight: 3, fillColor: "#38bdf8", fillOpacity: 0.4 }, interactive: false,
+      }).addTo(group);
+      setFeatureStatus(current => ({ ...current, paths: roads.length, water: water.length }));
+      if (result.osm_loading?.complete === false) failed("Some network layers");
+    }).catch(() => failed("Paths/water")).finally(finish);
+    void loadSelectedAreaBuildings(selectedAreaCoords, controller.signal, undefined, selectedArea?.id).then(buildings => {
+      if (controller.signal.aborted) return;
+      L.geoJSON({ type: "FeatureCollection", features: buildings } as GeoJSON.FeatureCollection, {
+        style: { color: "#c2410c", weight: 1, fillColor: "#f97316", fillOpacity: 0.65 }, interactive: false,
+      }).addTo(group);
+      setFeatureStatus(current => ({ ...current, buildings: buildings.length }));
+    }).catch(() => failed("Buildings")).finally(finish);
+    return () => { controller.abort(); group.clearLayers(); };
+  }, [selectedAreaCoords, selectedArea?.id, mapInstance, featureReload]);
   return (
     <div
       ref={containerRef}
@@ -1193,6 +1237,11 @@ export default function GISMap({
       style={{ height: isFullscreen ? "100vh" : height }}
     >
       <div ref={holder} style={{ height: "100%", width: "100%" }} className="z-0 rounded-lg" data-testid={testId} />
+      {selectedAreaCoords && <div role="status" aria-label="Selected GIS area layers" className="absolute right-3 top-16 z-[1000] rounded-lg bg-white/95 p-3 text-xs text-slate-800 shadow-lg">
+        <div>{featureStatus.paths} paths · {featureStatus.water} rivers / water bodies · {featureStatus.buildings} buildings</div>
+        <div>{featureStatus.pending ? "Loading mapped features…" : featureStatus.error ? "Map data incomplete" : "Available mapped features loaded"}</div>
+        {featureStatus.error && <div className="text-amber-700">{featureStatus.error}<button type="button" className="underline" onClick={() => setFeatureReload(value => value + 1)}>Retry layers</button></div>}
+      </div>}
 
       {/* 🌧️ Selected Area Rain Simulation Overlay (Restricted 100% strictly inside selected boundary) */}
       <SelectedAreaRainOverlay

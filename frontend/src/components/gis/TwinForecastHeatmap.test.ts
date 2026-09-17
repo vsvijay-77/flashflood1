@@ -13,9 +13,9 @@ describe("terrain heatmap raster", () => {
     };
     vi.stubGlobal("document", { createElement: () => ({ getContext: () => ctx, toDataURL: () => "data:image/png;base64,test" }) });
     surfaceImage([[10, 77], [11, 77], [10, 78]], [10, 11, 77, 78], [0, 0, 1, 1], 2);
-    expect(Array.from(raster!.data.slice(0, 4))).toEqual([220, 38, 38, 255]);
+    expect(Array.from(raster!.data.slice(0, 4))).toEqual([220, 38, 38, 245]);
     const bottom = 511 * 512 * 4;
-    expect(Array.from(raster!.data.slice(bottom, bottom + 4))).toEqual([37, 99, 235, 255]);
+    expect(Array.from(raster!.data.slice(bottom, bottom + 4))).toEqual([37, 99, 235, 0]);
     const middle = (256 * 512 + 256) * 4;
     expect(raster!.data[middle]).toBeGreaterThan(100);
     expect(ctx.globalCompositeOperation).toBe("destination-in");

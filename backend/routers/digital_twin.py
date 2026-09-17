@@ -844,3 +844,92 @@ async def surface_forecast(request: SurfaceForecastRequest):
             request.south, request.north, request.west, request.east, frames, request.size)
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Forecast unavailable. Check weather access and the configured model checkpoint, then retry.") from exc
+
+
+@router.delete("/network-features")
+async def delete_digital_twin_network_features(
+    area_key: Optional[str] = Query(None),
+    area_id: Optional[str] = Query(None),
+):
+    """Deletes records from digital_twin_network_features in Supabase.
+    If area_id or area_key is provided, deletes records matching that area ID.
+    Otherwise, deletes all records in the table.
+    """
+    target = area_id or area_key
+    try:
+        from lib.db import supabase
+        if target:
+            # Delete by exact area_key, prefixed area_key (dt-area-{target}), or by ID prefix
+            res = (
+                supabase.table("digital_twin_network_features")
+                .delete()
+                .or_(f"area_key.eq.{target},area_key.eq.dt-area-{target},id.like.{target}%")
+                .execute()
+            )
+        else:
+            res = supabase.table("digital_twin_network_features").delete().neq("id", "_none_").execute()
+        deleted_count = len(res.data) if res.data else 0
+        return {
+            "status": "success",
+            "message": f"Successfully deleted {deleted_count} records from digital_twin_network_features",
+            "deleted_count": deleted_count,
+            "area_id": target,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete digital_twin_network_features: {exc}")
+
+
+# Optional trained Hugging Face graph-transformer arrival head.
+from fastapi import Depends
+from lib.auth import require_roles
+from pydantic import model_validator
+from services.arrival_model import model_status, predict_arrivals
+
+
+class ArrivalGraphRequest(BaseModel):
+    cols: int = Field(ge=1, le=128)
+    rows: int = Field(ge=1, le=128)
+    bed: list[float] = Field(max_length=16384)
+    depth: list[float] = Field(max_length=16384)
+    inside: list[int] = Field(max_length=16384)
+    sources: list[int] = Field(max_length=16384)
+    paths: list[int] = Field(max_length=16384)
+    dx: float = Field(gt=0, le=100000, allow_inf_nan=False)
+    dy: float = Field(gt=0, le=100000, allow_inf_nan=False)
+    elapsed: float = Field(ge=0, allow_inf_nan=False)
+    horizonSeconds: float = Field(gt=0, le=21600, allow_inf_nan=False)
+    roughness: float = Field(ge=0.005, le=0.2, allow_inf_nan=False)
+    netRainfall: float = Field(ge=0, le=1000, allow_inf_nan=False)
+    stormRemaining: float = Field(ge=0, le=21600, allow_inf_nan=False)
+    sourceRise: float = Field(ge=0, le=10, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_grid(self):
+        count = self.cols * self.rows
+        for values in [self.bed, self.depth, self.inside, self.sources, self.paths]:
+            if len(values) != count or not all(math.isfinite(value) for value in values):
+                raise ValueError("Grid arrays must be finite and match rows × cols")
+        if any(value < 0 for value in self.depth):
+            raise ValueError("Depth must be nonnegative")
+        if any(value not in (0, 1) for mask in [self.inside, self.sources, self.paths] for value in mask):
+            raise ValueError("Masks must contain 0 or 1")
+        return self
+
+
+@router.get("/arrival-model")
+def arrival_model_status(user: dict = Depends(require_roles("admin", "gov_officer"))):
+    return model_status()
+
+
+@router.post("/arrival-times")
+def arrival_times(payload: ArrivalGraphRequest, user: dict = Depends(require_roles("admin", "gov_officer"))):
+    status = model_status()
+    if not status["available"]:
+        raise HTTPException(status_code=503, detail=status["reason"])
+    try:
+        arrivals = predict_arrivals(payload.model_dump())
+    except Exception:
+        raise HTTPException(status_code=503, detail="Arrival model inference failed; use hydraulic rollout")
+    return {"arrivals": arrivals, "model": "gnn_transformer", "source": status.get("source"),
+            "revision": status.get("revision"), "horizon": payload.elapsed + payload.horizonSeconds,
+            "throughSeconds": payload.elapsed + payload.horizonSeconds, "complete": True}

@@ -80,7 +80,11 @@ export function FlashFloodControlPanel(props: Props) {
     </div>
     {props.showGraph && !props.open && <div role="status" aria-label="Terrain flow graph legend" className="absolute right-3 top-32 z-30 max-w-xs rounded-lg border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-200">
       <div>{parameters.flowModel === "gnn" ? "Experimental GNN" : "Physics"} · {props.graphCounts.nodes} nodes · {props.graphCounts.edges} edges</div>
-      <div className="mt-1"><span className="text-white font-semibold">White</span> Edges · <span className="text-slate-400 font-semibold">Black</span> Nodes</div>
+      <div className="mt-1 flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-0.5 w-3.5 bg-white rounded"></span><span className="font-semibold text-white">White</span> Edges</span>
+        <span>·</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full bg-black border border-slate-500 shadow-sm"></span><span className="font-semibold text-slate-200">Dark Circle</span> Nodes</span>
+      </div>
       <div className="mt-1 text-slate-400">Showing {props.graphCounts.displayedEdges} edges across 3D terrain grid.</div>
     </div>}
     {props.open && <div className="absolute inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" onWheel={event => event.stopPropagation()}>

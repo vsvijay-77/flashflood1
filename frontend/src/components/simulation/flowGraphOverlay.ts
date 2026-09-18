@@ -15,46 +15,77 @@ import type { WaterPhysicsState } from "./waterPhysics";
  *  - When rainfall is at full high, the illuminated grid blankets the terrain according
  *    to elevation, showing complete flood inundation extent.
  */
-export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float32Array, paths: Uint8Array) {
-  // Select row and column step to form a continuous orthogonal horizontal & vertical line grid
-  const rowStep = Math.max(1, Math.ceil(Math.sqrt(state.totalCells / 600)));
-  const colStep = rowStep;
+/**
+ * Creates an antialiased circular dot DataTexture for crisp, pitch-black circular node dots.
+ * Using DataTexture avoids DOM canvas dependencies and renders seamlessly in both browser and Vitest.
+ */
+function createCircleTexture(): THREE.DataTexture {
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  const center = (size - 1) / 2;
+  const radius = size * 0.44;
+  const edgeWidth = 1.2;
 
-  // Gather edges strictly along selected horizontal rows and vertical columns
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4;
+      const dx = x - center;
+      const dy = y - center;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist <= radius - edgeWidth) {
+        // Solid jet black core
+        data[idx + 0] = 0;
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = 255;
+      } else if (dist <= radius) {
+        // Crisp antialiased boundary
+        const alpha = Math.max(0, Math.min(1, (radius - dist) / edgeWidth));
+        data[idx + 0] = 0;
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = Math.round(alpha * 255);
+      } else {
+        // Outside circle
+        data[idx + 0] = 0;
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = 0;
+      }
+    }
+  }
+
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float32Array, paths: Uint8Array) {
+  // Gather all orthogonal (horizontal and vertical) edges across the simulation domain
   const edgeIndices: number[] = [];
   for (let i = 0; i < state.edges.length; i++) {
     const edge = state.edges[i];
     if (edge.isDiagonal) continue;
-    const r = Math.floor(edge.from / state.cols);
-    const c = edge.from % state.cols;
-    if (edge.isX) {
-      if (r % rowStep === 0) {
-        edgeIndices.push(i);
-      }
-    } else {
-      if (c % colStep === 0) {
-        edgeIndices.push(i);
-      }
-    }
+    edgeIndices.push(i);
   }
 
   // Pre-allocate buffers: each edge = 1 line segment = 2 vertices × 3 floats each
   const positions = new Float32Array(edgeIndices.length * 6);
   const colors = new Float32Array(edgeIndices.length * 6);
 
-  // Grid node dots — placed at the intersections of selected horizontal and vertical lines
+  // Display all nodes in the simulation domain
   const nodeIndices: number[] = [];
-  for (let r = 0; r < state.rows; r += rowStep) {
-    for (let c = 0; c < state.cols; c += colStep) {
-      const idx = r * state.cols + c;
-      if (state.insideMask[idx]) {
-        nodeIndices.push(idx);
-      }
+  for (let idx = 0; idx < state.totalCells; idx++) {
+    if (!state.insideMask || state.insideMask[idx]) {
+      nodeIndices.push(idx);
     }
   }
   const nodes = nodeIndices;
   const nodePositions = new Float32Array(nodes.length * 3);
-
 
   // Line geometry — continuous axis-aligned grid segments
   const lineGeometry = new THREE.BufferGeometry();
@@ -71,9 +102,15 @@ export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float3
     opacity: 0.95,
     depthWrite: false,
   });
+
+  // Darker circular node dot material
+  const circleTexture = createCircleTexture();
   const pointMaterial = new THREE.PointsMaterial({
-    color: 0x000000,
-    size: 5.0,
+    color: 0xffffff,
+    map: circleTexture,
+    transparent: true,
+    alphaTest: 0.02,
+    size: 7.5,
     sizeAttenuation: false,
     depthWrite: false,
   });
@@ -141,11 +178,11 @@ export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float3
       colors[offset + 5] = brightness;
     }
 
-    // Update node dots on terrain surface (Black node dots sitting on top of white grid intersections)
+    // Update node dots on terrain surface (Dark circular node dots sitting on top of white grid intersections)
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
       nodePositions[i * 3 + 0] = terrain[node * 3];
-      nodePositions[i * 3 + 1] = terrain[node * 3 + 1] + lift + 0.15 + (current.depth[node] || 0);
+      nodePositions[i * 3 + 1] = terrain[node * 3 + 1] + lift + 0.25 + (current.depth[node] || 0);
       nodePositions[i * 3 + 2] = terrain[node * 3 + 2];
     }
 
@@ -166,6 +203,7 @@ export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float3
       pointGeometry.dispose();
       lineMaterial.dispose();
       pointMaterial.dispose();
+      circleTexture.dispose();
     },
   };
 }

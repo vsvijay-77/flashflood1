@@ -68,12 +68,12 @@ export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float3
   const lineMaterial = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.95,
     depthWrite: false,
   });
   const pointMaterial = new THREE.PointsMaterial({
-    color: "#64748b",
-    size: 2.0,
+    color: 0x000000,
+    size: 5.0,
     sizeAttenuation: false,
     depthWrite: false,
   });
@@ -128,48 +128,24 @@ export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float3
       positions[offset + 4] = ey;
       positions[offset + 5] = ez;
 
-      // Dynamic flood depth coloring respecting elevation
-      const isChannel = current.isSource[a] || current.isSource[b];
-      const isRoad = paths[a] || paths[b];
+      // White edges:
+      // Flooded/flowing edges are brilliant solid white (1.0, 1.0, 1.0)
+      // Dry terrain edges are crisp clear white (0.85, 0.85, 0.85)
+      const brightness = (maxDepth >= 0.04 || isFlooded || isFlowing) ? 1.0 : 0.85;
 
-      let cr: number, cg: number, cb: number;
-      let brightness: number;
-
-      if (maxDepth >= 0.5) {
-        // Deep submerged zone: glowing deep azure cyan
-        cr = 0.05; cg = 0.78; cb = 1.0;
-        brightness = 1.0;
-      } else if (maxDepth >= 0.1) {
-        // Moderate flood inundation: vivid electric turquoise
-        cr = 0.15; cg = 0.92; cb = 0.98;
-        brightness = 0.95;
-      } else if (isFlooded || isFlowing) {
-        // Shallow active flow: bright aqua
-        cr = 0.22; cg = 0.88; cb = 0.82;
-        brightness = 0.85;
-      } else if (isRoad) {
-        // Evacuation path / road: amber
-        cr = 0.95; cg = 0.65; cb = 0.15;
-        brightness = 0.60;
-      } else {
-        // Dry terrain — same color for ALL dry cells including channels (no pre-simulation blue lines)
-        cr = 0.18; cg = 0.68; cb = 0.42;
-        brightness = 0.25;
-      }
-
-      const r = cr * brightness;
-      const g = cg * brightness;
-      const b_ = cb * brightness;
-
-      colors[offset + 0] = r; colors[offset + 1] = g; colors[offset + 2] = b_;
-      colors[offset + 3] = r; colors[offset + 4] = g; colors[offset + 5] = b_;
+      colors[offset + 0] = brightness;
+      colors[offset + 1] = brightness;
+      colors[offset + 2] = brightness;
+      colors[offset + 3] = brightness;
+      colors[offset + 4] = brightness;
+      colors[offset + 5] = brightness;
     }
 
-    // Update node dots on terrain surface
+    // Update node dots on terrain surface (Black node dots sitting on top of white grid intersections)
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
       nodePositions[i * 3 + 0] = terrain[node * 3];
-      nodePositions[i * 3 + 1] = terrain[node * 3 + 1] + lift + (current.depth[node] || 0);
+      nodePositions[i * 3 + 1] = terrain[node * 3 + 1] + lift + 0.15 + (current.depth[node] || 0);
       nodePositions[i * 3 + 2] = terrain[node * 3 + 2];
     }
 

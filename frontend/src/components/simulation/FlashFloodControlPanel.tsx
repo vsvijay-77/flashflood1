@@ -80,9 +80,8 @@ export function FlashFloodControlPanel(props: Props) {
     </div>
     {props.showGraph && !props.open && <div role="status" aria-label="Terrain flow graph legend" className="absolute right-3 top-32 z-30 max-w-xs rounded-lg border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-200">
       <div>{parameters.flowModel === "gnn" ? "Experimental GNN" : "Physics"} · {props.graphCounts.nodes} nodes · {props.graphCounts.edges} edges</div>
-      <div className="mt-1"><span className="text-cyan-300">Streams</span> · <span className="text-amber-300">Paths</span> · <span className="text-emerald-300">Terrain</span></div>
-      <div className="mt-1">Arrows follow water-surface slope. Bright arrows carry water; dim arrows show dry connections.</div>
-      <div className="mt-1 text-slate-400">Showing {props.graphCounts.displayedEdges} edges to limit lag.</div>
+      <div className="mt-1"><span className="text-white font-semibold">White</span> Edges · <span className="text-slate-400 font-semibold">Black</span> Nodes</div>
+      <div className="mt-1 text-slate-400">Showing {props.graphCounts.displayedEdges} edges across 3D terrain grid.</div>
     </div>}
     {props.open && <div className="absolute inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" onWheel={event => event.stopPropagation()}>
       <section role="dialog" aria-modal="true" aria-labelledby="flash-flood-title" className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-cyan-500/40 bg-slate-950 text-white shadow-2xl">

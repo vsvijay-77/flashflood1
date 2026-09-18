@@ -21,6 +21,43 @@ describe("WaterPhysicsSimulation Engine", () => {
     expect(simulation.state.totalVolumeM3).toBeCloseTo(400, 3);
   });
 
+  it("carries water through diagonal downhill terrain without breaking the channel", () => {
+    const simulation = new WaterPhysicsSimulation(
+      { cols: 3, rows: 3, dx: 10 },
+      [9, 9, 9, 9, 5, 9, 9, 9, 0],
+      undefined,
+      undefined,
+      [2, 0, 0, 0, 0, 0, 0, 0, 0]
+    );
+    simulation.advance(12, 1, 0);
+    expect(simulation.state.depth[4]).toBeGreaterThan(0.01);
+    expect(simulation.state.depth[8]).toBeGreaterThan(0.001);
+    expect(simulation.state.velocityX[4]).toBeGreaterThan(0);
+    expect(simulation.state.velocityY[4]).toBeGreaterThan(0);
+  });
+
+  it("bridges a shallow valley cell between wet neighbours without crossing a high ridge", () => {
+    const valley = new WaterPhysicsSimulation(
+      { cols: 3, rows: 3, dx: 10 },
+      new Array(9).fill(0),
+      undefined,
+      undefined,
+      [0, 0, 0, 0, 0, 0, 0.10, 0, 0.10]
+    );
+    valley.stepPhysics(0.01);
+    expect(valley.state.depth[4]).toBeGreaterThan(0.01);
+
+    const ridge = new WaterPhysicsSimulation(
+      { cols: 3, rows: 3, dx: 10 },
+      [0, 0, 0, 0, 1, 0, 0, 0, 0],
+      undefined,
+      undefined,
+      [0, 0, 0, 0, 0, 0, 0.10, 0, 0.10]
+    );
+    ridge.stepPhysics(0.01);
+    expect(ridge.state.depth[4]).toBe(0);
+  });
+
   it("adds rainfall in millimetres per hour only inside the selected area", () => {
     const simulation = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 10, dy: 20 }, [0, 0], new Uint8Array([1, 0]), undefined, [0, 0]);
     simulation.advance(60, 1, 0, 120);

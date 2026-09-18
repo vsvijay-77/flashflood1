@@ -406,7 +406,7 @@ export function DigitalTwinPage() {
                 height="620px"
                 onViewInGIS={() => setTwinViewMode("gis")}
                 isRaining={isRainActive}
-                rainfallIntensity={rainfall}
+                rainfallIntensity={isRainActive ? rainfall : 0}
                 windSpeed={wind}
                 onToggleRain={(val) => setIsRainActive(val)}
               />
@@ -419,7 +419,7 @@ export function DigitalTwinPage() {
                 selectedArea={activeArea}
                 focusedArea={activeArea}
                 rainActive={isRainActive}
-                rainfallIntensity={rainfall}
+                rainfallIntensity={isRainActive ? rainfall : 0}
                 onToggleRain={(val) => setIsRainActive(val)}
                 onSelectArea={(area) => {
                   if (area) {

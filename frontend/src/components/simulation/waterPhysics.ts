@@ -13,6 +13,7 @@
  */
 
 import { predictEdgeDischarge } from "./terrainFlowGnn";
+import { precomputeHydrology, type HydrologicalPrecomputedGrid } from "./hydrologyPrecompute";
 
 export interface SimulationConfig {
   cols: number;
@@ -30,6 +31,10 @@ export interface CellEdge {
   from: number;
   to: number;
   isX: boolean; // true if horizontal edge (dx), false if vertical edge (dy)
+  isDiagonal?: boolean;
+  distance: number;
+  directionX: number;
+  directionY: number;
   discharge: number; // m²/s
 }
 
@@ -64,6 +69,7 @@ export class WaterPhysicsSimulation {
   private countY: Uint8Array;
   public config: Required<SimulationConfig>;
   public state: WaterPhysicsState;
+  public hydrology: HydrologicalPrecomputedGrid;
 
   constructor(
     config: SimulationConfig,
@@ -72,6 +78,7 @@ export class WaterPhysicsSimulation {
     sourceMask?: Uint8Array | boolean[],
     initialDepths?: Float32Array | number[],
     pathMask?: Uint8Array,
+    hydrology?: HydrologicalPrecomputedGrid,
   ) {
     this.config = {
       cols: config.cols,
@@ -81,7 +88,8 @@ export class WaterPhysicsSimulation {
       manningN: config.manningN ?? 0.032,
       gravity: config.gravity ?? 9.81,
       cflSafety: config.cflSafety ?? 0.6,
-      maxSubstepsPerFrame: config.maxSubstepsPerFrame ?? 16,
+      // 60x playback needs roughly nine stable 0.2 s steps per rendered frame.
+      maxSubstepsPerFrame: config.maxSubstepsPerFrame ?? 12,
       flowModel: config.flowModel ?? "physics",
     };
 
@@ -106,16 +114,36 @@ export class WaterPhysicsSimulation {
       inside[i] = insideMask ? (insideMask[i] ? 1 : 0) : 1;
       const isSrc = sourceMask ? (sourceMask[i] ? 1 : 0) : 0;
       isSource[i] = isSrc;
-      const d = inside[i] ? Math.max(0, initialDepths?.[i] ?? (isSrc ? 1.8 : 0)) : 0;
+      // When initialDepths is provided, use it directly. The visual river network
+      // is drawn from its source vectors; this hydraulic layer starts dry.
+      const d = inside[i] ? Math.max(0, initialDepths?.[i] ?? 0) : 0;
       depth[i] = d;
       initialDepth[i] = d;
-      initialSourceDepth[i] = d;
+      // initialSourceDepth is the stable level used by injectSourceRise().
+      // Vector river rendering handles the resting water appearance.
+      initialSourceDepth[i] = d > 0 ? d : (isSrc && inside[i] ? 0.025 : 0);
     }
 
-    // Build grid edges across ALL cells inside the marked boundary so water can flow freely downhill
+    this.hydrology = hydrology ?? precomputeHydrology({
+      cols: this.config.cols,
+      rows: this.config.rows,
+      dx: this.config.dx,
+      dy: this.config.dy,
+      bedElevations: bed,
+      insideMask: inside,
+      waterBodyMask: isSource,
+      pathMask: this.pathMask,
+    });
+
+    // Build all eight neighbor connections. The terrain model already uses D8
+    // drainage, so the live solver must do the same to avoid broken diagonal
+    // mountain streams and disconnected flood fronts.
     const edges: CellEdge[] = [];
     const cols = this.config.cols;
     const rows = this.config.rows;
+    const diagonalDistance = Math.hypot(this.config.dx, this.config.dy);
+    const diagonalX = this.config.dx / diagonalDistance;
+    const diagonalY = this.config.dy / diagonalDistance;
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -125,7 +153,7 @@ export class WaterPhysicsSimulation {
         if (c + 1 < cols) {
           const to = r * cols + (c + 1);
           if (inside[from] && inside[to]) {
-            edges.push({ from, to, isX: true, discharge: 0 });
+            edges.push({ from, to, isX: true, distance: this.config.dx, directionX: 1, directionY: 0, discharge: 0 });
           }
         }
 
@@ -133,7 +161,21 @@ export class WaterPhysicsSimulation {
         if (r + 1 < rows) {
           const to = (r + 1) * cols + c;
           if (inside[from] && inside[to]) {
-            edges.push({ from, to, isX: false, discharge: 0 });
+            edges.push({ from, to, isX: false, distance: this.config.dy, directionX: 0, directionY: 1, discharge: 0 });
+          }
+        }
+
+        if (r + 1 < rows && c + 1 < cols) {
+          const to = (r + 1) * cols + (c + 1);
+          if (inside[from] && inside[to]) {
+            edges.push({ from, to, isX: false, isDiagonal: true, distance: diagonalDistance, directionX: diagonalX, directionY: diagonalY, discharge: 0 });
+          }
+        }
+
+        if (r + 1 < rows && c > 0) {
+          const to = (r + 1) * cols + (c - 1);
+          if (inside[from] && inside[to]) {
+            edges.push({ from, to, isX: false, isDiagonal: true, distance: diagonalDistance, directionX: -diagonalX, directionY: diagonalY, discharge: 0 });
           }
         }
       }
@@ -195,13 +237,31 @@ export class WaterPhysicsSimulation {
     const cellArea = dx * this.config.dy;
     const effectiveRise = Math.max(0, sourceRiseM);
 
+    if (effectiveRise <= 0) {
+      for (let i = 0; i < totalCells; i++) {
+        if (!insideMask[i]) continue;
+        if (isSource[i] && depth[i] > initialSourceDepth[i]) {
+          const drainRate = Math.min(depth[i] - initialSourceDepth[i], 0.20 * dt);
+          depth[i] -= drainRate;
+        }
+      }
+      return;
+    }
+
     for (let i = 0; i < totalCells; i++) {
-      if (insideMask[i] && isSource[i]) {
+      if (!insideMask[i]) continue;
+      // Inflow enters at the mapped river/stream channels
+      if (isSource[i]) {
         const targetDepth = initialSourceDepth[i] + effectiveRise;
         if (depth[i] < targetDepth) {
-          const riseRate = Math.min(targetDepth - depth[i], (0.8 + 0.4 * effectiveRise) * dt);
+          // A restrained inflow lets the flood front emerge from waterways over
+          // Gradual rise rate: river water swells smoothly and overtops banks m² by m²
+          const riseRate = Math.min(targetDepth - depth[i], (0.08 + 0.04 * Math.min(effectiveRise, 4.0)) * dt);
           depth[i] += riseRate;
           this.state.injectedVolumeM3 += riseRate * cellArea;
+        } else if (depth[i] > targetDepth) {
+          const drainRate = Math.min(depth[i] - targetDepth, 0.05 * dt);
+          depth[i] -= drainRate;
         }
       }
     }
@@ -218,13 +278,16 @@ export class WaterPhysicsSimulation {
     let remainingTime = totalSimTime;
     const startedAt = performance.now();
 
+    // Compute CFL timestep once per frame (O(1) calculation)
+    const cflDt = this.computeCFLTimestep();
+
     let stepCount = 0;
     while (remainingTime > 1e-8) {
       if (stepCount > 0 && Number.isFinite(budgetMs) &&
           (stepCount >= this.config.maxSubstepsPerFrame || performance.now() - startedAt >= budgetMs)) break;
-      const dt = Math.min(remainingTime, this.computeCFLTimestep());
+      const dt = Math.min(remainingTime, cflDt);
       this.stepPhysics(dt);
-      if (sourceRiseM > 0) {
+      if (sourceRiseM >= 0) {
         this.injectSourceRise(sourceRiseM, dt);
       }
       if (rainfallMmH > 0) {
@@ -278,18 +341,28 @@ export class WaterPhysicsSimulation {
       }
 
       // Water surface gradient from high to low terrain: (headB - headA)
-      const distance = edge.isX ? dx : this.config.dy;
+      const distance = edge.distance;
       const gradient = (headB - headA) / distance;
+
+      // Scale Manning roughness by stream hierarchy:
+      // Major river channels: lower friction (factor 2.0-3.0, smooth bed)
+      // Tributary streams: moderate friction (factor 1.4-2.0)
+      // Overland terrain: higher friction (factor 0.7-1.0, vegetated)
+      const riverFactorA = this.hydrology ? this.hydrology.riverFactor[a] : 1.0;
+      const riverFactorB = this.hydrology ? this.hydrology.riverFactor[b] : 1.0;
+      const avgRiverFactor = 0.5 * (riverFactorA + riverFactorB);
+      const effectiveN = n / Math.max(0.4, avgRiverFactor);
+
       const friction =
         1 +
-        (g * dt * n * n * Math.abs(edge.discharge)) /
+        (g * dt * effectiveN * effectiveN * Math.abs(edge.discharge)) /
           Math.pow(Math.max(0.02, waterDepth), 7 / 3);
 
       // Downhill momentum equation
       if (this.config.flowModel === "gnn") {
         const channel = this.state.isSource[a] || this.state.isSource[b];
         const path = this.pathMask[a] || this.pathMask[b];
-        const effectiveRoughness = n * (channel ? 0.7 : path ? 0.85 : 1);
+        const effectiveRoughness = effectiveN * (channel ? 0.7 : path ? 0.85 : 1);
         edge.discharge = -Math.sign(gradient) * predictEdgeDischarge(waterDepth, Math.abs(gradient), effectiveRoughness);
       } else {
         edge.discharge = (edge.discharge - g * waterDepth * dt * gradient) / friction;
@@ -300,7 +373,16 @@ export class WaterPhysicsSimulation {
       const available = depth[donor] * distance;
 
       const requested = Math.abs(edge.discharge) * dt;
-      const limited = Math.min(requested, available);
+      // Over dry land margins, limit transfer rate so expansion creeps m² by m² visibly
+      const shallowMargin = Math.min(depth[a], depth[b]);
+      const wettingDepth = Math.max(depth[a], depth[b]);
+      const wettingProgress = Math.min(1, Math.max(0, (wettingDepth - 0.01) / 0.11));
+      const wettingFactor = wettingProgress * wettingProgress * (3 - 2 * wettingProgress);
+      const isOverlandExpansion = shallowMargin < 0.08;
+      const transferLimit = isOverlandExpansion
+        ? available * Math.min(1.0, (0.16 + 0.48 * wettingFactor) * dt)
+        : available;
+      const limited = Math.min(requested, transferLimit);
 
       edge.discharge = Math.sign(edge.discharge) * (limited / Math.max(1e-5, dt));
     }
@@ -311,7 +393,7 @@ export class WaterPhysicsSimulation {
     totalOutflow.fill(0);
 
     for (const edge of edges) {
-      const distance = edge.isX ? dx : this.config.dy;
+      const distance = edge.distance;
       if (edge.discharge > 0) {
         totalOutflow[edge.from] += edge.discharge * dt / distance;
       } else if (edge.discharge < 0) {
@@ -337,7 +419,7 @@ export class WaterPhysicsSimulation {
       }
 
       edge.discharge = flow / dt;
-      const distance = edge.isX ? dx : this.config.dy;
+      const distance = edge.distance;
       delta[edge.from] -= flow / distance;
       delta[edge.to] += flow / distance;
     }
@@ -353,13 +435,69 @@ export class WaterPhysicsSimulation {
       }
       delta[i] = 0;
     }
+
+    this.bridgeWettingGaps();
+  }
+
+  /**
+   * Smooths isolated dry cells between nearby wet valley cells. The bridge is
+   * conservative and refuses to cross a terrain lip, so it removes rendering
+   * gaps without turning separate basins into one continuous lake.
+   */
+  private bridgeWettingGaps(): void {
+    const { cols, rows, bed, depth, insideMask } = this.state;
+    const adjustments = new Float32Array(this.state.totalCells);
+    const neighbourOffsets = [
+      [-1, -1], [0, -1], [1, -1],
+      [-1, 0],           [1, 0],
+      [-1, 1],  [0, 1],  [1, 1],
+    ];
+
+    for (let row = 1; row < rows - 1; row++) {
+      for (let column = 1; column < cols - 1; column++) {
+        const index = row * cols + column;
+        if (!insideMask[index] || depth[index] >= 0.014) continue;
+
+        const contributors: number[] = [];
+        let depthSum = 0;
+        for (const [columnOffset, rowOffset] of neighbourOffsets) {
+          const neighbour = (row + rowOffset) * cols + column + columnOffset;
+          if (!insideMask[neighbour] || depth[neighbour] < 0.028) continue;
+          // Do not bridge across a bank or ridge that is materially higher
+          // than the adjacent wet water surface.
+          if (bed[index] > bed[neighbour] + depth[neighbour] + 0.12) continue;
+          contributors.push(neighbour);
+          depthSum += depth[neighbour];
+        }
+
+        if (contributors.length < 2) continue;
+        const targetDepth = Math.min(0.045, (depthSum / contributors.length) * 0.32);
+        const required = targetDepth - depth[index];
+        if (required <= 1e-5) continue;
+
+        let available = 0;
+        for (const neighbour of contributors) available += Math.max(0, depth[neighbour] - 0.018);
+        if (available <= 1e-5) continue;
+
+        const transferred = Math.min(required, available * 0.20);
+        adjustments[index] += transferred;
+        for (const neighbour of contributors) {
+          const share = Math.max(0, depth[neighbour] - 0.018) / available;
+          adjustments[neighbour] -= transferred * share;
+        }
+      }
+    }
+
+    for (let i = 0; i < depth.length; i++) {
+      if (adjustments[i] !== 0) depth[i] = Math.max(0, depth[i] + adjustments[i]);
+    }
   }
 
   /**
    * Calculates maximum stable timestep based on Courant-Friedrichs-Lewy (CFL) condition.
    */
   public computeCFLTimestep(): number {
-    const { depth, totalCells } = this.state;
+    const { depth, edges, totalCells } = this.state;
     const { dx, gravity, cflSafety } = this.config;
 
     let maxWaveSpeed = 0.5;
@@ -370,10 +508,14 @@ export class WaterPhysicsSimulation {
       }
     }
 
-    for (const edge of this.state.edges) {
+    for (let e = 0; e < edges.length; e++) {
+      const edge = edges[e];
       const donor = edge.discharge >= 0 ? edge.from : edge.to;
-      if (depth[donor] > 0.005) maxWaveSpeed = Math.max(maxWaveSpeed,
-        Math.sqrt(gravity * depth[donor]) + Math.abs(edge.discharge) / depth[donor]);
+      const d = depth[donor];
+      if (d > 0.005) {
+        const edgeSpeed = Math.sqrt(gravity * d) + Math.abs(edge.discharge) / d;
+        if (edgeSpeed > maxWaveSpeed) maxWaveSpeed = edgeSpeed;
+      }
     }
     const cflDt = (cflSafety * Math.min(dx, this.config.dy)) / maxWaveSpeed;
     return Math.min(0.20, cflDt);
@@ -396,17 +538,14 @@ export class WaterPhysicsSimulation {
       const avgDepth = Math.max(0.02, 0.5 * (depth[a] + depth[b]));
       const v = edge.discharge / avgDepth;
 
-      if (edge.isX) {
-        velocityX[a] += v;
-        velocityX[b] += v;
-        countX[a]++;
-        countX[b]++;
-      } else {
-        velocityY[a] += v;
-        velocityY[b] += v;
-        countY[a]++;
-        countY[b]++;
-      }
+      velocityX[a] += v * edge.directionX;
+      velocityX[b] += v * edge.directionX;
+      velocityY[a] += v * edge.directionY;
+      velocityY[b] += v * edge.directionY;
+      countX[a]++;
+      countX[b]++;
+      countY[a]++;
+      countY[b]++;
     }
 
     for (let i = 0; i < this.state.totalCells; i++) {

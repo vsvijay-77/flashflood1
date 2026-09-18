@@ -37,11 +37,34 @@ function Parameter({ name, unit, value, min, max, step = 1, onChange, hint }: {
 
 export function FlashFloodControlPanel(props: Props) {
   const { isRunning, isPaused, isReady, parameters, onParametersChange } = props;
-  const status = !isReady ? "Preparing terrain" : !isRunning ? "Ready to start" : isPaused ? "Paused" : props.elapsedSeconds >= parameters.durationMinutes * 60 ? "Storm ended · draining" : "Running";
+  const isStormOver = props.elapsedSeconds >= parameters.durationMinutes * 60;
+  const status = !isReady
+    ? "Preparing terrain"
+    : !isRunning
+    ? "Ready to start"
+    : isPaused
+    ? "Paused"
+    : isStormOver
+    ? props.waterVolume < 20
+      ? "Storm ended · Flood cycle complete"
+      : "Storm ended · Flood draining & receding"
+    : "Running";
+
   const elapsed = `${Math.floor(props.elapsedSeconds / 60)}:${String(Math.floor(props.elapsedSeconds % 60)).padStart(2, "0")}`;
   const change = (key: keyof FlashFloodParameters) => (value: number) => onParametersChange({ ...parameters, [key]: value });
   const togglePlayback = !isRunning ? props.onStart : isPaused ? props.onResume : props.onPause;
   const playbackLabel = !isRunning ? "Start Flash Flood" : isPaused ? "Resume Flash Flood" : "Pause Flash Flood";
+  const handleStartFromModal = () => {
+    if (!isRunning) {
+      props.onStart();
+      props.onOpenChange(false); // Closes parameters modal so 3D terrain and flood effects are seen!
+    } else if (isPaused) {
+      props.onResume();
+      props.onOpenChange(false);
+    } else {
+      props.onPause();
+    }
+  };
   const runoff = runoffRainfall(props.rainfallMmH, parameters, props.elapsedSeconds);
 
   return <>
@@ -53,21 +76,6 @@ export function FlashFloodControlPanel(props: Props) {
         {isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}
       </button>
       <button type="button" onClick={props.onReset} aria-label="Reset Flash Flood" title="Reset Flash Flood" className="rounded-lg p-2 hover:bg-slate-800"><RotateCcw className="size-4" /></button>
-      {props.onToggleRain && (
-        <button
-          type="button"
-          onClick={() => props.onToggleRain?.(!props.showRain)}
-          aria-pressed={props.showRain !== false}
-          aria-label="Toggle visible rain particles"
-          title={props.showRain !== false ? "Hide visible rain particles" : "Show visible rain particles"}
-          className={`flex items-center gap-1 rounded-lg p-2 text-xs cursor-pointer ${
-            props.showRain !== false ? "bg-cyan-700 text-white" : "text-slate-400 hover:bg-slate-800"
-          }`}
-        >
-          <CloudRain className="size-4" />
-          {props.showRain !== false ? "Rain On" : "Rain Off"}
-        </button>
-      )}
       <button type="button" onClick={props.onToggleGraph} aria-pressed={props.showGraph} aria-label="Toggle terrain flow graph" className={`flex items-center gap-1 rounded-lg p-2 text-xs ${props.showGraph ? "bg-emerald-700" : "hover:bg-slate-800"}`}><Network className="size-4" />Flow Graph</button>
     </div>
     {props.showGraph && !props.open && <div role="status" aria-label="Terrain flow graph legend" className="absolute right-3 top-32 z-30 max-w-xs rounded-lg border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-200">
@@ -76,7 +84,7 @@ export function FlashFloodControlPanel(props: Props) {
       <div className="mt-1">Arrows follow water-surface slope. Bright arrows carry water; dim arrows show dry connections.</div>
       <div className="mt-1 text-slate-400">Showing {props.graphCounts.displayedEdges} edges to limit lag.</div>
     </div>}
-    {props.open && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" onWheel={event => event.stopPropagation()}>
+    {props.open && <div className="absolute inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" onWheel={event => event.stopPropagation()}>
       <section role="dialog" aria-modal="true" aria-labelledby="flash-flood-title" className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-cyan-500/40 bg-slate-950 text-white shadow-2xl">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-700 px-5 py-4">
           <div className="flex items-center gap-3"><CloudRain className="size-7 text-cyan-300" /><div>
@@ -101,20 +109,21 @@ export function FlashFloodControlPanel(props: Props) {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold"><CloudRain className="size-4 text-cyan-300" /> Storm</h3>
-              <Parameter name="Rainfall intensity" unit="mm/h" value={props.rainfallMmH} min={0} max={300} step={5} onChange={props.onRainfallChange} hint="Rain falls across the selected area, including mountain slopes." />
+              <Parameter name="Flood intensity" unit="%" value={parameters.floodIntensity ?? 100} min={0} max={200} step={5} onChange={change("floodIntensity")} hint="Primary flood control — less % = less flooding, more % = more flooding. Scales both rainfall runoff and river rise." />
+              <Parameter name="Rainfall intensity" unit="mm/h" value={props.rainfallMmH} min={0} max={300} step={5} onChange={props.onRainfallChange} hint="Rain falls across the selected area, including mountain slopes. Higher rain = more runoff." />
               <Parameter name="Storm duration" unit="min" value={parameters.durationMinutes} min={1} max={360} onChange={change("durationMinutes")} hint="After rainfall ends, existing water continues flowing downhill." />
               <Parameter name="Wind speed" unit="km/h" value={parameters.windSpeedKmh} min={0} max={120} onChange={change("windSpeedKmh")} hint="Changes falling rain's drift. Terrain elevation controls runoff direction." />
-              <Parameter name="River rise" unit="m" value={props.sourceRise} min={0} max={10} step={0.1} onChange={props.onSourceRiseChange} hint="Optional inflow from mapped waterways. Zero means rainfall-driven runoff." />
+              <Parameter name="River rise" unit="m" value={props.sourceRise} min={0} max={10} step={0.1} onChange={props.onSourceRiseChange} hint="Optional inflow from mapped waterways. Zero means rainfall-driven runoff only." />
             </div>
             <div className="space-y-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold"><Mountain className="size-4 text-emerald-300" /> Ground & flow</h3>
               <Parameter name="Soil saturation" unit="%" value={parameters.soilSaturation} min={0} max={100} onChange={change("soilSaturation")} hint="Wetter soil absorbs less rain, producing more surface runoff." />
-              <Parameter name="Infiltration capacity" unit="mm/h" value={parameters.infiltrationMmH} min={0} max={100} onChange={change("infiltrationMmH")} hint="Dry soil's rain absorption capacity, reduced by the saturation setting." />
+              <Parameter name="Infiltration capacity" unit="mm/h" value={parameters.infiltrationMmH} min={0} max={100} onChange={change("infiltrationMmH")} hint="Soil absorption rate. Higher = less runoff (opposite of flood intensity)." />
               <Parameter name="Ground roughness" unit="n" value={parameters.roughness} min={0.01} max={0.15} step={0.005} onChange={change("roughness")} hint="Higher Manning roughness slows water over vegetation and uneven ground." />
               <Parameter name="Surface waves" unit="×" value={props.waveIntensity} min={0} max={2} step={0.1} onChange={props.onWaveIntensityChange} hint="Changes surface detail without changing the amount of water." />
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="mr-2 text-slate-300">Playback speed</span>{[1, 10, 30, 60, 120].map(speed =>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="mr-2 text-slate-300">Playback speed</span>{[1, 2, 5, 10, 30, 60].map(speed =>
             <button key={speed} type="button" aria-pressed={props.speed === speed} onClick={() => props.onSpeedChange(speed)} className={`rounded-lg border px-3 py-2 ${props.speed === speed ? "border-cyan-400 bg-cyan-700" : "border-slate-700 bg-slate-900"}`}>{speed}×</button>)}
             <div className="ml-auto flex items-center gap-2">
               {props.onToggleRain && (
@@ -144,7 +153,7 @@ export function FlashFloodControlPanel(props: Props) {
           <p aria-label="Water performance" className="mt-2 text-xs text-slate-400">{props.fps} FPS · {props.effectiveSpeed.toFixed(1)}× actual speed · {props.osmFeatureCount} mapped water features. Flow is approximated at the available terrain resolution.</p>
         </div>
         <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-700 px-5 py-3">
-          <button type="button" disabled={!isReady} onClick={togglePlayback} className="flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold hover:bg-cyan-500 disabled:opacity-40">{isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}{playbackLabel}</button>
+          <button type="button" disabled={!isReady} onClick={handleStartFromModal} className="flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold hover:bg-cyan-500 disabled:opacity-40">{isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}{playbackLabel}</button>
           <button type="button" onClick={props.onReset} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm">Reset</button>
           <button type="button" disabled={!isReady} onClick={props.onRestart} className="rounded-lg border border-emerald-600 px-4 py-2.5 text-sm disabled:opacity-40">Restart with these settings</button>
           <button type="button" onClick={() => props.onOpenChange(false)} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm">View terrain</button>

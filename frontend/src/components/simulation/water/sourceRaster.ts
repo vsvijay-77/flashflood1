@@ -41,9 +41,10 @@ export function rasterizeWaterSources(features: WaterSourceFeature[], grid: Sour
       const rings = polygon.map(ring => ring.map(project));
       if (rings[0]?.length >= 3) visit(rings[0], 0, point => inWaterPolygon(point, rings));
     }
-    const requestedWidth = Number.parseFloat(feature.properties?.width_m ?? feature.properties?.width);
-    const width = Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : feature.waterType === "river" ? 18 : 5;
-    const radius = Math.max(Math.min(width, 500) / 2, Math.hypot(grid.dx, grid.dy) / 2);
+    const widthValue = feature.properties?.width_m ?? feature.properties?.width;
+    const requestedWidth = typeof widthValue === "number" ? widthValue : Number.parseFloat(String(widthValue ?? ""));
+    const width = Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : feature.waterType === "river" ? 8 : 3;
+    const radius = Math.max(Math.min(width, 20) / 2, Math.hypot(grid.dx, grid.dy) * 0.45);
     for (const line of lines) for (let index = 1; index < line.length; index++) {
       const start = project(line[index - 1]), end = project(line[index]);
       visit([start, end], radius, point => segmentDistance(point, start, end) <= radius);

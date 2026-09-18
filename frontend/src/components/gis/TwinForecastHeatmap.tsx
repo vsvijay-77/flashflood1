@@ -123,7 +123,9 @@ export default function TwinForecastHeatmap({
     let disposed = false;
     let layer: any;
     const [south, north, west, east] = bounds;
-    const url = surfaceImage(area, bounds, forecast.frames[hour].scores, forecast.size);
+    const frame = forecast.frames?.[hour] ?? forecast.frames?.[0];
+    if (!frame?.scores) return;
+    const url = surfaceImage(area, bounds, frame.scores, forecast.size);
     Cesium.SingleTileImageryProvider.fromUrl(url, {
       rectangle: Cesium.Rectangle.fromDegrees(west, south, east, north),
       credit: "Weather: Open-Meteo",

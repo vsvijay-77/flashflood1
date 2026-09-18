@@ -16,24 +16,45 @@ import type { WaterPhysicsState } from "./waterPhysics";
  *    to elevation, showing complete flood inundation extent.
  */
 export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float32Array, paths: Uint8Array) {
-  // Sample edges with high capacity (up to 10,000 edges) to ensure a complete, unbroken grid
-  const stride = Math.max(1, Math.ceil(state.edges.length / 10000));
-  const edgeIndices = state.edges
-    .map((_, index) => index)
-    .filter(index => index % stride === 0);
+  // Select row and column step to form a continuous orthogonal horizontal & vertical line grid
+  const rowStep = Math.max(1, Math.ceil(Math.sqrt(state.totalCells / 600)));
+  const colStep = rowStep;
+
+  // Gather edges strictly along selected horizontal rows and vertical columns
+  const edgeIndices: number[] = [];
+  for (let i = 0; i < state.edges.length; i++) {
+    const edge = state.edges[i];
+    if (edge.isDiagonal) continue;
+    const r = Math.floor(edge.from / state.cols);
+    const c = edge.from % state.cols;
+    if (edge.isX) {
+      if (r % rowStep === 0) {
+        edgeIndices.push(i);
+      }
+    } else {
+      if (c % colStep === 0) {
+        edgeIndices.push(i);
+      }
+    }
+  }
 
   // Pre-allocate buffers: each edge = 1 line segment = 2 vertices × 3 floats each
   const positions = new Float32Array(edgeIndices.length * 6);
   const colors = new Float32Array(edgeIndices.length * 6);
 
-  // Grid node dots — one per unique node in the displayed edge set
-  const nodeSet = new Set<number>();
-  for (const i of edgeIndices) {
-    nodeSet.add(state.edges[i].from);
-    nodeSet.add(state.edges[i].to);
+  // Grid node dots — placed at the intersections of selected horizontal and vertical lines
+  const nodeIndices: number[] = [];
+  for (let r = 0; r < state.rows; r += rowStep) {
+    for (let c = 0; c < state.cols; c += colStep) {
+      const idx = r * state.cols + c;
+      if (state.insideMask[idx]) {
+        nodeIndices.push(idx);
+      }
+    }
   }
-  const nodes = [...nodeSet];
+  const nodes = nodeIndices;
   const nodePositions = new Float32Array(nodes.length * 3);
+
 
   // Line geometry — continuous axis-aligned grid segments
   const lineGeometry = new THREE.BufferGeometry();
@@ -126,18 +147,14 @@ export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float3
         // Shallow active flow: bright aqua
         cr = 0.22; cg = 0.88; cb = 0.82;
         brightness = 0.85;
-      } else if (isChannel) {
-        // Dry mapped waterway channel: distinct muted cyan
-        cr = 0.13; cg = 0.75; cb = 0.90;
-        brightness = 0.65;
       } else if (isRoad) {
         // Evacuation path / road: amber
         cr = 0.95; cg = 0.65; cb = 0.15;
         brightness = 0.60;
       } else {
-        // Dry terrain ground grid: soft topography emerald
+        // Dry terrain — same color for ALL dry cells including channels (no pre-simulation blue lines)
         cr = 0.18; cg = 0.68; cb = 0.42;
-        brightness = 0.32;
+        brightness = 0.25;
       }
 
       const r = cr * brightness;

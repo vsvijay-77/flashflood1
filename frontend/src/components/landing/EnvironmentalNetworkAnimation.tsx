@@ -93,11 +93,11 @@ function getBatteryColor(pct: number) {
   return "#EF4444";
 }
 
-function curveTo(x1: number, y1: number, x2: number, y2: number) {
-  const midX = (x1 + x2) / 2;
-  const midY = Math.min(y1, y2) - 40;
-  return `M ${x1} ${y1} Q ${midX} ${midY} ${x2} ${y2}`;
+function orthogonalTo(x1: number, y1: number, x2: number, y2: number) {
+  const midY = (y1 + y2) / 2;
+  return `M ${x1} ${y1} V ${midY} H ${x2} V ${y2}`;
 }
+
 
 export default function EnvironmentalNetworkAnimation() {
   const [viewMode, setViewMode] = useState<ViewMode>("network");
@@ -195,9 +195,9 @@ export default function EnvironmentalNetworkAnimation() {
             {/* Master Node Connections */}
             {MASTER_NODES.map((master, i) => (
               <g key={`master-link-${master.id}`}>
-                <path d={curveTo(master.x, master.y, GATEWAY.x, GATEWAY.y + 20)} fill="none" stroke="#38BDF8" strokeWidth="1.5" opacity="0.4" />
+                <path d={orthogonalTo(master.x, master.y, GATEWAY.x, GATEWAY.y + 20)} fill="none" stroke="#38BDF8" strokeWidth="1.5" opacity="0.4" />
                 <path
-                  d={curveTo(master.x, master.y, GATEWAY.x, GATEWAY.y + 20)}
+                  d={orthogonalTo(master.x, master.y, GATEWAY.x, GATEWAY.y + 20)}
                   fill="none"
                   stroke="#38BDF8"
                   strokeWidth="3"
@@ -215,14 +215,14 @@ export default function EnvironmentalNetworkAnimation() {
               return (
                 <g key={`node-link-${node.id}`}>
                   <path 
-                    d={curveTo(node.x, node.y, master.x, master.y)} 
+                    d={orthogonalTo(node.x, node.y, master.x, master.y)} 
                     fill="none" 
                     stroke={isAlert ? "#EF4444" : "#2DD4BF"} 
                     strokeWidth={isAlert ? "2" : "1"} 
                     opacity={isAlert ? "0.8" : "0.3"} 
                   />
                   <path
-                    d={curveTo(node.x, node.y, master.x, master.y)}
+                    d={orthogonalTo(node.x, node.y, master.x, master.y)}
                     fill="none"
                     stroke={isAlert ? "#EF4444" : "#2DD4BF"}
                     strokeWidth="2"

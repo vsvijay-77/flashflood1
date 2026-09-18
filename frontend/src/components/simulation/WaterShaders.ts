@@ -72,23 +72,14 @@ export const WaterVertexShader = /* glsl */ `
 
     vec3 displaced = position;
 
-    // Only apply wave motion where there is appreciable water
-    if (aDepth > 0.005) {
+    // Subtle water surface ripple: strictly vertical motion (never displace horizontally)
+    // to ensure water stays clamped against the ground and never floats in the air
+    if (aDepth > 0.01) {
       vec2 p = position.xz;
-      float waveScale = uWaveHeight * smoothstep(0.02, 1.5, aDepth) * 0.35;
-
-      // Layer 1: Long primary swell
-      vec3 w1 = gerstnerWave(p, vec2(0.8, 0.6), 0.18 * waveScale, 18.0, 1.0);
-      // Layer 2: Cross sea
-      vec3 w2 = gerstnerWave(p, vec2(-0.5, 0.86), 0.14 * waveScale, 9.0, 1.15);
-      // Layer 3: High-frequency chop
-      vec3 w3 = gerstnerWave(p, vec2(0.3, -0.95), 0.08 * waveScale, 4.0, 1.35);
-
-      vec3 totalOffset = w1 + w2 + w3;
-      displaced.x += totalOffset.x;
-      displaced.y += totalOffset.y;
-      displaced.z += totalOffset.z;
-      vWaveDisplacement = totalOffset.y;
+      float waveScale = min(0.006, uWaveHeight * 0.004 * min(aDepth, 0.3));
+      float ripple = sin(p.x * 2.5 + uTime * 2.0) * cos(p.y * 2.5 - uTime * 1.5) * waveScale;
+      displaced.y += ripple;
+      vWaveDisplacement = ripple;
     } else {
       vWaveDisplacement = 0.0;
     }
@@ -158,14 +149,16 @@ export const WaterFragmentShader = /* glsl */ `
     return smoothstep(0.35, 0.7, pattern) * 0.16 * filtered * exp(-depth);
   }
 
-  vec2 surfaceSlope(vec2 point) {
-    vec2 result = ripple(point, vec2(0.8, 0.6), 80.0, 0.04);
-    result += ripple(point, vec2(-0.4, 0.9), 24.0, 0.035);
-    result += ripple(point, vec2(0.9, 0.3), 8.0, 0.07);
-    result += ripple(point, vec2(0.6, -0.8), 2.0, 0.03);
-    result += ripple(point, vec2(-0.7, 0.4), 0.8, 0.022);
-    result += ripple(point, vec2(0.2, 0.9), 0.3, 0.012);
-    return result * max(0.0, uWaveHeight);
+  vec2 surfaceSlope(vec2 point, vec2 flowDirection, float flowSpeed) {
+    vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
+    vec2 result = ripple(point, flowDirection, 52.0, 0.030);
+    result += ripple(point, flowDirection, 16.0, 0.026);
+    result += ripple(point, flowDirection, 5.0, 0.038);
+    result += ripple(point, crossFlow, 9.0, 0.012);
+    result += ripple(point, crossFlow, 2.2, 0.016);
+    result += ripple(point, flowDirection + crossFlow * 0.35, 0.7, 0.010);
+    float currentDetail = mix(0.62, 1.18, smoothstep(0.03, 2.5, flowSpeed));
+    return result * max(0.0, uWaveHeight) * currentDetail;
   }
 
   void main() {
@@ -174,22 +167,26 @@ export const WaterFragmentShader = /* glsl */ `
     // ⛔ Strictly discard any fragments outside the selected polygon area
     if (vInside < 0.99) discard;
 
-    // Mapped water bodies (rivers/streams/lakes) show water at low depth (>= 0.003m = 3mm).
-    // Overland terrain only renders as flooded water once depth accumulates into standing/flowing
-    // floodwater (>= 0.035m = 3.5cm), preventing the entire mountain/land from turning blue by default.
-    float floodThreshold = vIsWaterBody > 0.5 ? 0.003 : 0.035;
-    if (vDepth < floodThreshold) discard;
+    // Resting rivers are rendered by their exact Cesium vectors. The hydraulic
+    // mesh appears only once floodwater has a visible physical depth, avoiding
+    // coarse grid cells turning the whole catchment cyan at simulation start.
+    float flowSpeed = length(vVelocity);
+    // Moving sheets are visible earlier than still water. This joins narrow
+    // downhill corridors without tinting every rain-damp cell blue.
+    float movingWater = smoothstep(0.03, 0.70, flowSpeed);
+    float wetThreshold = mix(0.016, 0.0025, movingWater);
+    float floodThreshold = 0.065;
+    if (vDepth < wetThreshold) discard;
 
-    // Current-advected surface coordinates: ripples travel along simulated hydrodynamic velocity
-    float phase = fract(uFlowTime / 20.0);
-    float secondPhase = fract(phase + 0.5);
-    float blend = abs(phase * 2.0 - 1.0);
-    vec2 p = vWorldPosition.xz - vVelocity * phase * 20.0;
-    vec2 secondPoint = vWorldPosition.xz - vVelocity * secondPhase * 20.0;
+    // Carry surface detail in the simulated current direction. uFlowTime is
+    // simulated time, so high playback rates also advance the visible water.
+    vec2 stillWaterDirection = normalize(vec2(0.78, 0.62));
+    vec2 flowDirection = flowSpeed > 0.02 ? vVelocity / flowSpeed : stillWaterDirection;
+    vec2 p = vWorldPosition.xz - vVelocity * uFlowTime;
 
     // Multi-frequency ripple slope with fwidth derivative anti-shimmering
-    vec2 slope = mix(surfaceSlope(p), surfaceSlope(secondPoint), blend);
-    vec2 rainPoint = vWorldPosition.xz * 0.7;
+    vec2 slope = surfaceSlope(p, flowDirection, flowSpeed);
+    vec2 rainPoint = p * 0.7;
     vec2 rainCell = floor(rainPoint);
     float rainSeed = fract(sin(dot(rainCell, vec2(127.1, 311.7))) * 43758.5453);
     float rainAge = fract(uTime * 1.4 + rainSeed);
@@ -209,15 +206,15 @@ export const WaterFragmentShader = /* glsl */ `
     float cosTheta = clamp(dot(normal, viewDir), 0.0, 1.0);
     float fresnel = 0.02037 + 0.97963 * pow(1.0 - cosTheta, 5.0);
 
-    // Tight pinpoint specular sunlight highlight with very low intensity (eliminates wide shiny glare)
+    // Tight pinpoint specular sunlight highlight
     vec3 sunDir = normalize(uSunDirection);
     vec3 halfVec = normalize(sunDir + viewDir);
     float specAngle = max(0.0, dot(normal, halfVec));
     float roughness = 0.12 + min(uWaveHeight, 2.0) * 0.045;
     float roughnessSquared = roughness * roughness;
     float denominator = specAngle * specAngle * (roughnessSquared - 1.0) + 1.0;
-    float specular = min(0.5, roughnessSquared / (3.141593 * denominator * denominator) * 0.008);
-    vec3 specHighlight = uSunColor * specular;
+    float specular = min(0.65, roughnessSquared / (3.141593 * denominator * denominator) * 0.012);
+    vec3 specHighlight = uSunColor * specular * 0.15;
 
     // Screen-space refraction: samples live Cesium canvas with normal distortion
     vec2 screenUv = gl_FragCoord.xy / max(uResolution, vec2(1.0, 1.0));
@@ -228,61 +225,85 @@ export const WaterFragmentShader = /* glsl */ `
     if (uHasSceneColor > 0.5) {
       refractedGround = texture2D(uSceneColor, refractUv).rgb;
     } else {
-      // Fallback procedural wet ground bed
-      refractedGround = uWaterColorShallow;
+      // Blue-tinted fallback matching the river blue family
+      refractedGround = vec3(0.01, 0.45, 0.75);
     }
 
-    // Depth-based Beer-Lambert absorption (red absorbs fastest -> deep azure)
-    vec3 absorption = exp(-vDepth * vec3(0.4, 0.16, 0.1));
-    vec3 transmitted = refractedGround * absorption;
+    // Absorption: red and green absorb fast, deep blue survives
+    vec3 absorption = exp(-vDepth * vec3(1.2, 0.35, 0.02));
 
-    // Shallow bed caustics
+    // Caustics sparkle (blue shimmer)
     float caustics = computeCaustics(vWorldPosition.xz, vDepth);
-    transmitted += vec3(caustics * 0.18);
 
-    // Horizon-to-zenith sky reflection.
+    // Sky reflection — deep blue sky tone to keep water richly colored
     vec3 reflDir = reflect(-viewDir, normal);
-    vec3 reflectedColor = mix(vec3(0.56, 0.69, 0.76), uSkyColor, sqrt(clamp(reflDir.y, 0.0, 1.0)));
+    vec3 skyBase = vec3(0.05, 0.50, 0.85);   // deep river-sky blue
+    vec3 reflectedColor = mix(skyBase, uSkyColor, sqrt(clamp(reflDir.y, 0.0, 1.0)));
 
-    // Depth-dependent absorption and in-scattering.
-    float depthFactor = clamp(vDepth / 2.0, 0.0, 1.0);
-    vec3 deepOceanBlue = mix(uWaterColorShallow, uWaterColorDeep, depthFactor);
-    // Shallow water reveals the bed; deep water absorbs transmitted light.
-    vec3 underwater = transmitted + deepOceanBlue * (1.0 - absorption);
-    vec3 blueWater = mix(underwater, reflectedColor, fresnel) + specHighlight;
+    // ─── EXACT RIVER NETWORK BLUE (#0284c7 / #0ea5e9 / #0369a1) ─────────────
+    // Matches the 3D river network lines in Cesium: rich, saturated, vibrant blue
+    vec3 cEdge    = vec3(0.045, 0.670, 0.900);   // clear shallow moving water
+    vec3 cBody    = vec3(0.006, 0.460, 0.735);   // saturated river body
+    vec3 cDeep    = vec3(0.008, 0.290, 0.510);   // deep blue-green channel
+    vec3 cChannel = vec3(0.010, 0.200, 0.360);   // deepest gorge / source
 
-    // ─── ❄️ SUBTLE, MINIMAL WHITE CRESTS (LESS SPREAD & LESS SHINE) ────────
-    vec3 whiteWater = mix(blueWater, vec3(0.92, 0.95, 0.98), 0.45);
+    vec3 depthColor;
+    if (vDepth < 0.08) {
+      // Expanding edge: bright vivid river blue, crisp front clearly visible
+      depthColor = mix(cEdge, cBody, vDepth / 0.08);
+    } else if (vDepth < 0.60) {
+      // Main flood body: solid, vivid #0284c7 river blue
+      depthColor = mix(cBody, cDeep, (vDepth - 0.08) / 0.52);
+    } else {
+      // Deep channel: rich deep river blue
+      depthColor = mix(cDeep, cChannel, clamp((vDepth - 0.60) / 1.5, 0.0, 1.0));
+    }
 
-    // Shoreline foam: very narrow immediate water margin
-    float shoreFoam = (1.0 - smoothstep(0.03, 0.16, vDepth)) * 0.18;
+    // Advected multi-scale color texture makes the current legible without
+    // relying on opaque fill color. It moves with the physical flow above.
+    vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
+    float broadTexture = noise(p * 0.10 + flowDirection * uTime * 0.10);
+    float fineTexture = noise(vec2(dot(p, flowDirection) * 0.62, dot(p, crossFlow) * 0.20) + vec2(uTime * 0.24, 3.7));
+    float flowBands = 0.5 + 0.5 * sin(dot(p, flowDirection) * 1.25 + uTime * (0.35 + flowSpeed * 0.55));
+    float waterTexture = broadTexture * 0.42 + fineTexture * 0.34 + flowBands * 0.24;
+    depthColor *= mix(0.78, 1.18, waterTexture);
 
-    // Froude-number-based whitewater rapids
-    float speed = length(vVelocity);
-    float froude = speed / sqrt(9.81 * max(vDepth, 0.04));
-    float whitewater = smoothstep(1.0, 1.6, froude) * smoothstep(0.6, 0.85, noise(p * 0.8)) * 0.35;
+    // Animated longitudinal streaks make the downhill current legible at a
+    // glance. Their phase travels in flowDirection, never across the current.
+    vec2 flowCoordinates = vec2(dot(p, flowDirection), dot(p, crossFlow));
+    float currentStreak = pow(0.5 + 0.5 * sin(flowCoordinates.x * 1.45 - uTime * (1.2 + flowSpeed * 1.6)), 7.0);
+    float channelBand = 0.45 + 0.55 * pow(0.5 + 0.5 * cos(flowCoordinates.y * 1.7), 2.0);
+    float currentHighlight = currentStreak * channelBand * smoothstep(0.05, 1.4, flowSpeed);
+    depthColor = mix(depthColor, vec3(0.18, 0.74, 0.95), currentHighlight * 0.26);
 
-    // Wave crests: restricted strictly to the sharpest wave crest tips (calm, slow movement)
-    vec2 rc = p * 0.35;
-    float wavePattern = sin(rc.x * 2.5 + uTime * 0.5) * cos(rc.y * 2.5 - uTime * 0.4);
+    // Blue-tinted caustics sparkle on shallower, moving water.
+    depthColor += vec3(caustics * 0.14) * vec3(0.08, 0.62, 1.0);
+
+    // Shallow water is translucent enough to retain terrain texture and relief.
+    vec3 transmitted = refractedGround * absorption + depthColor * (1.0 - absorption);
+    float terrainVisibility = mix(0.58, 0.14, smoothstep(0.12, 1.50, vDepth));
+    vec3 terrainBlend = mix(depthColor, transmitted, terrainVisibility);
+
+    // Reflections strengthen naturally at grazing angles without flattening the terrain.
+    vec3 waterSurface = mix(terrainBlend, reflectedColor, fresnel * 0.25) + specHighlight;
+
+    // ─── SURFACE WAVES & SUBTLE FOAM ──────────────────────────────────────────
+    vec2 rc = p * 0.40;
+    float wavePattern = sin(rc.x * 3.0 + uTime * 1.0) * cos(rc.y * 2.8 - uTime * 0.8);
     float slopeSteepness = length(slope) * 4.0;
-    float crestValue = vWaveDisplacement * 5.0 + wavePattern * 0.25 + slopeSteepness;
+    float crestValue = vWaveDisplacement * 4.0 + wavePattern * 0.25 + slopeSteepness;
+    float crestFoam = smoothstep(0.70, 0.95, crestValue) * 0.10;
+    float rapidFoam = smoothstep(0.85, 2.8, flowSpeed) * (1.0 - smoothstep(0.18, 0.75, vDepth));
+    rapidFoam *= 0.16 * (0.45 + 0.55 * fineTexture);
 
-    // High threshold (0.45 to 0.85) ensures minimal white coverage
-    float crestFoam = smoothstep(0.65, 0.95, crestValue) * smoothstep(0.65, 0.9, noise(p * 0.5)) * 0.15;
+    // Soft sky-blue wave highlights (NEVER white wash-out)
+    vec3 foamColor = vec3(0.46, 0.84, 0.96);
+    vec3 finalColor = mix(waterSurface, foamColor, max(crestFoam, rapidFoam));
 
-    // Final white ratio capped at a low value (max 0.25) so the shiny white is minimal
-    float whiteRatio = clamp(max(crestFoam, max(shoreFoam, whitewater)), 0.0, 0.25);
-
-    // Blend: clear deep blue water with subtle, delicate highlights
-    vec3 blendedWater = mix(blueWater, whiteWater, whiteRatio);
-
-    // ACES Filmic Tone Mapping
-    vec3 finalColor = blendedWater;
-
-    // Opacity: high clarity with smooth, natural blending at the flood margin
-    float alphaTransition = vIsWaterBody > 0.5 ? 0.02 : 0.08;
-    float alpha = smoothstep(floodThreshold, floodThreshold + alphaTransition, vDepth) * clamp(0.25 + 0.7 * (1.0 - exp(-vDepth * 1.8)) + fresnel * 0.15, 0.0, 0.98);
+    // Opacity: smooth alpha transition — water gently swells into view instead of popping in abruptly
+    float marginBlend = smoothstep(wetThreshold, floodThreshold + 0.045, vDepth);
+    float depthAlpha = mix(0.24, 0.86, smoothstep(wetThreshold, 0.80, vDepth));
+    float alpha = marginBlend * depthAlpha;
 
     gl_FragColor = vec4(finalColor, alpha);
     #include <tonemapping_fragment>
@@ -308,10 +329,10 @@ export function createWaterShaderMaterial(
       uSceneColor: { value: sceneColorTexture },
       uTerrainHeight: { value: terrainHeightTexture },
       uSunDirection: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
-      uSunColor: { value: new THREE.Color(0.85, 0.88, 0.90) },
-      uWaterColorDeep: { value: new THREE.Color(0.014, 0.135, 0.155) },
-      uWaterColorShallow: { value: new THREE.Color(0.06, 0.24, 0.22) },
-      uSkyColor: { value: new THREE.Color(0.12, 0.28, 0.48) },
+      uSunColor: { value: new THREE.Color(1.0, 1.0, 0.95) },
+      uWaterColorDeep: { value: new THREE.Color(0.012, 0.412, 0.631) },    // #0369a1
+      uWaterColorShallow: { value: new THREE.Color(0.008, 0.518, 0.780) }, // #0284c7
+      uSkyColor: { value: new THREE.Color(0.055, 0.647, 0.914) },          // #0ea5e9
       uHasSceneColor: { value: sceneColorTexture ? 1.0 : 0.0 },
     },
     transparent: true,

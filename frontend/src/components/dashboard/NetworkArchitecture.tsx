@@ -34,8 +34,8 @@ export function NetworkArchitecture() {
               />
             </div>
             <svg className="absolute top-0 w-full h-full" preserveAspectRatio="none">
-              <path d="M 20 0 L 150 64" stroke="#e2e8f0" strokeWidth="2" fill="none" />
-              <path d="M 280 0 L 150 64" stroke="#e2e8f0" strokeWidth="2" fill="none" />
+              <path d="M 20 0 V 32 H 150 V 64" stroke="#e2e8f0" strokeWidth="2" fill="none" />
+              <path d="M 280 0 V 32 H 150 V 64" stroke="#e2e8f0" strokeWidth="2" fill="none" />
             </svg>
             <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white px-2 text-[10px] font-bold text-emerald-600 uppercase tracking-widest z-10">
               LoRa

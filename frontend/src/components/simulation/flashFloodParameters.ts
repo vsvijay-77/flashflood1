@@ -5,10 +5,11 @@ export interface FlashFloodParameters {
   roughness: number;
   windSpeedKmh: number;
   flowModel: "gnn" | "physics";
+  floodIntensity: number; // 0–200 % — directly scales effective water volume
 }
 
 export const defaultFlashFloodParameters: FlashFloodParameters = {
-  durationMinutes: 60, soilSaturation: 70, infiltrationMmH: 15, roughness: 0.035, windSpeedKmh: 20, flowModel: "gnn",
+  durationMinutes: 3, soilSaturation: 80, infiltrationMmH: 5, roughness: 0.035, windSpeedKmh: 20, flowModel: "physics", floodIntensity: 100,
 };
 
 export function runoffRainfall(rainfallMmH: number, parameters: FlashFloodParameters, elapsedSeconds: number) {

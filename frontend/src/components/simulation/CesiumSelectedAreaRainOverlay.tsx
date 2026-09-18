@@ -56,7 +56,7 @@ export default function CesiumSelectedAreaRainOverlay({
 
   // Initialize drops - multi-layered pool for full view coverage (foreground & background)
   useEffect(() => {
-    const totalDrops = Math.max(160, Math.min(750, Math.round(intensityMm * 5.5)));
+    const totalDrops = Math.max(120, Math.min(260, Math.round(intensityMm * 2.2)));
     const drops: Drop[] = [];
     for (let i = 0; i < totalDrops; i++) {
       const isForeground = Math.random() < 0.42;

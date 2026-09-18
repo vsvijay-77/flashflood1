@@ -23,7 +23,7 @@ export function FloodImpactReport({ buildings, scenario, completedReport, saveSt
   };
   return <>
     {!completedReport && <button type="button" onClick={() => setOpen(true)} className="absolute bottom-4 right-3 z-30 rounded-xl border border-cyan-500 bg-slate-950/95 px-4 py-3 text-sm text-white shadow-xl">Flood report · {assessed ? `${affected.length} exposed buildings` : "awaiting building coverage"}</button>}
-    {(open || completedReport) && <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/70 p-4">
+    {(open || completedReport) && <div className="absolute inset-0 z-[110] flex items-center justify-center bg-slate-950/70 p-4">
       <section role="dialog" aria-modal="true" aria-label="Flood impact report" className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-xl border border-cyan-700 bg-slate-950 p-5 text-white">
         <header className="flex items-center justify-between gap-4"><h2 className="text-lg font-semibold">{scenario.model === "gnn" ? "Experimental GNN" : "Physics"} flood impact report</h2><button autoFocus type="button" onClick={() => { setOpen(false); onDismiss?.(); }} className="rounded border border-slate-600 px-3 py-2">Close report</button></header>
         {completedReport && <div role="status" className="my-3 rounded bg-slate-800 p-3 text-sm">

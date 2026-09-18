@@ -38,11 +38,12 @@ export function createArrivalForecast(input: ArrivalForecastInput) {
 
 export function advanceArrivalForecast(simulation: WaterPhysicsSimulation, input: ArrivalForecastInput, budgetMs: number) {
   const started = performance.now();
-  while (simulation.state.elapsedSeconds < input.horizon - 1e-6 && performance.now() - started < budgetMs) {
+  const maxBudget = budgetMs;
+  while (simulation.state.elapsedSeconds < input.horizon - 1e-6 && performance.now() - started < maxBudget) {
     const elapsed = simulation.state.elapsedSeconds;
     const stormEnd = input.parameters.durationMinutes * 60;
     const remaining = Math.min(input.horizon - elapsed, stormEnd - elapsed > 1e-6 ? stormEnd - elapsed : Infinity);
-    simulation.advance(Math.min(5, remaining), 1, input.sourceRise, runoffRainfall(input.rainfall, input.parameters, elapsed), 10);
+    simulation.advance(Math.min(5, remaining), 1, input.sourceRise, runoffRainfall(input.rainfall, input.parameters, elapsed), 2);
   }
 
   const reachedHorizon = simulation.state.elapsedSeconds >= input.horizon - 1e-6;
@@ -52,8 +53,6 @@ export function advanceArrivalForecast(simulation: WaterPhysicsSimulation, input
   // extrapolate flood wave arrival along downhill flow edges so buildings get accurate ETAs
   if (!reachedHorizon) {
     const totalCells = input.config.cols * input.config.rows;
-    const dx = input.config.dx;
-    const dy = input.config.dy ?? dx;
     const bed = input.bed;
     const depth = simulation.state.depth;
     const inside = input.inside;
@@ -66,7 +65,7 @@ export function advanceArrivalForecast(simulation: WaterPhysicsSimulation, input
     }
 
     const edges = simulation.state.edges;
-    for (let iter = 0; iter < 10; iter++) {
+    for (let iter = 0; iter < 3; iter++) {
       let changed = false;
       for (let e = 0; e < edges.length; e++) {
         const edge = edges[e];
@@ -74,7 +73,7 @@ export function advanceArrivalForecast(simulation: WaterPhysicsSimulation, input
         const v = edge.to;
         if (!inside[u] || !inside[v]) continue;
 
-        const dist = edge.isX ? dx : dy;
+        const dist = edge.distance;
         const headU = bed[u] + depth[u];
         const headV = bed[v] + depth[v];
 

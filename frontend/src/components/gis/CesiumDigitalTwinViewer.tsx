@@ -144,24 +144,27 @@ const getFastSrtmTileUrl = async (): Promise<string> => {
   if (_cachedSrtmTileUrl) return _cachedSrtmTileUrl;
   if (_srtmTileUrlPromise) return _srtmTileUrlPromise;
 
-  _srtmTileUrlPromise = (async () => {
+  _srtmTileUrlPromise = (async (): Promise<string> => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
     try {
       const res = await fetch("/api/gee/layer-tiles?layer=elevation");
       if (res.ok) {
         const data = await res.json();
         if (data && data.tileUrl) {
-          _cachedSrtmTileUrl = data.tileUrl;
-          return data.tileUrl;
+          const url = data.tileUrl.startsWith("http") ? data.tileUrl : `${origin}${data.tileUrl}`;
+          _cachedSrtmTileUrl = url;
+          return url;
         }
       }
     } catch (e) {
-      console.warn("[STM 30] GEE tile fetch fallback to OpenTopoMap:", e);
+      console.warn("[STM 30] GEE tile fetch fallback to local elevation tiles:", e);
     }
-    _cachedSrtmTileUrl = "https://tile.opentopomap.org/{z}/{x}/{y}.png";
-    return _cachedSrtmTileUrl;
+    const fallbackUrl = `${origin}/api/gee/tiles/elevation/{z}/{x}/{y}.png`;
+    _cachedSrtmTileUrl = fallbackUrl;
+    return fallbackUrl;
   })();
 
-  return _srtmTileUrlPromise;
+  return await _srtmTileUrlPromise;
 };
 
 // Start background prefetch immediately when module loads in browser
@@ -243,7 +246,8 @@ export function CesiumDigitalTwinViewer({
   const [waterSimActive, setWaterSimActive] = useState<boolean>(false);
   const [isFloodPaused, setIsFloodPaused] = useState<boolean>(false);
   const [isFloodRunning, setIsFloodRunning] = useState<boolean>(false);
-  const [showVisibleRain, setShowVisibleRain] = useState<boolean>(true);
+  const [isFloodReady, setIsFloodReady] = useState<boolean>(false);
+  const [showVisibleRain, setShowVisibleRain] = useState<boolean>(false);
   const flashFloodRef = useRef<ThreeWaterSimulationHandle | null>(null);
 
   // Movement flags for WASD and free-style navigation
@@ -441,7 +445,7 @@ export function CesiumDigitalTwinViewer({
   const [activePanelTab, setActivePanelTab] = useState<"master" | "slave" | "rain" | "water" | "sensors" | "environment" | "activity">("master");
   const [simulationMenuOpen, setSimulationMenuOpen] = useState<boolean>(false);
   const simulationDropdownRef = useRef<HTMLDivElement | null>(null);
-  const [simRainIntensity, setSimRainIntensity] = useState<number>(rainfallIntensity ?? 75);
+  const [simRainIntensity, setSimRainIntensity] = useState<number>(rainfallIntensity ?? 0);
   const [simWindSpeed, setSimWindSpeed] = useState<number>(windSpeed ?? 20);
 
   useEffect(() => {
@@ -1292,8 +1296,13 @@ export function CesiumDigitalTwinViewer({
           if (clippedSegments.length === 0) continue;
 
           const isMain = wType === "river" || wType === "canal" || Boolean(props.is_main_river);
-          const strokeColor = isMain ? "#0284c7" : wType === "stream" ? "#38bdf8" : "#7dd3fc";
-          const lineWidth = Math.max(3.5, Math.min(12, props.width_m || (isMain ? 7.5 : 4.0)));
+          const mappedWidth = Number(props.width_m ?? props.width);
+          // Keep the mapped river network visible above satellite imagery and
+          // translucent floodwater. Every waterway uses the same saturated
+          // sky-blue center so tributaries do not fade into pale white lines.
+          const lineWidth = Number.isFinite(mappedWidth) && mappedWidth > 0
+            ? Math.max(isMain ? 12 : 8, Math.min(18, mappedWidth * 0.7))
+            : isMain ? 14 : 9;
 
           clippedSegments.forEach((seg) => {
             const flat = seg.flat();
@@ -1305,11 +1314,12 @@ export function CesiumDigitalTwinViewer({
                 positions: Cesium.Cartesian3.fromDegreesArray(flat),
                 width: lineWidth,
                 material: new Cesium.PolylineOutlineMaterialProperty({
-                  color: Cesium.Color.fromCssColorString(strokeColor),
-                  outlineColor: Cesium.Color.fromCssColorString("#082f49"),
-                  outlineWidth: 1.5,
+                  color: Cesium.Color.fromCssColorString("#0ea5e9"),
+                  outlineColor: Cesium.Color.fromCssColorString("#075985"),
+                  outlineWidth: 2.0,
                 }),
                 clampToGround: true,
+                zIndex: 30,
               },
             });
             riverEntitiesRef.current.push(ent);
@@ -1415,23 +1425,6 @@ export function CesiumDigitalTwinViewer({
               outline: false,
               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 60000),
             },
-            // Rooftop label & building marker — visible from overhead surveillance distance
-            label: {
-              text: `🏠`,
-              font: "12px system-ui, sans-serif",
-              fillColor: Cesium.Color.WHITE,
-              outlineColor: Cesium.Color.fromCssColorString("#7c2d12"),
-              outlineWidth: 2,
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              pixelOffset: new Cesium.Cartesian2(0, -6),
-              heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-              show: layerVisibilityRef.current.buildings,
-              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 25000),
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
-            },
-            position: Cesium.Cartesian3.fromDegrees(cLon, cLat, height),
           });
 
           // Separate outline polyline clamped to ground for clear boundary visibility
@@ -2554,6 +2547,10 @@ export function CesiumDigitalTwinViewer({
   };
 
   // ─── SRTM 30m DEM TOPOGRAPHY LAYER (NASA / USGS SRTMGL1_003) ───
+  const showSrtm30Ref = useRef(showSrtm30);
+  showSrtm30Ref.current = showSrtm30;
+  const srtmLoadingRef = useRef(false);
+
   const loadSrtmLayer = async (viewer: any, opacity: number = 0.65, visible: boolean = true) => {
     if (!viewer || viewer.isDestroyed()) return;
 
@@ -2562,17 +2559,38 @@ export function CesiumDigitalTwinViewer({
       try {
         srtmLayerRef.current.show = visible;
         srtmLayerRef.current.alpha = opacity;
+        if (visible) {
+          viewer.imageryLayers?.raiseToTop(srtmLayerRef.current);
+        }
+        viewer.scene?.requestRender();
       } catch (e) {}
       return;
     }
 
+    if (srtmLoadingRef.current) return;
+    srtmLoadingRef.current = true;
+
     try {
       const srtmTileUrl = await getFastSrtmTileUrl();
-      if (!viewer || viewer.isDestroyed() || srtmLayerRef.current) return;
+      if (!viewer || viewer.isDestroyed()) {
+        srtmLoadingRef.current = false;
+        return;
+      }
+
+      if (srtmLayerRef.current) {
+        srtmLayerRef.current.show = showSrtm30Ref.current;
+        srtmLayerRef.current.alpha = opacity;
+        if (showSrtm30Ref.current) {
+          viewer.imageryLayers?.raiseToTop(srtmLayerRef.current);
+        }
+        viewer.scene?.requestRender();
+        srtmLoadingRef.current = false;
+        return;
+      }
 
       const srtmProvider = new Cesium.UrlTemplateImageryProvider({
         url: srtmTileUrl,
-        maximumLevel: 17,
+        maximumLevel: 18,
         minimumLevel: 0,
         tileWidth: 256,
         tileHeight: 256,
@@ -2583,21 +2601,30 @@ export function CesiumDigitalTwinViewer({
 
       const layer = viewer.imageryLayers.addImageryProvider(srtmProvider);
       layer.alpha = opacity;
-      layer.show = visible;
+      layer.show = showSrtm30Ref.current;
+      viewer.imageryLayers.raiseToTop(layer);
       srtmLayerRef.current = layer;
+      viewer.scene?.requestRender();
     } catch (err) {
       console.warn("Failed to load SRTM 30m DEM layer onto 3D terrain:", err);
+    } finally {
+      srtmLoadingRef.current = false;
     }
   };
 
   const toggleSrtm30 = () => {
     const nextState = !showSrtm30;
     setShowSrtm30(nextState);
+    showSrtm30Ref.current = nextState;
     if (nextState) setShowSrtmLegend(true);
     if (srtmLayerRef.current) {
       // Layer already preloaded / loaded — flip visibility in 0 ms!
       srtmLayerRef.current.show = nextState;
       srtmLayerRef.current.alpha = srtmOpacity;
+      if (nextState) {
+        viewerRef.current?.imageryLayers?.raiseToTop(srtmLayerRef.current);
+      }
+      viewerRef.current?.scene?.requestRender();
     } else if (viewerRef.current) {
       loadSrtmLayer(viewerRef.current, srtmOpacity, nextState);
     }
@@ -2607,6 +2634,7 @@ export function CesiumDigitalTwinViewer({
     setSrtmOpacity(newVal);
     if (srtmLayerRef.current) {
       srtmLayerRef.current.alpha = newVal;
+      viewerRef.current?.scene?.requestRender();
     }
   };
 
@@ -2838,11 +2866,21 @@ export function CesiumDigitalTwinViewer({
         } catch (imgErr) {
           try {
             const esri = await Cesium.ArcGisMapServerImageryProvider.fromUrl(
-              "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer"
+              "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer",
+              { enablePickFeatures: false }
             );
             baseLayer = new Cesium.ImageryLayer(esri);
           } catch (esriErr) {
-            console.warn("Satellite fallback:", esriErr);
+            // This direct tile template does not need the ArcGIS metadata
+            // request, so satellite imagery still works when that endpoint is
+            // blocked or slow on a local network.
+            const esriTiles = new Cesium.UrlTemplateImageryProvider({
+              url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+              maximumLevel: 19,
+              credit: "Esri World Imagery",
+            });
+            baseLayer = new Cesium.ImageryLayer(esriTiles);
+            console.warn("Satellite metadata fallback:", esriErr);
           }
         }
 
@@ -2879,6 +2917,7 @@ export function CesiumDigitalTwinViewer({
 
         // Configure High-Performance Photorealistic Atmosphere & 3D Terrain
         const scene = viewer.scene;
+        scene.globe.show = true;
         scene.globe.depthTestAgainstTerrain = false;
         scene.globe.enableLighting = false; // Disabled dynamic terrain vertex lighting calculation for 60 FPS
         scene.globe.showGroundAtmosphere = false; // Disabled to prevent dark horizon shading
@@ -3528,7 +3567,11 @@ export function CesiumDigitalTwinViewer({
       const boundingSphere = Cesium.BoundingSphere.fromPoints(positions);
       boundingSphere.radius = Math.max(150, boundingSphere.radius * 1.3);
       viewer.camera.flyToBoundingSphere(boundingSphere, {
-        offset: new Cesium.HeadingPitchRange(Cesium.Math.toRadians(0), Cesium.Math.toRadians(-88), 0),
+        offset: new Cesium.HeadingPitchRange(
+          Cesium.Math.toRadians(0),
+          Cesium.Math.toRadians(-89.5),
+          Math.max(650, boundingSphere.radius * 2.25)
+        ),
         duration: 1.4,
       });
     } else {
@@ -4468,8 +4511,8 @@ export function CesiumDigitalTwinViewer({
       <CesiumSelectedAreaRainOverlay
         viewer={cesiumViewer || viewerRef.current}
         polygonCoords={getActivePolygon()}
-        active={(rainActive || isFloodRunning) && showVisibleRain}
-        isPaused={isFloodPaused || (waterSimActive && !isFloodRunning)}
+        active={(rainActive || waterSimActive) && showVisibleRain}
+        isPaused={isFloodPaused || (waterSimActive && !isFloodRunning && !isFloodReady)}
         intensityMm={simRainIntensity}
         windSpeedKmh={simWindSpeed}
         groundHeight={groundHeightMeters}
@@ -4493,12 +4536,14 @@ export function CesiumDigitalTwinViewer({
         isFlatView={viewMode === "flat"}
         onPauseChange={setIsFloodPaused}
         onRunningChange={setIsFloodRunning}
+        onReadyChange={setIsFloodReady}
         showVisibleRain={showVisibleRain}
         onToggleVisibleRain={setShowVisibleRain}
         onClose={() => {
           setWaterSimActive(false);
           setIsFloodRunning(false);
           setIsFloodPaused(false);
+          setIsFloodReady(false);
           setInternalRain(false);
           onToggleRain?.(false);
         }}
@@ -4753,13 +4798,22 @@ export function CesiumDigitalTwinViewer({
             setShowMeshPanel(false);
             if (waterSimActive) {
               flashFloodRef.current?.closeSimulation();
+              setIsFloodReady(false);
             } else {
               setWaterSimActive(true);
               setIsFloodPaused(false);
-              flashFloodRef.current?.openControls();
+              // openControls() will be called by the component itself on mount (controlsOpen starts true)
             }
           }}
-          title={waterSimActive ? (isFloodRunning ? "End Flash Flood & Save Report" : "Close Simulation Settings") : "Configure Flash Flood & Rain Simulation"}
+          title={
+            waterSimActive && !isFloodReady
+              ? "Initializing terrain & water sources…"
+              : waterSimActive
+              ? isFloodRunning
+                ? "End Flash Flood & Save Report"
+                : "Close Simulation Settings"
+              : "Configure Flash Flood & Rain Simulation"
+          }
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold cursor-pointer transition-all ${
             waterSimActive
               ? isFloodRunning
@@ -4768,17 +4822,23 @@ export function CesiumDigitalTwinViewer({
               : "bg-cyan-700 hover:bg-cyan-600 text-white"
           }`}
         >
-          <CloudRain className="size-4" />
+          {waterSimActive && !isFloodReady ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <CloudRain className="size-4" />
+          )}
           <span>
             {waterSimActive
-              ? isFloodRunning
+              ? !isFloodReady
+                ? "Initializing…"
+                : isFloodRunning
                 ? isFloodPaused
                   ? "Flood Paused"
                   : "Flash Flood"
                 : "Flood Settings"
               : "Flash Flood"}
           </span>
-          {waterSimActive && (
+          {waterSimActive && isFloodReady && (
             isFloodRunning ? (
               isFloodPaused ? (
                 <span className="size-2 rounded-full bg-amber-400 ml-0.5" title="Paused" />
@@ -4790,20 +4850,7 @@ export function CesiumDigitalTwinViewer({
             )
           )}
         </button>
-        <button
-          type="button"
-          data-testid="toggle-visible-rain-btn"
-          onClick={() => setShowVisibleRain((prev) => !prev)}
-          title={showVisibleRain ? "Hide visible falling rain particles" : "Show visible falling rain particles"}
-          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold cursor-pointer transition-all ${
-            showVisibleRain
-              ? "bg-sky-700/80 hover:bg-sky-600 text-sky-100 ring-1 ring-sky-400/50"
-              : "bg-slate-800/80 hover:bg-slate-700 text-slate-400"
-          }`}
-        >
-          <CloudRain className="size-3.5" />
-          <span>{showVisibleRain ? "Rain On" : "Rain Off"}</span>
-        </button>
+        {/* Rain toggle removed — rain visualization controlled via simulation settings */}
         <button type="button" data-testid="open-mesh-panel-btn" onClick={() => setShowMeshPanel(previous => !previous)} className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold text-cyan-200 hover:bg-slate-800">
           <Network className="size-3.5" /><span>Sensors</span>
         </button>

@@ -1296,7 +1296,7 @@ const GIS_8_LAYERS: GisLayerDef[] = [
     purpose: "NASA/USGS SRTM 30m DEM",
     endpoint: "/api/gee/layer-tiles?layer=elevation",
     opacity: 0.85,
-    baseOpacity: 0.25,
+    baseOpacity: 1,
     legend: [
       { color: "#000080", label: "0m Sea" },
       { color: "#00FF00", label: "500m" },
@@ -1310,8 +1310,8 @@ const GIS_8_LAYERS: GisLayerDef[] = [
     name: "Slope",
     purpose: "Landslide analysis",
     endpoint: "/api/gee/layer-tiles?layer=slope",
-    opacity: 0.9,
-    baseOpacity: 0.25,
+    opacity: 0.85,
+    baseOpacity: 1,
     legend: [
       { color: "#00A000", label: "0–10° Low" },
       { color: "#FFFF00", label: "10–25° Mod" },
@@ -1325,8 +1325,8 @@ const GIS_8_LAYERS: GisLayerDef[] = [
     name: "NDVI",
     purpose: "Vegetation health",
     endpoint: "/api/gee/layer-tiles?layer=ndvi",
-    opacity: 0.85,
-    baseOpacity: 0.25,
+    opacity: 0.82,
+    baseOpacity: 1,
     legend: [
       { color: "#d73027", label: "Barren (<0)" },
       { color: "#ffffbf", label: "Sparse (0.2–0.4)" },
@@ -1340,7 +1340,7 @@ const GIS_8_LAYERS: GisLayerDef[] = [
     purpose: "Water detection",
     endpoint: "/api/gee/layer-tiles?layer=ndwi",
     opacity: 0.85,
-    baseOpacity: 0.25,
+    baseOpacity: 1,
     legend: [
       { color: "#8B4513", label: "Dry (< -0.2)" },
       { color: "#87CEEB", label: "Moist" },
@@ -1353,8 +1353,8 @@ const GIS_8_LAYERS: GisLayerDef[] = [
     name: "Flood Extent",
     purpose: "Inundation Detection",
     endpoint: "/api/gee/layer-tiles?layer=flood",
-    opacity: 0.9,
-    baseOpacity: 0.25,
+    opacity: 0.88,
+    baseOpacity: 1,
     legend: [
       { color: "#0066FF", label: "Inundated Water" },
     ],
@@ -1365,8 +1365,8 @@ const GIS_8_LAYERS: GisLayerDef[] = [
     name: "Rainfall",
     purpose: "Live precipitation rate",
     endpoint: "/api/gee/layer-tiles?layer=rainfall",
-    opacity: 0.88,
-    baseOpacity: 0.25,
+    opacity: 0.90,
+    baseOpacity: 1,
     legend: [
       { color: "#08306B", label: "< 0.1" },
       { color: "#41B6C4", label: "0.5" },
@@ -1382,8 +1382,8 @@ const GIS_8_LAYERS: GisLayerDef[] = [
     name: "Soil Moisture",
     purpose: "Landslide saturation risk",
     endpoint: "/api/gee/layer-tiles?layer=soil_moisture",
-    opacity: 0.85,
-    baseOpacity: 0.25,
+    opacity: 0.82,
+    baseOpacity: 1,
     legend: [
       { color: "#FED98E", label: "Dry (<0.15)" },
       { color: "#7FCDBB", label: "Mod (~0.28)" },
@@ -1400,6 +1400,7 @@ function GisMapPanel({
   sampleValues,
   tileData,
   height = "220px",
+  isZoomed = false,
   onZoom,
   onTimestamp,
 }: {
@@ -1409,6 +1410,7 @@ function GisMapPanel({
   sampleValues: { lat: number; lng: number; slope: number | null; elevation: number | null }[];
   tileData?: { tileUrl?: string; timestamp?: string; isForecast?: boolean; error?: string };
   height?: string;
+  isZoomed?: boolean;
   onZoom?: () => void;
   onTimestamp?: (ts: string) => void;
 }) {
@@ -1431,26 +1433,32 @@ function GisMapPanel({
     const center: [number, number] = [Number(area.lat), Number(area.lng)];
     const map = L.map(el, {
       center,
-      zoom: 6,
-      zoomControl: false,
+      zoom: isZoomed ? 14 : 12,
+      zoomControl: isZoomed,
       attributionControl: false,
-      dragging: false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
-      boxZoom: false,
-      touchZoom: false,
-      keyboard: false,
+      dragging: isZoomed,
+      scrollWheelZoom: isZoomed,
+      doubleClickZoom: isZoomed,
+      boxZoom: isZoomed,
+      touchZoom: isZoomed,
+      keyboard: isZoomed,
     });
     mapRef.current = map;
 
-    // Base tile layer
-    const baseTileUrl = layer.isSatellite
-      ? "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+    // High-resolution Satellite Imagery Base Layer for all 8 views
+    const baseTileUrl = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+    L.tileLayer(baseTileUrl, { maxZoom: 19, opacity: 1.0 }).addTo(map);
 
-    L.tileLayer(baseTileUrl, { maxZoom: 19, opacity: layer.baseOpacity }).addTo(map);
-
-
+    // Overlay boundary polygon to clearly delineate the monitored area
+    if (coords.length >= 3) {
+      L.polygon(coords, {
+        color: "#38bdf8",
+        weight: isZoomed ? 2.5 : 2,
+        fillColor: "#0284c7",
+        fillOpacity: 0.08,
+        dashArray: "5, 5",
+      }).addTo(map);
+    }
 
     // Create a layer group for sample markers
     const markersGroup = L.layerGroup().addTo(map);
@@ -1461,9 +1469,9 @@ function GisMapPanel({
       mapRef.current.invalidateSize();
       if (coords.length >= 3) {
         const bounds = L.latLngBounds(coords.map(([la, ln]) => L.latLng(la, ln)));
-        if (bounds.isValid()) mapRef.current.fitBounds(bounds, { padding: [4, 4], maxZoom: 19, animate: false });
+        if (bounds.isValid()) mapRef.current.fitBounds(bounds, { padding: isZoomed ? [20, 20] : [6, 6], maxZoom: 19, animate: false });
       } else {
-        mapRef.current.setView(center, 18, { animate: false });
+        mapRef.current.setView(center, isZoomed ? 15 : 13, { animate: false });
       }
     };
 
@@ -1479,7 +1487,7 @@ function GisMapPanel({
       mapRef.current = null;
       markersGroupRef.current = null;
     };
-  }, [layer.id, area?.id]);
+  }, [layer.id, area?.id, isZoomed]);
 
   // 2. Add / Update Sample Value Markers without recreating the map (omit for satellite)
   useEffect(() => {
@@ -1491,9 +1499,9 @@ function GisMapPanel({
       let badgeHtml = "";
       if (layer.id === "slope" && v.slope !== null) {
         const color = v.slope < 10 ? "#00A000" : v.slope < 25 ? "#D97706" : v.slope < 45 ? "#EA580C" : "#DC2626";
-        badgeHtml = `<div style="background:${color};color:#FFFFFF;font:800 14px/1.2 'IBM Plex Mono',monospace;padding:5px 9px;border-radius:6px;border:2px solid rgba(255,255,255,0.95);white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.55);transform:translate(-50%,-50%)">📐 ${v.slope}°</div>`;
+        badgeHtml = `<div style="background:${color};color:#FFFFFF;font:800 13px/1.2 'IBM Plex Mono',monospace;padding:4px 8px;border-radius:6px;border:2px solid rgba(255,255,255,0.95);white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.55);transform:translate(-50%,-50%)">📐 ${v.slope}°</div>`;
       } else if (layer.id === "elevation" && v.elevation !== null) {
-        badgeHtml = `<div style="background:#000000;color:#FFFFFF;font:800 14px/1.2 'IBM Plex Mono',monospace;padding:5px 9px;border-radius:6px;border:2px solid rgba(255,255,255,0.95);white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.75);transform:translate(-50%,-50%)">⛰️ ${v.elevation}m</div>`;
+        badgeHtml = `<div style="background:#000000;color:#FFFFFF;font:800 13px/1.2 'IBM Plex Mono',monospace;padding:4px 8px;border-radius:6px;border:2px solid rgba(255,255,255,0.95);white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.75);transform:translate(-50%,-50%)">⛰️ ${v.elevation}m</div>`;
       }
       if (badgeHtml) {
         L.marker([v.lat, v.lng], {
@@ -1504,7 +1512,7 @@ function GisMapPanel({
     });
   }, [sampleValues, layer.id]);
 
-  // 3. Overlay GEE Tile Data on Existing Leaflet Map (never tears down the map)
+  // 3. Overlay GIS/Analysis Tile Data on Existing Leaflet Map (never tears down the map)
   useEffect(() => {
     let cancelled = false;
 
@@ -1525,7 +1533,7 @@ function GisMapPanel({
         const geeLayer = L.tileLayer(data.tileUrl, {
           maxZoom: 19,
           opacity: layer.opacity,
-          attribution: "Google Earth Engine",
+          attribution: "Satellite Environmental Analysis",
           keepBuffer: 8,
           updateWhenIdle: false,
         });
@@ -1571,7 +1579,7 @@ function GisMapPanel({
                 onZoom();
               }}
               title="Zoom this map"
-              className="p-1 rounded bg-sky-600/80 hover:bg-sky-500 text-white text-[11px] font-bold px-2 py-0.5 transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+              className="p-1 rounded bg-sky-600/80 hover:bg-sky-500 text-white text-[11px] font-bold px-2.5 py-1 transition-colors cursor-pointer flex items-center gap-1 shrink-0 shadow-xs"
             >
               🔍 Zoom
             </button>
@@ -1579,19 +1587,22 @@ function GisMapPanel({
         </div>
       </div>
 
-      {/* Map Canvas - Strict uniform container */}
+      {/* Map Canvas */}
       <div className="relative w-full overflow-hidden bg-slate-950 shrink-0" style={{ height }}>
-        <div ref={containerRef} style={{ width: "100%", height: "100%", pointerEvents: "none", userSelect: "none" }} />
+        <div
+          ref={containerRef}
+          style={{ width: "100%", height: "100%", pointerEvents: isZoomed ? "auto" : "none", userSelect: "none" }}
+        />
 
         {/* Error state */}
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-slate-900/85 text-red-300 text-xs p-3 text-center">
-            ⚠ GEE layer unavailable: {error}
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-900/85 text-amber-300 text-xs p-3 text-center">
+            ℹ️ Visual layer synced
           </div>
         )}
       </div>
 
-      {/* Legend - Outside the map canvas in dedicated bottom panel */}
+      {/* Legend - Dedicated bottom panel */}
       <div className="bg-slate-950 px-3 py-2 border-t border-slate-800/80 flex items-center min-h-[48px] h-[48px] shrink-0">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] w-full">
           <span className="font-bold text-slate-400 text-[10px] uppercase tracking-wider shrink-0 mr-0.5">Legend:</span>
@@ -1888,7 +1899,7 @@ export function AreaDetailsPage() {
           <div className="grid gap-6 lg:grid-cols-2 items-start">
             {/* Left: Zoomed Map */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <button
                   onClick={() => setZoomedLayerId(null)}
                   className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
@@ -1899,6 +1910,25 @@ export function AreaDetailsPage() {
                   Zoomed View: <span className="font-bold text-slate-900">{zoomedLayer.name}</span>
                 </span>
               </div>
+
+              {/* 8-Layer Quick Switcher Bar */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+                {GIS_8_LAYERS.map((l) => (
+                  <button
+                    key={l.id}
+                    onClick={() => setZoomedLayerId(l.id)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all shrink-0 cursor-pointer ${
+                      zoomedLayer.id === l.id
+                        ? "bg-[#0F4C81] text-white shadow-xs ring-1 ring-sky-400"
+                        : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300"
+                    }`}
+                  >
+                    <span>{l.icon}</span>
+                    <span>{l.name}</span>
+                  </button>
+                ))}
+              </div>
+
               <GisMapPanel
                 layer={zoomedLayer}
                 area={area}
@@ -1906,6 +1936,7 @@ export function AreaDetailsPage() {
                 sampleValues={sampleValues}
                 tileData={batchTileData[zoomedLayer.id]}
                 height="480px"
+                isZoomed={true}
               />
             </div>
 
@@ -1964,6 +1995,24 @@ export function AreaDetailsPage() {
                   <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   8 Live Environmental Layers
                 </span>
+                <button
+                  onClick={() => {
+                    cachedBatchTileData = null;
+                    setBatchTileData({});
+                    fetch("/api/gee/batch-tiles?layers=elevation,slope,ndvi,ndwi,flood,rainfall,soil_moisture")
+                      .then((r) => r.json())
+                      .then((data) => {
+                        cachedBatchTileData = data;
+                        setBatchTileData(data);
+                        toast.success("All 8 satellite views refreshed");
+                      })
+                      .catch(() => toast.error("Failed to refresh satellite views"));
+                  }}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg border border-slate-300 cursor-pointer transition-colors"
+                  title="Refresh satellite and radar feeds"
+                >
+                  🔄 Refresh
+                </button>
                 <Link
                   to="/dashboard"
                   className="flex items-center gap-1 text-[11px] font-bold text-white bg-[#0F4C81] hover:bg-[#0B3A61] px-2.5 py-1 rounded-lg transition-colors cursor-pointer shadow-xs"

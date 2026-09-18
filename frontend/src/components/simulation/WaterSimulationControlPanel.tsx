@@ -86,7 +86,7 @@ export const WaterSimulationControlPanel: React.FC<WaterSimulationControlPanelPr
   const secs = Math.floor(elapsedSeconds % 60);
   const formattedTime = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 
-  const speedOptions = [1, 10, 30, 60];
+  const speedOptions = [1, 2, 5, 10, 30, 60];
 
   return (
     <div

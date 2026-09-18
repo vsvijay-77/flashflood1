@@ -51,6 +51,7 @@ export interface ThreeWaterSimulationHandle {
   setSpeed: (speed: number) => void;
   setWaveIntensity: (intensity: number) => void;
   toggleWater: (show: boolean) => void;
+  toggleGraph?: (show?: boolean) => void;
   closeSimulation: () => void;
 }
 
@@ -98,6 +99,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const graphRef = useRef<ReturnType<typeof createFlowGraphOverlay> | null>(null);
     const [showGraph, setShowGraph] = useState(false);
     const showGraphRef = useRef(showGraph);
+    showGraphRef.current = showGraph;
     const [graphCounts, setGraphCounts] = useState<{
       nodes: number;
       edges: number;
@@ -1034,6 +1036,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     }, [active, cesiumViewer]);
 
     useEffect(() => {
+      showGraphRef.current = showGraph;
+      if (graphRef.current) {
+        graphRef.current.group.visible = showGraph;
+      }
       if (showGraph && physicsSimRef.current) graphRef.current?.update(physicsSimRef.current.state);
       if (cesiumViewer && !cesiumViewer.isDestroyed()) cesiumViewer.scene.requestRender();
     }, [cesiumViewer, showWater, showGraph, isRunning, isPaused, waveIntensity]);
@@ -1259,6 +1265,19 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       setSpeed: (s) => setSpeed(s),
       setWaveIntensity: (w) => setWaveIntensity(w),
       toggleWater: (show) => setShowWater(show),
+      toggleGraph: (show?: boolean) => {
+        setShowGraph((current) => {
+          const next = show !== undefined ? show : !current;
+          showGraphRef.current = next;
+          if (graphRef.current) {
+            graphRef.current.group.visible = next;
+          }
+          if (cesiumViewer && !cesiumViewer.isDestroyed()) {
+            cesiumViewer.scene.requestRender();
+          }
+          return next;
+        });
+      },
       closeSimulation: handleClose,
     }));
 
@@ -1318,7 +1337,19 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           onRainfallChange={setRainfall}
           parameters={parameters}
           showGraph={showGraph}
-          onToggleGraph={() => setShowGraph(value => !value)}
+          onToggleGraph={() => {
+            setShowGraph(value => {
+              const next = !value;
+              showGraphRef.current = next;
+              if (graphRef.current) {
+                graphRef.current.group.visible = next;
+              }
+              if (cesiumViewer && !cesiumViewer.isDestroyed()) {
+                cesiumViewer.scene.requestRender();
+              }
+              return next;
+            });
+          }}
           graphCounts={graphCounts}
           waterVolume={waterVolume}
           onRestart={() => { handleReset(); handleStart(); }}

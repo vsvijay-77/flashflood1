@@ -81,8 +81,17 @@ export function FlashFloodControlPanel(props: Props) {
       <button type="button" disabled={!isReady} onClick={togglePlayback} aria-label={playbackLabel} title={playbackLabel} className="rounded-lg bg-cyan-700 p-2 hover:bg-cyan-600 disabled:opacity-40">
         {isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}
       </button>
-      <button type="button" onClick={props.onReset} aria-label="Reset Flash Flood" title="Reset Flash Flood" className="rounded-lg p-2 hover:bg-slate-800"><RotateCcw className="size-4" /></button>
-      <button type="button" onClick={props.onToggleGraph} aria-pressed={props.showGraph} aria-label="Toggle terrain flow graph" className={`flex items-center gap-1 rounded-lg p-2 text-xs ${props.showGraph ? "bg-emerald-700" : "hover:bg-slate-800"}`}><Network className="size-4" />Flow Graph</button>
+      <button
+        type="button"
+        onClick={props.onToggleGraph}
+        aria-pressed={props.showGraph}
+        aria-label={props.showGraph ? "Hide terrain flow graph" : "Show terrain flow graph"}
+        title={props.showGraph ? "Hide terrain flow graph" : "Show terrain flow graph"}
+        className={`flex items-center gap-1 rounded-lg p-2 text-xs font-medium transition-colors ${props.showGraph ? "bg-emerald-700 text-white hover:bg-emerald-600" : "text-slate-200 hover:bg-slate-800"}`}
+      >
+        <Network className="size-4" />
+        {props.showGraph ? "Hide Graph" : "Flow Graph"}
+      </button>
     </div>
     {props.showGraph && !props.open && <div role="status" aria-label="Terrain flow graph legend" className="absolute right-3 top-32 z-30 max-w-xs rounded-lg border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-200">
       <div>{parameters.flowModel === "gnn" ? "Experimental GNN" : "Physics"} · {props.graphCounts.nodes} nodes · {props.graphCounts.displayedEdges} edges</div>

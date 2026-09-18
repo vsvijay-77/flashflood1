@@ -13,6 +13,8 @@ interface Props extends Omit<WaterSimulationControlPanelProps, "scenarioInflow" 
   graphCounts: { nodes: number; edges: number; displayedEdges: number };
   waterVolume: number;
   onRestart: () => void;
+  showRain?: boolean;
+  onToggleRain?: (showRain: boolean) => void;
 }
 
 function Parameter({ name, unit, value, min, max, step = 1, onChange, hint }: {
@@ -51,6 +53,21 @@ export function FlashFloodControlPanel(props: Props) {
         {isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}
       </button>
       <button type="button" onClick={props.onReset} aria-label="Reset Flash Flood" title="Reset Flash Flood" className="rounded-lg p-2 hover:bg-slate-800"><RotateCcw className="size-4" /></button>
+      {props.onToggleRain && (
+        <button
+          type="button"
+          onClick={() => props.onToggleRain?.(!props.showRain)}
+          aria-pressed={props.showRain !== false}
+          aria-label="Toggle visible rain particles"
+          title={props.showRain !== false ? "Hide visible rain particles" : "Show visible rain particles"}
+          className={`flex items-center gap-1 rounded-lg p-2 text-xs cursor-pointer ${
+            props.showRain !== false ? "bg-cyan-700 text-white" : "text-slate-400 hover:bg-slate-800"
+          }`}
+        >
+          <CloudRain className="size-4" />
+          {props.showRain !== false ? "Rain On" : "Rain Off"}
+        </button>
+      )}
       <button type="button" onClick={props.onToggleGraph} aria-pressed={props.showGraph} aria-label="Toggle terrain flow graph" className={`flex items-center gap-1 rounded-lg p-2 text-xs ${props.showGraph ? "bg-emerald-700" : "hover:bg-slate-800"}`}><Network className="size-4" />Flow Graph</button>
     </div>
     {props.showGraph && !props.open && <div role="status" aria-label="Terrain flow graph legend" className="absolute right-3 top-32 z-30 max-w-xs rounded-lg border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-200">
@@ -99,7 +116,26 @@ export function FlashFloodControlPanel(props: Props) {
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="mr-2 text-slate-300">Playback speed</span>{[1, 10, 30, 60, 120].map(speed =>
             <button key={speed} type="button" aria-pressed={props.speed === speed} onClick={() => props.onSpeedChange(speed)} className={`rounded-lg border px-3 py-2 ${props.speed === speed ? "border-cyan-400 bg-cyan-700" : "border-slate-700 bg-slate-900"}`}>{speed}×</button>)}
-            <button type="button" onClick={() => props.onToggleVisibility(!props.showWater)} className="ml-auto flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2">{props.showWater ? <Eye className="size-4" /> : <EyeOff className="size-4" />}{props.showWater ? "Water visible" : "Water hidden"}</button>
+            <div className="ml-auto flex items-center gap-2">
+              {props.onToggleRain && (
+                <button
+                  type="button"
+                  onClick={() => props.onToggleRain?.(!props.showRain)}
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 cursor-pointer ${
+                    props.showRain !== false
+                      ? "border-cyan-500 bg-cyan-950/60 text-cyan-200"
+                      : "border-slate-700 bg-slate-900 text-slate-400"
+                  }`}
+                >
+                  <CloudRain className={`size-4 ${props.showRain !== false ? "text-cyan-300" : "text-slate-500"}`} />
+                  {props.showRain !== false ? "Rain visible" : "Rain hidden"}
+                </button>
+              )}
+              <button type="button" onClick={() => props.onToggleVisibility(!props.showWater)} className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 cursor-pointer">
+                {props.showWater ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+                {props.showWater ? "Water visible" : "Water hidden"}
+              </button>
+            </div>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             {[["Elapsed", elapsed], ["Water extent", `${props.spreadAreaHectares.toFixed(2)} ha`], ["Maximum depth", `${props.maxDepthM.toFixed(2)} m`], ["Terrain grid", props.gridResolution]].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-900 p-3"><div className="text-slate-400">{label}</div><div className="mt-1 font-mono text-cyan-200">{value}</div></div>)}

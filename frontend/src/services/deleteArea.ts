@@ -12,7 +12,7 @@ export async function deleteArea(id: string, name: string) {
   const safeName = name.replace(/\s+/g, "_");
   for (const key of Object.keys(localStorage)) {
     if (key === `dt_mesh_nodes_${safeName}` || key === `dt_user_activity_${safeName}` ||
-        key === `dt_networks_${safeName}` || key.startsWith(`dt_networks_v8_${safeName}_`) || key.startsWith(`dt_networks_v9_${safeName}_`)) {
+        key === `dt_networks_${safeName}` || (key.startsWith("dt_networks_v") && key.includes(`_${safeName}_`))) {
       localStorage.removeItem(key);
     }
   }

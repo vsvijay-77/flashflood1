@@ -1,56 +1,178 @@
 import * as THREE from "three";
 import type { WaterPhysicsState } from "./waterPhysics";
 
+/**
+ * Orthogonal flow graph overlay using continuous horizontal (X) and vertical (Z) grid lines.
+ *
+ * Each cell edge in the physics grid is rendered as an axis-aligned line segment:
+ *  - Horizontal edge (isX=true): drawn West→East along the grid row
+ *  - Vertical edge (isX=false):  drawn North→South along the grid column
+ *
+ * Respects 3D terrain elevation:
+ *  - Dry cells show a subtle topographic grid contouring the hills and valleys.
+ *  - As floodwater rises and flows downhill according to elevation, the grid lines
+ *    illuminate in electric aqua and deep cyan reflecting local water depth.
+ *  - When rainfall is at full high, the illuminated grid blankets the terrain according
+ *    to elevation, showing complete flood inundation extent.
+ */
 export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float32Array, paths: Uint8Array) {
-  const stride = Math.max(1, Math.ceil(state.edges.length / 1600));
-  const edgeIndices = state.edges.map((_, index) => index).filter(index => index % stride === 0);
-  const nodes = [...new Set(edgeIndices.flatMap(index => [state.edges[index].from, state.edges[index].to]))];
-  const positions = new Float32Array(edgeIndices.length * 18);
-  const colors = new Float32Array(positions.length);
+  // Sample edges with high capacity (up to 10,000 edges) to ensure a complete, unbroken grid
+  const stride = Math.max(1, Math.ceil(state.edges.length / 10000));
+  const edgeIndices = state.edges
+    .map((_, index) => index)
+    .filter(index => index % stride === 0);
+
+  // Pre-allocate buffers: each edge = 1 line segment = 2 vertices × 3 floats each
+  const positions = new Float32Array(edgeIndices.length * 6);
+  const colors = new Float32Array(edgeIndices.length * 6);
+
+  // Grid node dots — one per unique node in the displayed edge set
+  const nodeSet = new Set<number>();
+  for (const i of edgeIndices) {
+    nodeSet.add(state.edges[i].from);
+    nodeSet.add(state.edges[i].to);
+  }
+  const nodes = [...nodeSet];
   const nodePositions = new Float32Array(nodes.length * 3);
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+
+  // Line geometry — continuous axis-aligned grid segments
+  const lineGeometry = new THREE.BufferGeometry();
+  lineGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+  lineGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+
+  // Node dot geometry
   const pointGeometry = new THREE.BufferGeometry();
   pointGeometry.setAttribute("position", new THREE.BufferAttribute(nodePositions, 3).setUsage(THREE.DynamicDrawUsage));
-  const lineMaterial = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false });
-  const pointMaterial = new THREE.PointsMaterial({ color: "#e2e8f0", size: 3, sizeAttenuation: false, depthWrite: false });
-  const lines = new THREE.LineSegments(geometry, lineMaterial);
+
+  const lineMaterial = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.92,
+    depthWrite: false,
+  });
+  const pointMaterial = new THREE.PointsMaterial({
+    color: "#64748b",
+    size: 2.0,
+    sizeAttenuation: false,
+    depthWrite: false,
+  });
+
+  const lines = new THREE.LineSegments(lineGeometry, lineMaterial);
   const points = new THREE.Points(pointGeometry, pointMaterial);
   lines.frustumCulled = false;
   points.frustumCulled = false;
+
   const group = new THREE.Group();
   group.add(lines, points);
+
   const update = (current: WaterPhysicsState) => {
-    const lift = Math.max(2, Math.min(12, current.dx * 0.08));
+    // Lift lines slightly above terrain & water surface so the grid remains clearly visible
+    const lift = Math.max(1.2, Math.min(6, current.dx * 0.05));
+
     for (let displayIndex = 0; displayIndex < edgeIndices.length; displayIndex++) {
       const edge = current.edges[edgeIndices[displayIndex]];
-      const forward = Math.abs(edge.discharge) > 0.0000001 ? edge.discharge > 0
-        : current.bed[edge.from] + current.depth[edge.from] >= current.bed[edge.to] + current.depth[edge.to];
-      const source = forward ? edge.from : edge.to;
-      const target = forward ? edge.to : edge.from;
-      const sourceX = terrain[source * 3], sourceY = terrain[source * 3 + 1] + lift + current.depth[source], sourceZ = terrain[source * 3 + 2];
-      const targetX = terrain[target * 3], targetY = terrain[target * 3 + 1] + lift + current.depth[target], targetZ = terrain[target * 3 + 2];
-      const offset = displayIndex * 18;
-      positions.set([sourceX, sourceY, sourceZ, targetX, targetY, targetZ], offset);
-      const deltaX = targetX - sourceX, deltaZ = targetZ - sourceZ;
-      const baseX = sourceX + deltaX * 0.7, baseY = sourceY + (targetY - sourceY) * 0.7, baseZ = sourceZ + deltaZ * 0.7;
-      positions.set([targetX, targetY, targetZ, baseX - deltaZ * 0.14, baseY, baseZ + deltaX * 0.14,
-        targetX, targetY, targetZ, baseX + deltaZ * 0.14, baseY, baseZ - deltaX * 0.14], offset + 6);
-      const channel = current.isSource[source] || current.isSource[target];
-      const road = paths[source] || paths[target];
-      const color = channel ? [0.13, 0.83, 0.98] : road ? [1, 0.68, 0.15] : [0.2, 0.85, 0.55];
-      const brightness = Math.abs(edge.discharge) > 0.0000001 ? 1 : 0.5;
-      for (let vertex = 0; vertex < 6; vertex++) for (let axis = 0; axis < 3; axis++) colors[offset + vertex * 3 + axis] = color[axis] * brightness;
+      const a = edge.from;
+      const b = edge.to;
+
+      const depthA = current.depth[a] || 0;
+      const depthB = current.depth[b] || 0;
+      const maxDepth = Math.max(depthA, depthB);
+      const isFlooded = maxDepth >= 0.04;
+      const isFlowing = Math.abs(edge.discharge) > 0.002;
+
+      // Start point at cell a
+      const sx = terrain[a * 3];
+      const sy = terrain[a * 3 + 1] + lift + depthA;
+      const sz = terrain[a * 3 + 2];
+
+      // End point at cell b — strictly axis-aligned:
+      // Horizontal edge (isX=true): row Z is locked, extends in X
+      // Vertical edge (isX=false): col X is locked, extends in Z
+      let ex: number, ey: number, ez: number;
+      if (edge.isX) {
+        ex = terrain[b * 3];
+        ey = terrain[b * 3 + 1] + lift + depthB;
+        ez = sz;
+      } else {
+        ex = sx;
+        ey = terrain[b * 3 + 1] + lift + depthB;
+        ez = terrain[b * 3 + 2];
+      }
+
+      const offset = displayIndex * 6;
+      positions[offset + 0] = sx;
+      positions[offset + 1] = sy;
+      positions[offset + 2] = sz;
+      positions[offset + 3] = ex;
+      positions[offset + 4] = ey;
+      positions[offset + 5] = ez;
+
+      // Dynamic flood depth coloring respecting elevation
+      const isChannel = current.isSource[a] || current.isSource[b];
+      const isRoad = paths[a] || paths[b];
+
+      let cr: number, cg: number, cb: number;
+      let brightness: number;
+
+      if (maxDepth >= 0.5) {
+        // Deep submerged zone: glowing deep azure cyan
+        cr = 0.05; cg = 0.78; cb = 1.0;
+        brightness = 1.0;
+      } else if (maxDepth >= 0.1) {
+        // Moderate flood inundation: vivid electric turquoise
+        cr = 0.15; cg = 0.92; cb = 0.98;
+        brightness = 0.95;
+      } else if (isFlooded || isFlowing) {
+        // Shallow active flow: bright aqua
+        cr = 0.22; cg = 0.88; cb = 0.82;
+        brightness = 0.85;
+      } else if (isChannel) {
+        // Dry mapped waterway channel: distinct muted cyan
+        cr = 0.13; cg = 0.75; cb = 0.90;
+        brightness = 0.65;
+      } else if (isRoad) {
+        // Evacuation path / road: amber
+        cr = 0.95; cg = 0.65; cb = 0.15;
+        brightness = 0.60;
+      } else {
+        // Dry terrain ground grid: soft topography emerald
+        cr = 0.18; cg = 0.68; cb = 0.42;
+        brightness = 0.32;
+      }
+
+      const r = cr * brightness;
+      const g = cg * brightness;
+      const b_ = cb * brightness;
+
+      colors[offset + 0] = r; colors[offset + 1] = g; colors[offset + 2] = b_;
+      colors[offset + 3] = r; colors[offset + 4] = g; colors[offset + 5] = b_;
     }
-    nodes.forEach((node, index) => nodePositions.set([terrain[node * 3], terrain[node * 3 + 1] + lift + current.depth[node], terrain[node * 3 + 2]], index * 3));
-    geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.color.needsUpdate = true;
+
+    // Update node dots on terrain surface
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      nodePositions[i * 3 + 0] = terrain[node * 3];
+      nodePositions[i * 3 + 1] = terrain[node * 3 + 1] + lift + (current.depth[node] || 0);
+      nodePositions[i * 3 + 2] = terrain[node * 3 + 2];
+    }
+
+    lineGeometry.attributes.position.needsUpdate = true;
+    lineGeometry.attributes.color.needsUpdate = true;
     pointGeometry.attributes.position.needsUpdate = true;
   };
+
   update(state);
-  return { group, displayedEdges: edgeIndices.length, update, dispose: () => {
-    group.removeFromParent();
-    geometry.dispose(); pointGeometry.dispose(); lineMaterial.dispose(); pointMaterial.dispose();
-  } };
+
+  return {
+    group,
+    displayedEdges: edgeIndices.length,
+    update,
+    dispose: () => {
+      group.removeFromParent();
+      lineGeometry.dispose();
+      pointGeometry.dispose();
+      lineMaterial.dispose();
+      pointMaterial.dispose();
+    },
+  };
 }

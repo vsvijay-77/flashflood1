@@ -61,7 +61,7 @@ import ThreeWaterSimulation, { type ThreeWaterSimulationHandle } from "../simula
 import DisasterIntelligenceChat from "./DisasterIntelligenceChat";
 import { toast } from "sonner";
 import { generateCirclePolygon } from "@/lib/gisUtils";
-import { buildingTouchesArea, buildingCenter } from "./buildingGeometry";
+import { buildingTouchesArea, buildingCenter, prepareBuildingFootprints } from "./buildingGeometry";
 import { loadSelectedAreaBuildings } from "@/services/selectedAreaBuildings";
 import {
   extractNetworks,
@@ -242,6 +242,8 @@ export function CesiumDigitalTwinViewer({
   const [landslideDayTab, setLandslideDayTab] = useState<"1d" | "2d" | "3d" | "4d" | "5d" | "6d" | "7d">("1d");
   const [waterSimActive, setWaterSimActive] = useState<boolean>(false);
   const [isFloodPaused, setIsFloodPaused] = useState<boolean>(false);
+  const [isFloodRunning, setIsFloodRunning] = useState<boolean>(false);
+  const [showVisibleRain, setShowVisibleRain] = useState<boolean>(true);
   const flashFloodRef = useRef<ThreeWaterSimulationHandle | null>(null);
 
   // Movement flags for WASD and free-style navigation
@@ -389,7 +391,7 @@ export function CesiumDigitalTwinViewer({
   const activityStorageKey = `dt_user_activity_${safeName}`;
   // v6 invalidates center/viewport data saved by older viewers. Only complete
   // selected-polygon responses may be restored for an area.
-  const networksStorageKey = `dt_networks_v9_${safeName}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
+  const networksStorageKey = `dt_networks_v11_${safeName}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
 
   // Purge old v1/v2 cache entries for this area (stale data from old code)
   try {
@@ -1928,17 +1930,9 @@ export function CesiumDigitalTwinViewer({
         areaCacheKey
       );
 
-      // 3. 🎯 STRICT FILTER: Keep houses inside the marked area polygon
-      let markedAreaBuildings = rawCandidates.filter((b) => {
-        const coordinates = b.geometry?.coordinates;
-        if (!coordinates) return false;
-        const parts = b.geometry.type === "Polygon" ? [coordinates as number[][][]] : coordinates as number[][][][];
-        return parts.some(rings => rings[0]?.length >= 3 && buildingTouchesArea(rings, activePoly));
-      });
-
-
-      // 4. 🛣️ STRICT PATH & RIVER CLEARANCE: Remove any buildings touching or inside roads/waterways
-      const clearBuildings: BuildingFeature[] = markedAreaBuildings.map((b) => ({
+      // Validate and deduplicate without dropping real houses beside roads or water.
+      const preparedBuildings = prepareBuildingFootprints(rawCandidates, activePoly);
+      const clearBuildings: BuildingFeature[] = preparedBuildings.map((b) => ({
         ...b,
         properties: {
           ...b.properties,
@@ -4474,8 +4468,8 @@ export function CesiumDigitalTwinViewer({
       <CesiumSelectedAreaRainOverlay
         viewer={cesiumViewer || viewerRef.current}
         polygonCoords={getActivePolygon()}
-        active={rainActive || waterSimActive}
-        isPaused={isFloodPaused}
+        active={(rainActive || isFloodRunning) && showVisibleRain}
+        isPaused={isFloodPaused || (waterSimActive && !isFloodRunning)}
         intensityMm={simRainIntensity}
         windSpeedKmh={simWindSpeed}
         groundHeight={groundHeightMeters}
@@ -4490,7 +4484,7 @@ export function CesiumDigitalTwinViewer({
         centerLng={longitude}
         baseElevation={groundHeightMeters}
         polygonCoords={getActivePolygon()}
-        active={waterSimActive || rainActive}
+        active={waterSimActive}
         riverFeatures={riverFeatures}
         roadFeatures={roadFeatures}
         buildingFeatures={buildingFeatures}
@@ -4498,10 +4492,14 @@ export function CesiumDigitalTwinViewer({
         windSpeedKmh={simWindSpeed}
         isFlatView={viewMode === "flat"}
         onPauseChange={setIsFloodPaused}
+        onRunningChange={setIsFloodRunning}
+        showVisibleRain={showVisibleRain}
+        onToggleVisibleRain={setShowVisibleRain}
         onClose={() => {
           setWaterSimActive(false);
-          setInternalRain(false);
+          setIsFloodRunning(false);
           setIsFloodPaused(false);
+          setInternalRain(false);
           onToggleRain?.(false);
         }}
       />
@@ -4580,6 +4578,7 @@ export function CesiumDigitalTwinViewer({
               const areaKey = areaNetworkKey(areaId, boundary, latitude, longitude);
               const bounds = { north: Math.max(...boundary.map(point => point[0])), south: Math.min(...boundary.map(point => point[0])), east: Math.max(...boundary.map(point => point[1])), west: Math.min(...boundary.map(point => point[1])) };
               networkAreaCache[areaKey] ??= { roads: roadFeatures, rivers: riverFeatures, bbox: bounds, timestamp: 0, complete: networksLoadedRef.current };
+              delete networkAreaCache[areaKey].buildingsLoadedAt;
               void loadBuildings({ polygon: boundary }, roadFeatures, riverFeatures, bounds, areaKey);
             }}>{isLoadingBuildings ? "Buildings are still loading…" : "Reload buildings only"}</button>
           </div>
@@ -4756,25 +4755,54 @@ export function CesiumDigitalTwinViewer({
               flashFloodRef.current?.closeSimulation();
             } else {
               setWaterSimActive(true);
-              setInternalRain(true);
-              onToggleRain?.(true);
-              flashFloodRef.current?.startSimulation();
+              setIsFloodPaused(false);
+              flashFloodRef.current?.openControls();
             }
           }}
-          title={waterSimActive ? "End Flash Flood & Save Simulation Report" : "Start Flash Flood & Rain Simulation"}
+          title={waterSimActive ? (isFloodRunning ? "End Flash Flood & Save Report" : "Close Simulation Settings") : "Configure Flash Flood & Rain Simulation"}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold cursor-pointer transition-all ${
             waterSimActive
-              ? "bg-cyan-600 text-white ring-2 ring-cyan-300 shadow-md shadow-cyan-950"
+              ? isFloodRunning
+                ? "bg-cyan-600 text-white ring-2 ring-cyan-300 shadow-md shadow-cyan-950"
+                : "bg-amber-600 text-white ring-2 ring-amber-300 shadow-md shadow-amber-950"
               : "bg-cyan-700 hover:bg-cyan-600 text-white"
           }`}
         >
           <CloudRain className="size-4" />
-          <span>{waterSimActive ? (isFloodPaused ? "Flood Paused" : "Flash Flood") : "Flash Flood"}</span>
-          {waterSimActive && (isFloodPaused ? (
-            <span className="size-2 rounded-full bg-amber-400 ml-0.5" title="Paused" />
-          ) : (
-            <span className="size-2 rounded-full bg-cyan-300 animate-ping ml-0.5" />
-          ))}
+          <span>
+            {waterSimActive
+              ? isFloodRunning
+                ? isFloodPaused
+                  ? "Flood Paused"
+                  : "Flash Flood"
+                : "Flood Settings"
+              : "Flash Flood"}
+          </span>
+          {waterSimActive && (
+            isFloodRunning ? (
+              isFloodPaused ? (
+                <span className="size-2 rounded-full bg-amber-400 ml-0.5" title="Paused" />
+              ) : (
+                <span className="size-2 rounded-full bg-cyan-300 animate-ping ml-0.5" />
+              )
+            ) : (
+              <span className="size-2 rounded-full bg-amber-300 ml-0.5" title="Configuring Settings" />
+            )
+          )}
+        </button>
+        <button
+          type="button"
+          data-testid="toggle-visible-rain-btn"
+          onClick={() => setShowVisibleRain((prev) => !prev)}
+          title={showVisibleRain ? "Hide visible falling rain particles" : "Show visible falling rain particles"}
+          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold cursor-pointer transition-all ${
+            showVisibleRain
+              ? "bg-sky-700/80 hover:bg-sky-600 text-sky-100 ring-1 ring-sky-400/50"
+              : "bg-slate-800/80 hover:bg-slate-700 text-slate-400"
+          }`}
+        >
+          <CloudRain className="size-3.5" />
+          <span>{showVisibleRain ? "Rain On" : "Rain Off"}</span>
         </button>
         <button type="button" data-testid="open-mesh-panel-btn" onClick={() => setShowMeshPanel(previous => !previous)} className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold text-cyan-200 hover:bg-slate-800">
           <Network className="size-3.5" /><span>Sensors</span>

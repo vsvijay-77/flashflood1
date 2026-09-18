@@ -32,6 +32,9 @@ export interface ThreeWaterSimulationProps {
   windSpeedKmh?: number;
   isFlatView?: boolean;
   onPauseChange?: (isPaused: boolean) => void;
+  onRunningChange?: (isRunning: boolean) => void;
+  showVisibleRain?: boolean;
+  onToggleVisibleRain?: (show: boolean) => void;
   onClose?: () => void;
   debugMode?: boolean;
 }
@@ -65,6 +68,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       windSpeedKmh = 20,
       isFlatView = false,
       onPauseChange,
+      onRunningChange,
+      showVisibleRain,
+      onToggleVisibleRain,
       onClose,
     },
     ref
@@ -134,7 +140,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [spreadAreaHectares, setSpreadAreaHectares] = useState<number>(0);
     const [maxDepthM, setMaxDepthM] = useState<number>(0);
     const [isReady, setIsReady] = useState(false);
-    const [controlsOpen, setControlsOpen] = useState(false);
+    const [controlsOpen, setControlsOpen] = useState(true);
     const [parameters, setParameters] = useState({ ...defaultFlashFloodParameters, windSpeedKmh });
     const parametersRef = useRef(parameters);
     parametersRef.current = parameters;
@@ -229,7 +235,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const totalHeightM = (north - south) * metersPerLat;
         if (!(totalWidthM > 0 && totalHeightM > 0)) throw new Error("Select an area with nonzero width and height.");
 
-        const spacing = Math.max(12, totalWidthM / 127, totalHeightM / 127);
+        const spacing = Math.max(16, totalWidthM / 79, totalHeightM / 79);
         const COLS = Math.max(2, Math.round(totalWidthM / spacing) + 1);
         const ROWS = Math.max(2, Math.round(totalHeightM / spacing) + 1);
         const dx = totalWidthM / (COLS - 1);
@@ -252,42 +258,55 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           }
         }
 
-        // Sample terrain elevation using Cesium.sampleTerrainMostDetailed
+        // Sample terrain elevation with fast-path:
+        // 1. Immediately read heights from already loaded globe terrain tiles (takes ~0ms)
         const sampledElevations = new Float32Array(COLS * ROWS).fill(NaN);
-        if (!cesiumViewer.terrainProvider || cesiumViewer.terrainProvider instanceof Cesium.EllipsoidTerrainProvider) {
-          throw new Error("Real elevation data is unavailable; slope-based flow requires a terrain provider.");
+        const unmeasuredIndices: number[] = [];
+        const unmeasuredCartos: any[] = [];
+
+        for (let i = 0; i < cartographics.length; i++) {
+          const h = cesiumViewer.scene.globe.getHeight(cartographics[i]);
+          if (Number.isFinite(h) && h > -200) {
+            sampledElevations[i] = h;
+          } else {
+            unmeasuredIndices.push(i);
+            unmeasuredCartos.push(cartographics[i]);
+          }
         }
-        try {
-          if (cesiumViewer.terrainProvider) {
-            const terrainSignal = AbortSignal.any([abortController.signal, AbortSignal.timeout(30000)]);
+
+        // 2. Only fetch terrain tiles for points that were not already loaded in memory
+        if (
+          unmeasuredCartos.length > 0 &&
+          cesiumViewer.terrainProvider &&
+          !(cesiumViewer.terrainProvider instanceof Cesium.EllipsoidTerrainProvider)
+        ) {
+          try {
+            const terrainSignal = AbortSignal.any([abortController.signal, AbortSignal.timeout(8000)]);
             const results: any[] = await new Promise((resolve, reject) => {
               const abort = () => reject(new Error("Terrain sampling timed out"));
               terrainSignal.addEventListener("abort", abort, { once: true });
-              Promise.resolve(Cesium.sampleTerrainMostDetailed(cesiumViewer.terrainProvider, cartographics, true))
-                .then(resolve, reject).finally(() => terrainSignal.removeEventListener("abort", abort));
+              Promise.resolve(Cesium.sampleTerrainMostDetailed(cesiumViewer.terrainProvider, unmeasuredCartos, true))
+                .then(resolve, reject)
+                .finally(() => terrainSignal.removeEventListener("abort", abort));
             });
-            for (let i = 0; i < results.length; i++) {
-              const h = results[i]?.height;
-              sampledElevations[i] = Number.isFinite(h) ? h : NaN;
+            for (let j = 0; j < results.length; j++) {
+              const h = results[j]?.height;
+              if (Number.isFinite(h)) {
+                sampledElevations[unmeasuredIndices[j]] = h;
+              }
             }
-          } else {
-            for (let i = 0; i < cartographics.length; i++) {
-              const h = cesiumViewer.scene.globe.getHeight(cartographics[i]);
-              sampledElevations[i] = Number.isFinite(h) ? h : NaN;
-            }
-          }
-        } catch (e) {
-          if (!isMounted) return;
-          console.warn("[WaterSim] Falling back to globe height:", e);
-          for (let i = 0; i < cartographics.length; i++) {
-            const h = cesiumViewer.scene.globe.getHeight(cartographics[i]);
-            sampledElevations[i] = Number.isFinite(h) ? h : NaN;
+          } catch (e) {
+            console.warn("[WaterSim] Falling back to approximate heights:", e);
           }
         }
 
         if (!isMounted) return;
-        if (sampledElevations.some(height => !Number.isFinite(height))) {
-          throw new Error("Terrain sampling is incomplete. Wait for terrain tiles, then reopen water simulation.");
+
+        // 3. Complete any remaining unmeasured points with center elevation
+        for (let i = 0; i < sampledElevations.length; i++) {
+          if (!Number.isFinite(sampledElevations[i])) {
+            sampledElevations[i] = centerElev;
+          }
         }
 
         // 2. Fetch OSM Water Sources with fallbacks & caching
@@ -444,14 +463,15 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         sceneRef.current?.add(graphRef.current.group);
         setGraphCounts({ nodes: insideCellsCount, edges: physics.state.edges.length, displayedEdges: graphRef.current.displayedEdges });
         setIsReady(true);
-        // Auto-start water physics simulation & rainfall immediately
-        setIsRunning(true);
+        // Open the simulation settings panel first — user clicks Start to begin
+        setIsRunning(false);
         setIsPaused(false);
-        setControlsOpen(false);
-        onPauseChange?.(false);
+        setControlsOpen(true);
+        onRunningChange?.(false);
+        onPauseChange?.(true);
 
         setStatusText(
-          `Rainfall & Downhill Runoff Active • ${minElev.toFixed(0)}–${maxElev.toFixed(0)}m terrain (${relief.toFixed(0)}m relief)`
+          `Terrain ready • ${minElev.toFixed(0)}–${maxElev.toFixed(0)}m (${relief.toFixed(0)}m relief) · Configure settings and click Start`
         );
       };
 
@@ -695,8 +715,15 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const secondsUntilStormEnds = currentParameters.durationMinutes * 60 - physics.state.elapsedSeconds;
           const stepTime = secondsUntilStormEnds > 0 ? Math.min(physicsTime, secondsUntilStormEnds / speedRef.current) : physicsTime;
           const runoff = runoffRainfall(rainfallRef.current, currentParameters, physics.state.elapsedSeconds);
-          const effectiveRunoff = Math.max(runoff, rainfallRef.current * 0.85);
-          const effectiveSourceRise = Math.max(sourceRiseRef.current, rainfallRef.current > 20 ? 0.9 : 0);
+          // Wind speed (m/s) boosts effective rainfall by 0–25%: high winds drive rain at an angle,
+          // concentrating more precipitation into the catchment (linear, capped at 20 m/s / 72 km/h).
+          const windMs = Math.max(0, currentParameters.windSpeedKmh) / 3.6;
+          const windMultiplier = 1 + Math.min(1, windMs / 20) * 0.25;
+          // Effective runoff scales directly with rainfall after infiltration; no artificial floor
+          // so light rain produces light flooding and zero rain produces zero new water injection.
+          const effectiveRunoff = runoff * windMultiplier;
+          // River rise scales proportionally with user-selected sourceRise and active runoff
+          const effectiveSourceRise = sourceRiseRef.current * (0.6 + 0.4 * Math.min(2, effectiveRunoff / 50));
           const advanced = physics.advance(stepTime, speedRef.current, effectiveSourceRise, effectiveRunoff, 6);
           simulatedSinceTelemetry += advanced;
           if (mat) mat.uniforms.uFlowTime.value = physics.state.elapsedSeconds;
@@ -887,27 +914,40 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             horizon: Math.max(sim.state.elapsedSeconds + 1800, parameters.durationMinutes * 60),
           };
           const forecastSim = createArrivalForecast(input);
-          const result = advanceArrivalForecast(forecastSim, input, 100);
+          const result = advanceArrivalForecast(forecastSim, input, 80);
           if (!cancelled) {
+            arrivalForecastRef.current = result;
             setArrivalForecast(result);
+            if (physicsSimRef.current) {
+              setBuildingExposure(
+                assessBuildings(
+                  buildingSamplesRef.current,
+                  physicsSimRef.current.state.depth,
+                  peakDepthRef.current,
+                  physicsSimRef.current.state.firstArrivalSeconds,
+                  result.arrivals
+                )
+              );
+            }
           }
         } catch (e) {
           console.warn("Building arrival forecast rollout failed:", e);
         }
       };
 
-      const timer = window.setTimeout(computeForecast, 400);
+      const timer = window.setTimeout(computeForecast, 200);
       return () => {
         cancelled = true;
         window.clearTimeout(timer);
       };
-    }, [active, isReady, isRunning, Math.floor(elapsedSeconds / 15), rainfall, sourceRise, parameters]);
+    }, [active, isReady, isRunning, Math.floor(elapsedSeconds / 10), rainfall, sourceRise, parameters]);
 
     // ─── 4. IMPERATIVE CONTROLS ──────────────────────────────────────────────
     const handleStart = () => {
       if (!physicsSimRef.current || !waterMeshRef.current) return;
       setIsRunning(true);
       setIsPaused(false);
+      onRunningChange?.(true);
       onPauseChange?.(false);
       setStatusText("Rainfall and downhill runoff active");
       setControlsOpen(false);
@@ -921,6 +961,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
     const handleResume = () => {
       setIsPaused(false);
+      onRunningChange?.(true);
       onPauseChange?.(false);
       setStatusText("Rainfall and downhill runoff active");
     };
@@ -969,7 +1010,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       }
       setIsRunning(false);
       setIsPaused(false);
+      onRunningChange?.(false);
       onPauseChange?.(false);
+      setControlsOpen(true);
       if (waterMaterialRef.current) {
         waterMaterialRef.current.uniforms.uTime.value = 0;
         waterMaterialRef.current.uniforms.uFlowTime.value = 0;
@@ -980,6 +1023,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const handleClose = () => {
       setIsRunning(false);
       setIsPaused(false);
+      onRunningChange?.(false);
       onPauseChange?.(false);
       if (physicsSimRef.current) {
         physicsSimRef.current.reset();
@@ -1058,6 +1102,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           onResume={handleResume}
           onReset={handleReset}
           onToggleVisibility={(v) => setShowWater(v)}
+          showRain={showVisibleRain}
+          onToggleRain={onToggleVisibleRain}
           onSourceRiseChange={(r) => setSourceRise(r)}
           onSpeedChange={(s) => setSpeed(s)}
           onWaveIntensityChange={(w) => setWaveIntensity(w)}

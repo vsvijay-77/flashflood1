@@ -228,7 +228,7 @@ export class WaterPhysicsSimulation {
         this.injectSourceRise(sourceRiseM, dt);
       }
       if (rainfallMmH > 0) {
-        const addedDepth = rainfallMmH / 3_600_000 * dt;
+        const addedDepth = (rainfallMmH / 3_600_000) * dt;
         for (let index = 0; index < this.state.totalCells; index++) if (this.state.insideMask[index]) {
           this.state.depth[index] += addedDepth;
           this.state.injectedVolumeM3 += addedDepth * this.config.dx * this.config.dy;

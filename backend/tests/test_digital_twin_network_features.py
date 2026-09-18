@@ -11,7 +11,7 @@ from routers import routing_and_rivers as api
 from services import area_map_store
 
 BOUNDARY = [[10.,77.],[10.,77.01],[10.01,77.01],[10.01,77.]]
-EMPTY = {"type":"FeatureCollection", "features":[]}
+EMPTY = {"type":"FeatureCollection", "features":[], "metadata":{"building_version":3}}
 
 
 def test_partial_network_reuses_saved_layer_and_never_synthesizes(monkeypatch):

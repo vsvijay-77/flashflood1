@@ -174,8 +174,11 @@ export const WaterFragmentShader = /* glsl */ `
     // ⛔ Strictly discard any fragments outside the selected polygon area
     if (vInside < 0.99) discard;
 
-    // Discard completely dry cells where water has not reached yet
-    if (vDepth < 0.0005) discard;
+    // Mapped water bodies (rivers/streams/lakes) show water at low depth (>= 0.003m = 3mm).
+    // Overland terrain only renders as flooded water once depth accumulates into standing/flowing
+    // floodwater (>= 0.035m = 3.5cm), preventing the entire mountain/land from turning blue by default.
+    float floodThreshold = vIsWaterBody > 0.5 ? 0.003 : 0.035;
+    if (vDepth < floodThreshold) discard;
 
     // Current-advected surface coordinates: ripples travel along simulated hydrodynamic velocity
     float phase = fract(uFlowTime / 20.0);
@@ -277,8 +280,9 @@ export const WaterFragmentShader = /* glsl */ `
     // ACES Filmic Tone Mapping
     vec3 finalColor = blendedWater;
 
-    // Opacity: high clarity with deep presence
-    float alpha = smoothstep(0.0005, 0.025, vDepth) * clamp(0.22 + 0.7 * (1.0 - exp(-vDepth * 2.0)) + fresnel * 0.15, 0.0, 0.98);
+    // Opacity: high clarity with smooth, natural blending at the flood margin
+    float alphaTransition = vIsWaterBody > 0.5 ? 0.02 : 0.08;
+    float alpha = smoothstep(floodThreshold, floodThreshold + alphaTransition, vDepth) * clamp(0.25 + 0.7 * (1.0 - exp(-vDepth * 1.8)) + fresnel * 0.15, 0.0, 0.98);
 
     gl_FragColor = vec4(finalColor, alpha);
     #include <tonemapping_fragment>

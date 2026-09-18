@@ -13,6 +13,7 @@ from services.osm_river_service import OSMRiverService
 from services.osm_building_service import OSMBuildingService
 from services.osm_tile_loader import OSMTileLoader, OSMTileLoadError
 from services import area_map_store
+from services.complete_buildings import enrich_buildings, BUILDING_VERSION
 from services.graph_builder import UnifiedGraphBuilder
 from services.routing_service import EvacuationRoutingService
 
@@ -186,7 +187,7 @@ async def extract_networks(payload: LocationRequest = Body(...)):
         "roads": {"geojson": roads, "total_nodes": roads.get("metadata", {}).get("total_nodes", 0), "total_edges": len(roads["features"])},
         "rivers": {"geojson": rivers, "total_nodes": rivers.get("metadata", {}).get("total_nodes", 0), "total_edges": len(rivers["features"])},
     }
-    if "buildings" in cached:
+    if "buildings" in cached and cached["buildings"].get("metadata", {}).get("building_version") == BUILDING_VERSION:
         result["buildings"] = {"geojson": cached["buildings"], "total_features": len(cached["buildings"]["features"])}
     return result
 
@@ -207,6 +208,10 @@ async def extract_buildings(payload: LocationRequest = Body(...)):
             ), timeout=240)
             if not status.get("complete"):
                 raise RuntimeError("Incomplete building tiles")
+
+        if geojson.get("metadata", {}).get("building_version") != BUILDING_VERSION:
+            geojson = await asyncio.to_thread(enrich_buildings, geojson, bbox, payload.polygon)
+        if "buildings" not in cached or geojson is not cached["buildings"]:
             await asyncio.to_thread(area_map_store.save_layer, area_id, key, "buildings", geojson)
     except Exception as exc:
         raise HTTPException(503, "Buildings could not be fully loaded and saved. Please retry.") from exc

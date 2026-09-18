@@ -143,19 +143,10 @@ export function createFlowGraphOverlay(state: WaterPhysicsState, terrain: Float3
       const sy = terrain[a * 3 + 1] + lift + depthA;
       const sz = terrain[a * 3 + 2];
 
-      // End point at cell b — strictly axis-aligned:
-      // Horizontal edge (isX=true): row Z is locked, extends in X
-      // Vertical edge (isX=false): col X is locked, extends in Z
-      let ex: number, ey: number, ez: number;
-      if (edge.isX) {
-        ex = terrain[b * 3];
-        ey = terrain[b * 3 + 1] + lift + depthB;
-        ez = sz;
-      } else {
-        ex = sx;
-        ey = terrain[b * 3 + 1] + lift + depthB;
-        ez = terrain[b * 3 + 2];
-      }
+      // End point at cell b: connects directly to node b on 3D terrain
+      const ex = terrain[b * 3];
+      const ey = terrain[b * 3 + 1] + lift + depthB;
+      const ez = terrain[b * 3 + 2];
 
       const offset = displayIndex * 6;
       positions[offset + 0] = sx;

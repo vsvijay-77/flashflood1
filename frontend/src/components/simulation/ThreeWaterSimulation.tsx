@@ -280,8 +280,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const totalHeightM = (north - south) * metersPerLat;
         if (!(totalWidthM > 0 && totalHeightM > 0)) throw new Error("Select an area with nonzero width and height.");
 
-        const maxGridAxis = 220;
-        const targetCellSizeM = 12;
+        const maxGridAxis = 180;
+        const targetCellSizeM = 16;
         const spacing = Math.max(targetCellSizeM, totalWidthM / (maxGridAxis - 1), totalHeightM / (maxGridAxis - 1));
         const COLS = Math.max(2, Math.round(totalWidthM / spacing) + 1);
         const ROWS = Math.max(2, Math.round(totalHeightM / spacing) + 1);
@@ -307,7 +307,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         }
 
         // Sample terrain elevation with high-precision terrain provider:
-        setStatusText("Sampling high-precision terrain elevations...");
+        setStatusText("Sampling high-precision terrain elevations across area...");
         const sampledElevations = new Float32Array(COLS * ROWS).fill(NaN);
 
         if (
@@ -315,29 +315,32 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           !(cesiumViewer.terrainProvider instanceof Cesium.EllipsoidTerrainProvider)
         ) {
           try {
-            const terrainSignal = AbortSignal.any([abortController.signal, AbortSignal.timeout(6000)]);
-            let next = 0;
-            const worker = async () => {
-              while (next < cartographics.length) {
-                terrainSignal.throwIfAborted();
-                const offset = next;
-                next += 2048;
-                const chunk = cartographics.slice(offset, offset + 2048);
-                await new Promise<void>((resolve, reject) => {
-                  const abort = () => reject(new Error("Terrain sampling timed out"));
-                  terrainSignal.addEventListener("abort", abort, { once: true });
-                  Cesium.sampleTerrainMostDetailed(cesiumViewer.terrainProvider, chunk)
-                    .then(() => {
-                      terrainSignal.removeEventListener("abort", abort);
-                      resolve();
-                    }, (err: unknown) => {
-                      terrainSignal.removeEventListener("abort", abort);
-                      reject(err);
-                    });
-                });
-              }
-            };
-            await Promise.all(Array.from({ length: Math.min(4, Math.ceil(cartographics.length / 2048)) }, worker));
+            const chunkSize = 2048;
+            const chunks: any[][] = [];
+            for (let i = 0; i < cartographics.length; i += chunkSize) {
+              chunks.push(cartographics.slice(i, i + chunkSize));
+            }
+
+            // Sample all chunks with individual timeout so trailing chunks always complete
+            await Promise.all(
+              chunks.map(async (chunk) => {
+                if (abortController.signal.aborted) return;
+                try {
+                  await Promise.race([
+                    Cesium.sampleTerrainMostDetailed(cesiumViewer.terrainProvider, chunk),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("Chunk timeout")), 15000)),
+                  ]);
+                } catch {
+                  // Fallback for points in this specific chunk from globe tiles
+                  for (const pt of chunk) {
+                    if (!Number.isFinite(pt.height)) {
+                      const h = cesiumViewer.scene.globe.getHeight(pt);
+                      if (Number.isFinite(h) && h > -200) pt.height = h;
+                    }
+                  }
+                }
+              })
+            );
           } catch (e) {
             console.warn("[WaterSim] sampleTerrainMostDetailed fallback:", e);
           }
@@ -366,11 +369,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           }
         }
 
-        // Local 4-neighbor relaxation for any remaining gaps (NEVER interpolate across distant mountain peaks)
+        // Full progressive neighbor relaxation across all rows & columns so the entire area (including boundaries and tail rows) seamlessly blends
         if (measuredCount > 0 && measuredCount < totalCells) {
-          let hasMissing = true;
-          for (let pass = 0; pass < 8 && hasMissing; pass++) {
-            hasMissing = false;
+          for (let pass = 0; pass < Math.max(ROWS, COLS); pass++) {
+            let filledThisPass = 0;
             for (let r = 0; r < ROWS; r++) {
               for (let c = 0; c < COLS; c++) {
                 const idx = r * COLS + c;
@@ -395,12 +397,13 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
                   }
                   if (count > 0) {
                     sampledElevations[idx] = sum / count;
-                  } else {
-                    hasMissing = true;
+                    filledThisPass++;
+                    measuredCount++;
                   }
                 }
               }
             }
+            if (filledThisPass === 0) break;
           }
         }
 

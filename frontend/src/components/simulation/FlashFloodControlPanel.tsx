@@ -10,7 +10,13 @@ interface Props extends Omit<WaterSimulationControlPanelProps, "scenarioInflow" 
   onOpenChange: (open: boolean) => void;
   showGraph: boolean;
   onToggleGraph: () => void;
-  graphCounts: { nodes: number; edges: number; displayedEdges: number };
+  graphCounts: {
+    nodes: number;
+    edges: number;
+    displayedEdges: number;
+    areaKm2?: number;
+    spacingM?: number;
+  };
   waterVolume: number;
   onRestart: () => void;
   showRain?: boolean;
@@ -79,13 +85,18 @@ export function FlashFloodControlPanel(props: Props) {
       <button type="button" onClick={props.onToggleGraph} aria-pressed={props.showGraph} aria-label="Toggle terrain flow graph" className={`flex items-center gap-1 rounded-lg p-2 text-xs ${props.showGraph ? "bg-emerald-700" : "hover:bg-slate-800"}`}><Network className="size-4" />Flow Graph</button>
     </div>
     {props.showGraph && !props.open && <div role="status" aria-label="Terrain flow graph legend" className="absolute right-3 top-32 z-30 max-w-xs rounded-lg border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-200">
-      <div>{parameters.flowModel === "gnn" ? "Experimental GNN" : "Physics"} · {props.graphCounts.nodes} nodes · {props.graphCounts.edges} edges</div>
+      <div>{parameters.flowModel === "gnn" ? "Experimental GNN" : "Physics"} · {props.graphCounts.nodes} nodes · {props.graphCounts.displayedEdges} edges</div>
+      {props.graphCounts.areaKm2 !== undefined && props.graphCounts.areaKm2 > 0 && (
+        <div className="mt-1 text-[11px] text-cyan-300 font-medium">
+          Coverage: <span className="font-semibold text-white">{props.graphCounts.areaKm2.toFixed(2)} km²</span> ({props.graphCounts.spacingM ? `${props.graphCounts.spacingM.toFixed(1)}m grid` : "dense"})
+        </div>
+      )}
       <div className="mt-1 flex items-center gap-2">
         <span className="inline-flex items-center gap-1.5"><span className="inline-block h-0.5 w-3.5 bg-white rounded"></span><span className="font-semibold text-white">White</span> Edges</span>
         <span>·</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full bg-black border border-slate-500 shadow-sm"></span><span className="font-semibold text-slate-200">Dark Circle</span> Nodes</span>
       </div>
-      <div className="mt-1 text-slate-400">Showing {props.graphCounts.displayedEdges} edges across 3D terrain grid.</div>
+      <div className="mt-1 text-slate-400">Dense mesh across 3D terrain polygon.</div>
     </div>}
     {props.open && <div className="absolute inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" onWheel={event => event.stopPropagation()}>
       <section role="dialog" aria-modal="true" aria-labelledby="flash-flood-title" className="flex max-h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-cyan-500/40 bg-slate-950 text-white shadow-2xl">

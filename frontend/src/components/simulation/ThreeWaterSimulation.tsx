@@ -98,8 +98,13 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const graphRef = useRef<ReturnType<typeof createFlowGraphOverlay> | null>(null);
     const [showGraph, setShowGraph] = useState(false);
     const showGraphRef = useRef(showGraph);
-    showGraphRef.current = showGraph;
-    const [graphCounts, setGraphCounts] = useState({ nodes: 0, edges: 0, displayedEdges: 0 });
+    const [graphCounts, setGraphCounts] = useState<{
+      nodes: number;
+      edges: number;
+      displayedEdges: number;
+      areaKm2?: number;
+      spacingM?: number;
+    }>({ nodes: 0, edges: 0, displayedEdges: 0 });
     const [waterVolume, setWaterVolume] = useState(0);
     const buildingSamplesRef = useRef<BuildingSample[]>([]);
     const peakDepthRef = useRef(new Float32Array());
@@ -273,8 +278,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const totalHeightM = (north - south) * metersPerLat;
         if (!(totalWidthM > 0 && totalHeightM > 0)) throw new Error("Select an area with nonzero width and height.");
 
-        const maxGridAxis = 160;
-        const targetCellSizeM = 30;
+        const maxGridAxis = 220;
+        const targetCellSizeM = 12;
         const spacing = Math.max(targetCellSizeM, totalWidthM / (maxGridAxis - 1), totalHeightM / (maxGridAxis - 1));
         const COLS = Math.max(2, Math.round(totalWidthM / spacing) + 1);
         const ROWS = Math.max(2, Math.round(totalHeightM / spacing) + 1);
@@ -570,7 +575,14 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         graphRef.current = createFlowGraphOverlay(physics.state, positions, pathMaskRef.current);
         graphRef.current.group.visible = showGraphRef.current;
         sceneRef.current?.add(graphRef.current.group);
-        setGraphCounts({ nodes: insideCellsCount, edges: physics.state.edges.length, displayedEdges: graphRef.current.displayedEdges });
+        const areaSqKm = (insideCellsCount * dx * dy) / 1_000_000;
+        setGraphCounts({
+          nodes: insideCellsCount,
+          edges: physics.state.edges.length,
+          displayedEdges: graphRef.current.displayedEdges,
+          areaKm2: areaSqKm,
+          spacingM: dx,
+        });
         setIsReady(true);
 
         // Ready state: load water on river channel without premature flood

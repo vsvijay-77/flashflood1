@@ -1519,36 +1519,36 @@ export function CesiumDigitalTwinViewer({
             evacuation_zone: building.properties?.evacuation_zone || "Zone B (Monitored Area)",
           };
 
-          // CORRECT Cesium extrusion pattern for terrain-following 3D buildings:
-          // - height: 0 + RELATIVE_TO_GROUND → base sits AT terrain surface (works at any elevation)
-          // - extrudedHeight: X + RELATIVE_TO_GROUND → top is X metres ABOVE terrain surface
-          // WRONG pattern (causes spikes): CLAMP_TO_GROUND base + absolute extrudedHeight
-          // because extrudedHeight=6 at terrain=1500m → top is at 6m ASL → underground → spike artifacts
+          // Ground-clamped building footprint:
+          // Uses CLAMP_TO_GROUND + ClassificationType.TERRAIN so the footprint drapes
+          // seamlessly onto the 3D terrain surface without floating in the air.
+          // Extrusion with flat base causes floating boxes on mountain slopes;
+          // terrain-classified polygons hug the ground 100% at any elevation.
           const entity = viewer.entities.add({
             name: `🏢 ${enrichedProps.name}`,
             show: layerVisibilityRef.current.buildings,
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flatMap(point => point.slice(0, 2))), holes),
               material: Cesium.Color.fromCssColorString("#f97316").withAlpha(0.88),
-              // Base: 0 metres above terrain (AT ground level) — works at any MSL elevation
               height: 0,
-              heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-              // Top: building height metres ABOVE terrain surface
-              extrudedHeight: height,
-              extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-              perPositionHeight: false,
-              outline: false,
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              classificationType: Cesium.ClassificationType.TERRAIN,
               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 60000),
             },
           });
 
           // Separate outline polyline clamped to ground for clear boundary visibility
-          const outlineCoords = outer.flatMap(point => point.slice(0, 2));
+          const rawCoords = outer.flatMap(point => point.slice(0, 2));
+          const isClosed = outer.length >= 2 &&
+            outer[0][0] === outer[outer.length - 1][0] &&
+            outer[0][1] === outer[outer.length - 1][1];
+          const outlineCoords = isClosed ? rawCoords : [...rawCoords, outer[0][0], outer[0][1]];
+
           const outlineEntity = viewer.entities.add({
             show: layerVisibilityRef.current.buildings,
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray(outlineCoords),
-              width: 2.0,
+              width: 2.5,
               material: Cesium.Color.fromCssColorString("#ea580c").withAlpha(0.95),
               clampToGround: true,
               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 45000),

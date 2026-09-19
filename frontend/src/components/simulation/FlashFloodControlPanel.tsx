@@ -1,4 +1,5 @@
-import { CloudRain, Mountain, Pause, Play, RotateCcw, SlidersHorizontal, X, Eye, EyeOff, Network } from "lucide-react";
+import { useState } from "react";
+import { CloudRain, Mountain, Pause, Play, RotateCcw, SlidersHorizontal, X, Eye, EyeOff, Network, Check } from "lucide-react";
 import { runoffRainfall } from "./flashFloodParameters";
 import type { FlashFloodParameters } from "./flashFloodParameters";
 import type { WaterSimulationControlPanelProps } from "./WaterSimulationControlPanel";
@@ -19,6 +20,7 @@ interface Props extends Omit<WaterSimulationControlPanelProps, "scenarioInflow" 
   };
   waterVolume: number;
   onRestart: () => void;
+  onApply?: () => void;
   showRain?: boolean;
   onToggleRain?: (showRain: boolean) => void;
 }
@@ -43,6 +45,7 @@ function Parameter({ name, unit, value, min, max, step = 1, onChange, hint }: {
 
 export function FlashFloodControlPanel(props: Props) {
   const { isRunning, isPaused, isReady, parameters, onParametersChange } = props;
+  const [appliedToast, setAppliedToast] = useState<boolean>(false);
   const isStormOver = props.elapsedSeconds >= parameters.durationMinutes * 60;
   const status = !isReady
     ? "Preparing terrain"
@@ -78,6 +81,22 @@ export function FlashFloodControlPanel(props: Props) {
       <button type="button" onClick={() => props.onOpenChange(true)} aria-label="Open Flash Flood parameters" className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold hover:bg-slate-800">
         <SlidersHorizontal className="size-4 text-cyan-300" /> Flash Flood <span className="text-cyan-300">{elapsed}</span>
       </button>
+      {props.onApply && (
+        <button
+          type="button"
+          disabled={!isReady}
+          onClick={() => {
+            props.onApply?.();
+            setAppliedToast(true);
+            setTimeout(() => setAppliedToast(false), 3500);
+          }}
+          aria-label="Apply changes to scenario"
+          title="Apply new parameters immediately to the active scenario without resetting water"
+          className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-md shadow-emerald-950/60 hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-40 cursor-pointer"
+        >
+          <Check className="size-3.5" /> Apply
+        </button>
+      )}
       <button type="button" disabled={!isReady} onClick={togglePlayback} aria-label={playbackLabel} title={playbackLabel} className="rounded-lg bg-cyan-700 p-2 hover:bg-cyan-600 disabled:opacity-40">
         {isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}
       </button>
@@ -117,6 +136,12 @@ export function FlashFloodControlPanel(props: Props) {
           <button autoFocus type="button" onClick={() => props.onOpenChange(false)} aria-label="Minimize Flash Flood parameters" title="Minimize; simulation keeps its current state" className="rounded-lg p-2 hover:bg-slate-800"><X className="size-5" /></button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {appliedToast && (
+            <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-emerald-500/80 bg-emerald-950/90 px-4 py-3 text-xs font-semibold text-emerald-200 shadow-xl shadow-emerald-950/60">
+              <Check className="size-4 text-emerald-400 shrink-0" />
+              <span>Changes applied live to active scenario! Existing flood water is preserved and new environment conditions are actively evolving.</span>
+            </div>
+          )}
           <p role="status" className="mb-4 rounded-lg border border-cyan-900 bg-cyan-950/40 px-3 py-2 text-xs text-cyan-200">{status}{!isRunning ? ` · ${props.statusText}` : ""}</p>
           <div className="mb-4 rounded-xl border border-emerald-800 bg-emerald-950/20 p-3 text-xs">
             <div className="flex flex-wrap items-center gap-2">
@@ -176,10 +201,25 @@ export function FlashFloodControlPanel(props: Props) {
           <p aria-label="Water performance" className="mt-2 text-xs text-slate-400">{props.fps} FPS · {props.effectiveSpeed.toFixed(1)}× actual speed · {props.osmFeatureCount} mapped water features. Flow is approximated at the available terrain resolution.</p>
         </div>
         <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-700 px-5 py-3">
+          {props.onApply && (
+            <button
+              type="button"
+              disabled={!isReady}
+              onClick={() => {
+                props.onApply?.();
+                setAppliedToast(true);
+                setTimeout(() => setAppliedToast(false), 3500);
+              }}
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-emerald-950/60 hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-40 cursor-pointer"
+              title="Apply environment changes to current scenario without restarting"
+            >
+              <Check className="size-4" /> Apply Changes (Keep Scenario)
+            </button>
+          )}
           <button type="button" disabled={!isReady} onClick={handleStartFromModal} className="flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold hover:bg-cyan-500 disabled:opacity-40">{isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}{playbackLabel}</button>
-          <button type="button" onClick={props.onReset} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm">Reset</button>
-          <button type="button" disabled={!isReady} onClick={props.onRestart} className="rounded-lg border border-emerald-600 px-4 py-2.5 text-sm disabled:opacity-40">Restart with these settings</button>
-          <button type="button" onClick={() => props.onOpenChange(false)} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm">View terrain</button>
+          <button type="button" onClick={props.onReset} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm hover:bg-slate-800">Reset</button>
+          <button type="button" disabled={!isReady} onClick={props.onRestart} className="rounded-lg border border-amber-600/80 text-amber-200 px-4 py-2.5 text-sm hover:bg-amber-950/40 disabled:opacity-40" title="Wipe current water and restart simulation from 0s">Restart from 0</button>
+          <button type="button" onClick={() => props.onOpenChange(false)} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm hover:bg-slate-800">View terrain</button>
           <button type="button" onClick={props.onClose} className="ml-auto rounded-lg px-3 py-2.5 text-sm text-rose-300 hover:bg-rose-950">End simulation</button>
         </footer>
       </section>

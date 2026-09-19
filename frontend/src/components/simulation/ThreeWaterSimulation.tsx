@@ -180,6 +180,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     waveIntensityRef.current = waveIntensity;
     const showWaterRef = useRef(showWater);
     showWaterRef.current = showWater;
+    const lastAppliedAtSecRef = useRef<number | null>(null);
 
     // ─── 1. INITIALIZE TERRAIN & OSM WATER BODIES ────────────────────────────
     useEffect(() => {
@@ -890,6 +891,23 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             timeRiseFactor = 0.0;
           }
 
+          // If changes were applied live to an existing scenario, ramp in the new environment change immediately:
+          const lastAppliedAt = lastAppliedAtSecRef.current;
+          if (lastAppliedAt != null && elapsedSec >= lastAppliedAt) {
+            const appliedDuration = Math.max(180, currentParameters.durationMinutes * 60);
+            const appliedElapsed = elapsedSec - lastAppliedAt;
+            const appliedPhase = appliedElapsed / appliedDuration;
+            let appliedRise = 0.0;
+            if (appliedPhase < 0.20) {
+              appliedRise = Math.sin((appliedPhase / 0.20) * (Math.PI / 2));
+            } else if (appliedPhase < 0.80) {
+              appliedRise = 1.0;
+            } else if (appliedPhase < 1.0) {
+              appliedRise = Math.cos(((appliedPhase - 0.80) / 0.20) * (Math.PI / 2));
+            }
+            timeRiseFactor = Math.max(timeRiseFactor, appliedRise);
+          }
+
           const runoff = runoffRainfall(rainfallRef.current, currentParameters, elapsedSec) * timeRiseFactor;
           const windMs = Math.max(0, currentParameters.windSpeedKmh) / 3.6;
           const windMultiplier = 1 + Math.min(1, windMs / 20) * 0.25;
@@ -1207,7 +1225,36 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       } catch (e) {}
     };
 
+    const handleApply = () => {
+      if (!physicsSimRef.current || !waterMeshRef.current) return;
+      // Record time of live application so fresh rain/inflow begins immediately on existing water
+      lastAppliedAtSecRef.current = physicsSimRef.current.state.elapsedSeconds;
+      parametersRef.current = parameters;
+      rainfallRef.current = rainfall;
+      sourceRiseRef.current = sourceRise;
+      waveIntensityRef.current = waveIntensity;
+      speedRef.current = speed;
+
+      // Update physics configuration directly
+      physicsSimRef.current.config.manningN = parameters.roughness;
+
+      // If not running, start; if paused, resume
+      if (!isRunningRef.current) {
+        handleStart();
+      } else if (isPausedRef.current) {
+        handleResume();
+      }
+
+      setStatusText("Updated environment & scenario settings applied live");
+      setControlsOpen(false);
+
+      if (cesiumViewer && !cesiumViewer.isDestroyed()) {
+        cesiumViewer.scene.requestRender();
+      }
+    };
+
     const handleReset = () => {
+      lastAppliedAtSecRef.current = null;
       if (physicsSimRef.current) {
         physicsSimRef.current.reset();
         peakDepthRef.current.fill(0);
@@ -1385,6 +1432,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           }}
           graphCounts={graphCounts}
           waterVolume={waterVolume}
+          onApply={handleApply}
           onRestart={() => { handleReset(); handleStart(); }}
           onParametersChange={setParameters}
           open={controlsOpen}

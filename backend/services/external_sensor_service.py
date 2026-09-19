@@ -63,10 +63,10 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                             COUNT(*) as total_records,
                             MIN(created_at) as first_seen,
                             MAX(created_at) as last_seen,
-                            AVG(water_level) as avg_water_level,
-                            MAX(water_level) as max_water_level,
-                            AVG(rainfall) as avg_rainfall,
-                            MAX(rainfall) as max_rainfall,
+                            AVG(rainfall) as avg_water_level,
+                            MAX(rainfall) as max_water_level,
+                            AVG(water_level) as avg_rainfall,
+                            MAX(water_level) as max_rainfall,
                             AVG(rssi) as avg_rssi,
                             AVG(snr) as avg_snr
                         FROM sensor_data
@@ -83,6 +83,12 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                     created_at = node.get("created_at")
                     is_online = True  # Verified active dataset
 
+                    # Swap water_level and rainfall data everywhere:
+                    raw_water_level = float(node.get("water_level") or 0.0)
+                    raw_rainfall = float(node.get("rainfall") or 0.0)
+                    water_level = raw_rainfall
+                    rainfall = raw_water_level
+
                     raw_tilt = float(node.get("tilt") or 0.0)
                     inv_tilt = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
 
@@ -94,8 +100,8 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                         "latest": {
                             "id": node.get("id"),
                             "soil_moisture": float(node.get("soil_moisture") or 0.0),
-                            "water_level_mm": float(node.get("water_level") or 0.0),
-                            "rainfall_mm": float(node.get("rainfall") or 0.0),
+                            "water_level_mm": water_level,
+                            "rainfall_mm": rainfall,
                             "tilt_deg": inv_tilt,
                             "raw_tilt": raw_tilt,
                             "imu_x": float(node.get("imu_x") or 0.0),
@@ -172,6 +178,11 @@ def get_sensor_history(device_id: Optional[str] = None, limit: int = 150) -> Lis
                     created_at = item.get("created_at")
                     if created_at and hasattr(created_at, "isoformat"):
                         item["created_at"] = created_at.isoformat()
+                    # Swap water_level and rainfall
+                    raw_water_level = float(item.get("water_level") or 0.0)
+                    raw_rainfall = float(item.get("rainfall") or 0.0)
+                    item["water_level"] = raw_rainfall
+                    item["rainfall"] = raw_water_level
                     raw_tilt = float(item.get("tilt") or 0.0)
                     item["raw_tilt"] = raw_tilt
                     item["tilt"] = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
@@ -223,6 +234,7 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
     Normalizes node identifiers (node1 -> LORA_NODE_1, etc.).
     Returns real values or 0s if no data exists.
     Tilt is calibrated: 100% = 0, 0% = 100%.
+    Water level and rainfall swapped: water level -> raindrop, raindrop -> water level.
     """
     clean_id = (node_id or "node1").strip()
     digits = "".join([c for c in clean_id if c.isdigit()])
@@ -247,8 +259,11 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
                         created_at = created_at.isoformat()
 
                     soil_moisture = float(item.get("soil_moisture") or 0.0)
-                    water_level = float(item.get("water_level") or 0.0)
-                    rainfall = float(item.get("rainfall") or 0.0)
+                    raw_water_level = float(item.get("water_level") or 0.0)
+                    raw_rainfall = float(item.get("rainfall") or 0.0)
+                    # Swap requested: water level data to rain drop, and raindrop to water level
+                    water_level = raw_rainfall
+                    rainfall = raw_water_level
                     # Calibration requested: 100 percent = 0, 0 = 100%
                     raw_tilt = float(item.get("tilt") or 0.0)
                     tilt = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))

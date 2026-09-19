@@ -55,6 +55,7 @@ import {
   Droplets,
 } from "lucide-react";
 import CesiumSelectedAreaRainOverlay from "../simulation/CesiumSelectedAreaRainOverlay";
+import SensorLiveRainController from "./SensorLiveRainController";
 import TwinForecastHeatmap from "./TwinForecastHeatmap";
 import TwinLandslideHeatmap from "./TwinLandslideHeatmap";
 import ThreeWaterSimulation, { type ThreeWaterSimulationHandle } from "../simulation/ThreeWaterSimulation";
@@ -529,22 +530,17 @@ export function CesiumDigitalTwinViewer({
     setInternalRain(next);
     setShowVisibleRain(next);
     onToggleRain?.(next);
-    setWaterSimActive(next);
-    if (next) {
-      flashFloodRef.current?.startSimulation();
-    } else {
-      flashFloodRef.current?.pauseSimulation();
-    }
+    // User requested: "no simultaion page no water incresase nothing"
+    // Atmospheric rain operates purely independently without triggering water simulation
+    setWaterSimActive(false);
   };
 
   useEffect(() => {
     if (isRaining !== undefined) {
-      setWaterSimActive(isRaining);
       setShowVisibleRain(isRaining);
-      if (isRaining) {
-        flashFloodRef.current?.startSimulation();
-      } else {
-        flashFloodRef.current?.pauseSimulation();
+      // User requested: "no simultaion page no water incresase nothing"
+      if (!isRaining) {
+        setWaterSimActive(false);
       }
     }
   }, [isRaining]);
@@ -2781,21 +2777,21 @@ export function CesiumDigitalTwinViewer({
 
           setSlaveLiveTelemetry(telemetry);
 
-          // "and add rainfall if greater the 20 % st rain and tilt 100 percent =0 0=100%"
-          // "while rain not load siluaion just start it"
+          // "if sensor rainfalll is detected make the rain thats all rain based on that intensity create a separate code for it 
+          //  no simultaion page no water incresase nothing"
           const isRainOver20 = telemetry.rainfall > 20 || telemetry.rainfallPct > 20;
           if (isRainOver20) {
             if (!rainActive) {
               setInternalRain(true);
               setShowVisibleRain(true);
-              setWaterSimActive(true);
               onToggleRain?.(true);
             }
             setSimRainIntensity(telemetry.rainfall);
-            flashFloodRef.current?.startSimulation();
+            // User requirement: "no simultaion page no water incresase nothing"
+            setWaterSimActive(false);
             if (!lastAutoStartedRainRef.current) {
               lastAutoStartedRainRef.current = true;
-              toast.success(`🌧️ Live rainfall > 20% detected (${telemetry.rainfall.toFixed(1)} mm/h)! Starting simulation.`);
+              toast.success(`🌧️ Sensor rainfall detected (${telemetry.rainfall.toFixed(1)} mm/h)! Atmospheric rain active.`);
             }
           } else {
             // "see if no rainfall no rain"
@@ -2805,7 +2801,6 @@ export function CesiumDigitalTwinViewer({
               setShowVisibleRain(false);
               setWaterSimActive(false);
               onToggleRain?.(false);
-              flashFloodRef.current?.pauseSimulation();
             }
             setSimRainIntensity(0);
           }
@@ -2819,7 +2814,6 @@ export function CesiumDigitalTwinViewer({
             setShowVisibleRain(false);
             setWaterSimActive(false);
             onToggleRain?.(false);
-            flashFloodRef.current?.pauseSimulation();
           }
           setSimRainIntensity(0);
         }
@@ -2832,7 +2826,6 @@ export function CesiumDigitalTwinViewer({
             setShowVisibleRain(false);
             setWaterSimActive(false);
             onToggleRain?.(false);
-            flashFloodRef.current?.pauseSimulation();
           }
           setSimRainIntensity(0);
         }
@@ -4836,16 +4829,15 @@ export function CesiumDigitalTwinViewer({
       )}
 
 
-      {/* 🌧️ Atmospheric Rain Simulation Overlay (active in 3D, Flat View, and Top-Down) */}
-      <CesiumSelectedAreaRainOverlay
+      {/* 🌧️ Standalone Sensor-Driven Live Rain Overlay (Dedicated Separate Code: No simulation, no water increase) */}
+      <SensorLiveRainController
         viewer={cesiumViewer || viewerRef.current}
         polygonCoords={getActivePolygon()}
-        active={(rainActive || waterSimActive) && showVisibleRain}
-        isPaused={isFloodPaused || (waterSimActive && !isFloodRunning && !isFloodReady)}
-        intensityMm={simRainIntensity}
+        sensorRainfall={simRainIntensity}
         windSpeedKmh={simWindSpeed}
         groundHeight={groundHeightMeters}
         isFlatView={viewMode === "flat"}
+        forceActive={(rainActive || showVisibleRain) && simRainIntensity > 0}
       />
 
       {/* 🌊 3D Realistic Three.js Water Simulation (OSM Water Bodies + DEM Shallow-Water Flow) */}
@@ -4857,7 +4849,7 @@ export function CesiumDigitalTwinViewer({
         baseElevation={groundHeightMeters}
         polygonCoords={getActivePolygon()}
         active={waterSimActive}
-        autoStart={rainActive || waterSimActive}
+        autoStart={false}
         riverFeatures={riverFeatures}
         roadFeatures={roadFeatures}
         buildingFeatures={buildingFeatures}

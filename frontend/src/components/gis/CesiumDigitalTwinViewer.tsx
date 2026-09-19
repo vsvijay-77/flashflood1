@@ -1297,12 +1297,11 @@ export function CesiumDigitalTwinViewer({
 
           const isMain = wType === "river" || wType === "canal" || Boolean(props.is_main_river);
           const mappedWidth = Number(props.width_m ?? props.width);
-          // Match the rich teal-cyan color and soft glow of the bottom water body.
-          // Use PolylineGlowMaterialProperty so river channels have the same
-          // luminous, soft-edged quality as the Three.js water shader mesh below.
+          // Use plain Color material (fastest path in Cesium — no glow shader passes).
+          // Same teal-cyan #06b6d4 as the bottom water body for visual consistency.
           const lineWidth = Number.isFinite(mappedWidth) && mappedWidth > 0
-            ? Math.max(isMain ? 18 : 12, Math.min(28, mappedWidth * 1.0))
-            : isMain ? 22 : 14;
+            ? Math.max(isMain ? 16 : 10, Math.min(24, mappedWidth * 1.0))
+            : isMain ? 18 : 11;
 
           clippedSegments.forEach((seg) => {
             const flat = seg.flat();
@@ -1313,11 +1312,7 @@ export function CesiumDigitalTwinViewer({
               polyline: {
                 positions: Cesium.Cartesian3.fromDegreesArray(flat),
                 width: lineWidth,
-                material: new Cesium.PolylineGlowMaterialProperty({
-                  glowPower: 0.35,
-                  taperPower: 1.0,
-                  color: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.92),
-                }),
+                material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.90),
                 clampToGround: true,
                 zIndex: 30,
               },

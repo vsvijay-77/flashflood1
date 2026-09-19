@@ -129,6 +129,7 @@ export interface LiveSlaveTelemetry {
   rainfallMm: number;
   rainfallPct: number;
   tilt: number;
+  rawTilt?: number;
   imuX: number;
   imuY: number;
   imuZ: number;
@@ -151,6 +152,7 @@ export const defaultLiveTelemetry: LiveSlaveTelemetry = {
   rainfallMm: 0,
   rainfallPct: 0,
   tilt: 0,
+  rawTilt: 0,
   imuX: 0,
   imuY: 0,
   imuZ: 0,
@@ -2744,6 +2746,12 @@ export function CesiumDigitalTwinViewer({
         if (!isMounted) return;
 
         if (data && data.has_data) {
+          const rawTilt = Number(data.raw_tilt ?? data.tilt ?? 0);
+          // Calibrate tilt: 100% = 0, 0% = 100%
+          const tiltVal = data.raw_tilt !== undefined 
+            ? Number(data.tilt ?? 0) 
+            : Math.max(0, Math.min(100, 100 - rawTilt));
+
           const telemetry: LiveSlaveTelemetry = {
             deviceId: data.device_id || targetSensorId,
             hasData: true,
@@ -2754,7 +2762,8 @@ export function CesiumDigitalTwinViewer({
             rainfall: Number(data.rainfall ?? data.rainfall_mm ?? 0),
             rainfallMm: Number(data.rainfall_mm ?? data.rainfall ?? 0),
             rainfallPct: Number(data.rainfall_pct ?? data.rainfall ?? 0),
-            tilt: Number(data.tilt ?? 0),
+            tilt: tiltVal,
+            rawTilt: rawTilt,
             imuX: Number(data.imu_x ?? 0),
             imuY: Number(data.imu_y ?? 0),
             imuZ: Number(data.imu_z ?? 0),
@@ -2768,14 +2777,14 @@ export function CesiumDigitalTwinViewer({
 
           setSlaveLiveTelemetry(telemetry);
 
-          // "also in simulation give that data as default"
-          if (!rainActive && telemetry.rainfall > 0) {
+          // "rain intensity change depend on that value"
+          if (telemetry.rainfall > 0 || rainActive) {
             setSimRainIntensity(telemetry.rainfall);
           }
 
-          // "if rain is 100 % from the live data start the rain in simulation based on the value received"
-          const isRain100 = telemetry.rainfall >= 100 || telemetry.rainfallPct >= 100;
-          if (isRain100) {
+          // "and add rainfall if greater the 20 % st rain and tilt 100 percent =0 0=100%"
+          const isRainOver20 = telemetry.rainfall > 20 || telemetry.rainfallPct > 20;
+          if (isRainOver20) {
             if (!rainActive) {
               setInternalRain(true);
               setShowVisibleRain(true);
@@ -2784,9 +2793,9 @@ export function CesiumDigitalTwinViewer({
             setSimRainIntensity(telemetry.rainfall);
             if (!lastAutoStartedRainRef.current) {
               lastAutoStartedRainRef.current = true;
-              toast.success(`🌧️ Rain is 100% from Slave Node 1 live data! Simulation rain started at ${telemetry.rainfall} mm/h`);
+              toast.success(`🌧️ Live rainfall > 20% detected (${telemetry.rainfall.toFixed(1)} mm/h)! Starting simulation rain.`);
             }
-          } else if (telemetry.rainfall < 100) {
+          } else {
             lastAutoStartedRainRef.current = false;
           }
         } else {
@@ -6443,14 +6452,20 @@ export function CesiumDigitalTwinViewer({
                       <span className="font-semibold text-slate-200 text-xs">Slope Inclinometer (Tilt)</span>
                     </div>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 font-mono border border-amber-800/50">
-                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.tilt > 5 ? "Warning" : "Stable") : "0"}
+                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.tilt > 15 ? "Warning" : "Stable") : "0"}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between mt-1.5">
                     <span className="text-[10px] text-slate-400 font-mono">Axis Deviation:</span>
                     <span className="font-mono font-bold text-amber-300 text-sm">
-                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.tilt.toFixed(1)}°` : "0°"}
+                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.tilt.toFixed(1)}%` : "0%"}
                     </span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                    <div
+                      className="bg-amber-500 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, slaveLiveTelemetry.tilt)}%` }}
+                    />
                   </div>
                 </div>
 
@@ -6463,15 +6478,15 @@ export function CesiumDigitalTwinViewer({
                     </div>
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
-                        slaveLiveTelemetry.rainfall >= 100
+                        slaveLiveTelemetry.rainfall > 20
                           ? "bg-rose-950 text-rose-300 border-rose-800/50 animate-pulse font-bold"
                           : slaveLiveTelemetry.hasData && slaveLiveTelemetry.rainfall > 0
                           ? "bg-cyan-950 text-cyan-300 border-cyan-800/50"
                           : "bg-slate-900 text-slate-400 border-slate-800"
                       }`}
                     >
-                      {slaveLiveTelemetry.rainfall >= 100
-                        ? "100% (Storm)"
+                      {slaveLiveTelemetry.rainfall > 20
+                        ? `${slaveLiveTelemetry.rainfall.toFixed(0)} mm/h (>20% Active)`
                         : slaveLiveTelemetry.hasData && slaveLiveTelemetry.rainfall > 0
                         ? `${slaveLiveTelemetry.rainfall.toFixed(0)} mm/h`
                         : "0"}
@@ -6508,41 +6523,8 @@ export function CesiumDigitalTwinViewer({
                       {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.imuMag.toFixed(2)} g` : "0 g"}
                     </span>
                   </div>
-                  {slaveLiveTelemetry.hasData && (
-                    <div className="text-[9px] font-mono text-slate-400 mt-1 flex justify-between">
-                      <span>X: {slaveLiveTelemetry.imuX.toFixed(0)}</span>
-                      <span>Y: {slaveLiveTelemetry.imuY.toFixed(0)}</span>
-                      <span>Z: {slaveLiveTelemetry.imuZ.toFixed(0)}</span>
-                    </div>
-                  )}
                 </div>
               </div>
-
-              {/* Simulate 100% Rain Packet Test Trigger */}
-              <button
-                type="button"
-                onClick={() => {
-                  setSlaveLiveTelemetry((prev) => ({
-                    ...prev,
-                    hasData: true,
-                    rainfall: 100,
-                    rainfallMm: 100,
-                    rainfallPct: 100,
-                  }));
-                  if (!rainActive) {
-                    setInternalRain(true);
-                    setShowVisibleRain(true);
-                    onToggleRain?.(true);
-                  }
-                  setSimRainIntensity(100);
-                  toast.success("🌧️ Simulating 100% Rain live telemetry packet! Simulation rain started at 100 mm/h.");
-                }}
-                className="w-full flex items-center justify-center gap-1.5 bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-200 hover:text-white rounded-xl py-2 text-xs font-semibold cursor-pointer transition-all shadow-md active:scale-95"
-                title="Test live 100% rain trigger: auto-starts rain in simulation at 100 mm/h"
-              >
-                <CloudRain className="size-3.5 text-cyan-400" />
-                <span>Test 100% Rain (Auto-Start Simulation)</span>
-              </button>
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-1">

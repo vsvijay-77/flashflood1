@@ -83,6 +83,9 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                     created_at = node.get("created_at")
                     is_online = True  # Verified active dataset
 
+                    raw_tilt = float(node.get("tilt") or 0.0)
+                    inv_tilt = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
+
                     devices.append({
                         "device_id": dev_id,
                         "name": f"LoRaWAN Hydrology Node ({dev_id})",
@@ -93,7 +96,8 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                             "soil_moisture": float(node.get("soil_moisture") or 0.0),
                             "water_level_mm": float(node.get("water_level") or 0.0),
                             "rainfall_mm": float(node.get("rainfall") or 0.0),
-                            "tilt_deg": float(node.get("tilt") or 0.0),
+                            "tilt_deg": inv_tilt,
+                            "raw_tilt": raw_tilt,
                             "imu_x": float(node.get("imu_x") or 0.0),
                             "imu_y": float(node.get("imu_y") or 0.0),
                             "imu_z": float(node.get("imu_z") or 0.0),
@@ -168,6 +172,9 @@ def get_sensor_history(device_id: Optional[str] = None, limit: int = 150) -> Lis
                     created_at = item.get("created_at")
                     if created_at and hasattr(created_at, "isoformat"):
                         item["created_at"] = created_at.isoformat()
+                    raw_tilt = float(item.get("tilt") or 0.0)
+                    item["raw_tilt"] = raw_tilt
+                    item["tilt"] = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
                     rows.append(item)
                 return rows
     except Exception as e:
@@ -215,6 +222,7 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
     Fetches the single latest telemetry record for a specific node.
     Normalizes node identifiers (node1 -> LORA_NODE_1, etc.).
     Returns real values or 0s if no data exists.
+    Tilt is calibrated: 100% = 0, 0% = 100%.
     """
     clean_id = (node_id or "node1").strip()
     digits = "".join([c for c in clean_id if c.isdigit()])
@@ -241,7 +249,9 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
                     soil_moisture = float(item.get("soil_moisture") or 0.0)
                     water_level = float(item.get("water_level") or 0.0)
                     rainfall = float(item.get("rainfall") or 0.0)
-                    tilt = float(item.get("tilt") or 0.0)
+                    # Calibration requested: 100 percent = 0, 0 = 100%
+                    raw_tilt = float(item.get("tilt") or 0.0)
+                    tilt = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
                     imu_x = float(item.get("imu_x") or 0.0)
                     imu_y = float(item.get("imu_y") or 0.0)
                     imu_z = float(item.get("imu_z") or 0.0)
@@ -263,6 +273,7 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
                         "rainfall_mm": rainfall,
                         "rainfall_pct": rainfall,
                         "tilt": tilt,
+                        "raw_tilt": raw_tilt,
                         "imu_x": imu_x,
                         "imu_y": imu_y,
                         "imu_z": imu_z,
@@ -289,6 +300,7 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
         "rainfall_mm": 0.0,
         "rainfall_pct": 0.0,
         "tilt": 0.0,
+        "raw_tilt": 0.0,
         "imu_x": 0.0,
         "imu_y": 0.0,
         "imu_z": 0.0,

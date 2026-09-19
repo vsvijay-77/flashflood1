@@ -1,4 +1,6 @@
 import type { BuildingExposure } from "./buildingExposure";
+import type { StandardFloodReportData } from "./standardFloodReport";
+
 export interface SimulationReportData {
   runId: string; startedAt: string; endedAt: string;
   scenario: Record<string, unknown>;
@@ -6,6 +8,7 @@ export interface SimulationReportData {
   buildings: BuildingExposure[];
   summary: { loaded: number; assessed: number; affectedNow: number; affectedDuringRun: number; residentialAffectedDuringRun: number };
   method: string;
+  standardReport?: StandardFloodReportData;
 }
 export function buildSimulationReport(runId: string, startedAt: string, scenario: Record<string, unknown>, buildings: BuildingExposure[], settingsHistory: SimulationReportData["settingsHistory"]): SimulationReportData {
   return { runId, startedAt, endedAt: new Date().toISOString(), scenario, settingsHistory,

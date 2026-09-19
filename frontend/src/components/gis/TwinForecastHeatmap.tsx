@@ -20,18 +20,29 @@ export function surfaceImage(polygon: [number, number][], bounds: number[], scor
   canvas.width = canvas.height = 512;
   const ctx = canvas.getContext("2d")!;
   const pixels = ctx.createImageData(512, 512);
+
+  // Dynamic range calibration: ensures river flood areas scale to the red hazard zone
+  const maxScore = Math.max(...scores.filter(Number.isFinite), 0.001);
+  const minScore = Math.min(...scores.filter(Number.isFinite), 0);
+  const range = Math.max(0.001, maxScore - minScore);
+
   for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
     const gx = x / 511 * (size - 1), gy = (1 - y / 511) * (size - 1);
     const col = Math.min(size - 2, Math.floor(gx)), row = Math.min(size - 2, Math.floor(gy));
     const fx = gx - col, fy = gy - row;
-    const value = (scores[row * size + col] * (1 - fx) + scores[row * size + col + 1] * fx) * (1 - fy)
+    const rawVal = (scores[row * size + col] * (1 - fx) + scores[row * size + col + 1] * fx) * (1 - fy)
       + (scores[(row + 1) * size + col] * (1 - fx) + scores[(row + 1) * size + col + 1] * fx) * fy;
+
+    // Relative hazard scaling: maps the highest flood accumulation areas to 0.75-1.0 (Vivid Red)
+    const norm = Math.max(0, Math.min(1, (rawVal - minScore) / range));
+    const value = maxScore > 0.01 ? Math.max(rawVal, Math.pow(norm, 0.75) * Math.min(1, maxScore * 2.5 + 0.3)) : rawVal;
+
     // Fixed index scale: blue -> cyan -> yellow -> red.
     const stops = [[37, 99, 235], [6, 182, 212], [250, 204, 21], [220, 38, 38]];
     const v = Math.max(0, Math.min(1, value)) * 3, i = Math.min(2, Math.floor(v));
     const offset = (y * 512 + x) * 4;
     for (let c = 0; c < 3; c++) pixels.data[offset + c] = Math.round(stops[i][c] * (1 - (v - i)) + stops[i + 1][c] * (v - i));
-    pixels.data[offset + 3] = value > 0.02 ? Math.round(140 + Math.min(1, value) * 105) : 0;
+    pixels.data[offset + 3] = rawVal > 0.02 ? Math.round(140 + Math.min(1, value) * 105) : 0;
   }
   ctx.putImageData(pixels, 0, 0);
   ctx.globalCompositeOperation = "destination-in";

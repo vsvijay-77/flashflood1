@@ -13,6 +13,9 @@ import type { RiverFeature, RoadFeature } from "@/lib/routingApi";
 import { createFlowGraphOverlay } from "./flowGraphOverlay";
 import { indexBuildings, assessBuildings, type BuildingExposure, type BuildingSample } from "./buildingExposure";
 import { FloodImpactReport } from "./FloodImpactReport";
+import { buildStandardFloodReport } from "./standardFloodReport";
+import { buildSimulationReport, type SimulationReportData } from "./simulationReport";
+import { apiPost } from "@/lib/api";
 import { BuildingArrivalLabels } from "./BuildingArrivalLabels";
 import { createArrivalForecast, advanceArrivalForecast, type ArrivalForecastInput, type ArrivalForecastResult } from "./arrivalForecast";
 import type { BuildingFeature } from "@/lib/routingApi";
@@ -52,6 +55,7 @@ export interface ThreeWaterSimulationHandle {
   setWaveIntensity: (intensity: number) => void;
   toggleWater: (show: boolean) => void;
   toggleGraph?: (show?: boolean) => void;
+  endSimulation?: () => void;
   closeSimulation: () => void;
 }
 
@@ -114,6 +118,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [arrivalForecast, setArrivalForecast] = useState<ArrivalForecastResult | null>(null);
     const arrivalForecastRef = useRef<ArrivalForecastResult | null>(null);
     arrivalForecastRef.current = arrivalForecast;
+    const [completedReport, setCompletedReport] = useState<SimulationReportData | null>(null);
+    const [saveStatus, setSaveStatus] = useState<string>("Ready");
+    const simulationStartedAtRef = useRef<string | null>(null);
 
     // Local-inertial & coordinate frame refs
     const effectiveCenterElevRef = useRef<number>(baseElevation);
@@ -1190,6 +1197,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     // ─── 4. IMPERATIVE CONTROLS ──────────────────────────────────────────────
     const handleStart = () => {
       if (!physicsSimRef.current || !waterMeshRef.current) return;
+      if (!simulationStartedAtRef.current) {
+        simulationStartedAtRef.current = new Date().toISOString();
+      }
+      setCompletedReport(null);
       isRunningRef.current = true;
       isPausedRef.current = false;
       setIsRunning(true);
@@ -1255,6 +1266,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
     const handleReset = () => {
       lastAppliedAtSecRef.current = null;
+      simulationStartedAtRef.current = null;
+      setCompletedReport(null);
       if (physicsSimRef.current) {
         physicsSimRef.current.reset();
         peakDepthRef.current.fill(0);
@@ -1313,7 +1326,88 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       } catch (e) {}
     };
 
+    const handleEndSimulation = async () => {
+      isRunningRef.current = false;
+      isPausedRef.current = true;
+      setIsRunning(false);
+      setIsPaused(true);
+      onRunningChange?.(false);
+      onPauseChange?.(false);
+
+      const finalScenario: Record<string, unknown> = {
+        model: parameters.flowModel,
+        elapsedSeconds,
+        centerLat,
+        centerLng,
+        polygon: stablePolygon,
+        grid: gridResolutionText,
+        rainfallMmH: rainfall,
+        riverRiseM: sourceRise,
+        ...parameters,
+        maxDepthM,
+        waterVolumeM3: waterVolume,
+        floodedAreaHectares: spreadAreaHectares,
+        areaName: (parameters as any).areaName || "Monitored Catchment Basin",
+      };
+
+      const stdReport = buildStandardFloodReport(finalScenario, buildingExposure, graphCounts);
+      const runId = stdReport.cover.reportRef;
+      const simReport = buildSimulationReport(
+        runId,
+        simulationStartedAtRef.current || new Date().toISOString(),
+        finalScenario,
+        buildingExposure,
+        []
+      );
+      (simReport as any).standardReport = stdReport;
+
+      setCompletedReport(simReport);
+      setSaveStatus("Saving report...");
+
+      // 1. Save locally to localStorage so it is immediately visible in Reports page
+      try {
+        const localSaved = JSON.parse(localStorage.getItem("dt_saved_flood_reports") || "[]");
+        const newEntry = {
+          id: runId,
+          title: `${finalScenario.areaName || "Monitored Catchment"} Flood Simulation`,
+          report_type: "Flood Simulation",
+          period: `Storm duration: ${parameters.durationMinutes} min`,
+          zone_name: (finalScenario.areaName as string) || "Catchment Basin",
+          status: "ready",
+          size_kb: Math.round(JSON.stringify(simReport).length / 1024),
+          simulation_report: simReport,
+          created_at: new Date().toISOString(),
+        };
+        const filtered = [newEntry, ...localSaved.filter((r: any) => r.id !== runId)].slice(0, 20);
+        localStorage.setItem("dt_saved_flood_reports", JSON.stringify(filtered));
+      } catch (e) {
+        console.warn("Could not cache report to localStorage", e);
+      }
+
+      // 2. Also save to backend
+      try {
+        const backendRunId = "00000000-0000-4000-8000-" + Math.random().toString(16).slice(2, 14).padEnd(12, "0");
+        await apiPost("/reports/simulation", {
+          title: `${finalScenario.areaName || "Monitored Basin"} Flood Simulation`,
+          period: `Simulated: ${Math.round(elapsedSeconds)}s`,
+          zone_name: (finalScenario.areaName as string) || "Catchment Basin",
+          simulation_report: {
+            ...simReport,
+            runId: backendRunId,
+          },
+        });
+        setSaveStatus("Saved to Reports database & local cache");
+      } catch (err) {
+        console.warn("Backend report save skipped, retained in local cache", err);
+        setSaveStatus("Saved to Reports page library");
+      }
+    };
+
     const handleClose = () => {
+      if (elapsedSeconds > 5 || waterVolume > 10) {
+        handleEndSimulation();
+        return;
+      }
       isRunningRef.current = false;
       isPausedRef.current = false;
       setIsRunning(false);
@@ -1358,6 +1452,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           return next;
         });
       },
+      endSimulation: handleEndSimulation,
       closeSimulation: handleClose,
     }));
 
@@ -1397,7 +1492,29 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         />
 
         {/* Floating Control Panel HUD */}
-        <FloodImpactReport buildings={buildingExposure} scenario={{ model: parameters.flowModel, elapsedSeconds, centerLat, centerLng, polygon: stablePolygon, grid: gridResolutionText, rainfallMmH: rainfall, riverRiseM: sourceRise, ...parameters, maxDepthM, waterVolumeM3: waterVolume, floodedAreaHectares: spreadAreaHectares }} />
+        <FloodImpactReport
+          buildings={buildingExposure}
+          scenario={{
+            model: parameters.flowModel,
+            elapsedSeconds,
+            centerLat,
+            centerLng,
+            polygon: stablePolygon,
+            grid: gridResolutionText,
+            rainfallMmH: rainfall,
+            riverRiseM: sourceRise,
+            ...parameters,
+            maxDepthM,
+            waterVolumeM3: waterVolume,
+            floodedAreaHectares: spreadAreaHectares,
+            areaName: (parameters as any).areaName || "Monitored Catchment Basin",
+          }}
+          graphCounts={graphCounts}
+          completedReport={completedReport || undefined}
+          saveStatus={saveStatus}
+          onRetry={handleEndSimulation}
+          onDismiss={() => setCompletedReport(null)}
+        />
         <FlashFloodControlPanel
           isRunning={isRunning}
           isPaused={isPaused}

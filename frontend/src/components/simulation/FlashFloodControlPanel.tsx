@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CloudRain, Mountain, Pause, Play, RotateCcw, SlidersHorizontal, X, Eye, EyeOff, Network, Check } from "lucide-react";
+import { CloudRain, Mountain, Pause, Play, RotateCcw, SlidersHorizontal, X, Eye, EyeOff, Network, Check, FileText } from "lucide-react";
 import { runoffRainfall } from "./flashFloodParameters";
 import type { FlashFloodParameters } from "./flashFloodParameters";
 import type { WaterSimulationControlPanelProps } from "./WaterSimulationControlPanel";
@@ -110,6 +110,17 @@ export function FlashFloodControlPanel(props: Props) {
       >
         <Network className="size-4" />
         {props.showGraph ? "Hide Graph" : "Flow Graph"}
+      </button>
+      <button
+        type="button"
+        disabled={!isReady}
+        onClick={props.onClose}
+        aria-label="End simulation and generate standard flood report"
+        title="End simulation and view standard 12-section flood report"
+        className="flex items-center gap-1 rounded-lg bg-rose-700/80 hover:bg-rose-600 px-2.5 py-2 text-xs font-semibold text-white shadow-md transition-all cursor-pointer disabled:opacity-40"
+      >
+        <FileText className="size-3.5" />
+        <span>End & Report</span>
       </button>
     </div>
     {props.showGraph && !props.open && <div role="status" aria-label="Terrain flow graph legend" className="absolute right-3 top-32 z-30 max-w-xs rounded-lg border border-slate-600 bg-slate-950/95 p-3 text-xs text-slate-200">

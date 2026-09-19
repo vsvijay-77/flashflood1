@@ -1,7 +1,7 @@
 import { deleteArea } from "@/services/deleteArea";
 import { FloodImpactReport } from "@/components/simulation/FloodImpactReport";
 import { downloadFloodReportPdf } from "@/lib/generateFloodReportPdf";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -691,7 +691,27 @@ export function ReportsPage() {
     onError: (err) => toast.error(apiErrorMessage(err, "Report generation failed.")),
   });
 
-  const list = data ?? [];
+  const list = useMemo(() => {
+    const backendReports = data ?? [];
+    let localReports: Report[] = [];
+    try {
+      const raw = localStorage.getItem("dt_saved_flood_reports");
+      if (raw) {
+        localReports = JSON.parse(raw);
+      }
+    } catch (e) {
+      console.warn("Failed to parse local flood reports", e);
+    }
+    const seen = new Set(backendReports.map((r) => r.id));
+    const merged = [...backendReports];
+    for (const r of localReports) {
+      if (!seen.has(r.id)) {
+        merged.unshift(r);
+        seen.add(r.id);
+      }
+    }
+    return merged;
+  }, [data]);
   const canCreate = user?.role === "admin" || user?.role === "gov_officer";
 
   const download = (r: Report) => {
@@ -769,8 +789,9 @@ export function ReportsPage() {
                               scenario: r.simulation_report?.scenario,
                               buildings: r.simulation_report?.buildings || [],
                               generatedAt: r.created_at,
+                              reportData: (r.simulation_report as any)?.standardReport,
                             });
-                            toast.success("Downloaded PDF Impact Report");
+                            toast.success("Downloaded Official 12-Section PDF Report");
                           }}
                           data-testid={`report-pdf-btn-${r.id}`}
                         >

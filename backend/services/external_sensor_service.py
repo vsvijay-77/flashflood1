@@ -327,3 +327,119 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
         "created_at": None,
     }
 
+
+def record_sensor_alert(
+    disaster_type: str,
+    alert_level: str = "critical",
+    message: str = "",
+    zone_name: str = "Digital Twin Monitored Basin",
+    sensor_id: str = "LORA_NODE_1",
+    soil_moisture: float = 0.0,
+    water_level_mm: float = 0.0,
+    tilt: float = 0.0,
+    imu_mag: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    Inserts a newly triggered disaster alert (flash flood or landslide) into:
+    1. PostgreSQL sensor_db public.disaster_alerts_log
+    2. PostgreSQL sensor_db public.flood_alerts_log (if flash flood)
+    3. MongoDB alerts / notifications if available
+    """
+    import uuid
+    inserted_id = None
+    triggered_at = datetime.now(timezone.utc)
+
+    # 1. Insert into PostgreSQL disaster_alerts_log
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO public.disaster_alerts_log 
+                        (disaster_type, alert_level, message, zone_name, sensor_id, soil_moisture, water_level_mm, tilt, imu_mag, triggered_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id;
+                """, (disaster_type, alert_level, message, zone_name, sensor_id, soil_moisture, water_level_mm, tilt, imu_mag, triggered_at))
+                row = cur.fetchone()
+                if row:
+                    inserted_id = row[0]
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error logging alert to PostgreSQL disaster_alerts_log: {e}")
+
+    # 2. Also log to MongoDB db.alerts if mongo is available
+    try:
+        try:
+            from lib.db import db
+        except ImportError:
+            from backend.lib.db import db
+        import asyncio
+        async def _log_mongo():
+            count = await db.alerts.count_documents({}) + 1
+            code = f"EIN-CRT-{count:04d}" if alert_level.lower() == "critical" else f"EIN-HGH-{count:04d}"
+            alert_doc = {
+                "id": str(uuid.uuid4()),
+                "code": code,
+                "title": message or f"{disaster_type.replace('_', ' ').title()} Alert",
+                "hazard_type": disaster_type,
+                "risk_level": alert_level.lower(),
+                "location": zone_name,
+                "description": f"Automated IoT telemetry warning from {sensor_id}: moisture={soil_moisture}%, water_level={water_level_mm}mm, tilt={tilt}°, imu={imu_mag}",
+                "status": "open",
+                "affected_population": 450,
+                "created_at": triggered_at,
+                "updated_at": triggered_at,
+            }
+            await db.alerts.insert_one(alert_doc)
+            await db.notifications.insert_one({
+                "kind": "critical_alert",
+                "title": f"🚨 {disaster_type.replace('_', ' ').upper()} DETECTED",
+                "body": f"{zone_name} · {sensor_id} · {message}",
+                "created_at": triggered_at,
+            })
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_log_mongo())
+        except RuntimeError:
+            pass
+    except Exception as e:
+        logger.warning(f"Could not log alert to MongoDB: {e}")
+    except Exception as e:
+        logger.warning(f"Could not log alert to MongoDB: {e}")
+
+    return {
+        "status": "success",
+        "id": inserted_id,
+        "disaster_type": disaster_type,
+        "alert_level": alert_level,
+        "message": message,
+        "sensor_id": sensor_id,
+        "triggered_at": triggered_at.isoformat(),
+    }
+
+
+def get_sensor_alerts(limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Fetches all alerts recorded in PostgreSQL disaster_alerts_log and flood_alerts_log.
+    """
+    alerts = []
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, disaster_type, alert_level, message, zone_name, sensor_id,
+                           soil_moisture, water_level_mm, tilt, imu_mag, triggered_at
+                    FROM public.disaster_alerts_log
+                    ORDER BY triggered_at DESC
+                    LIMIT %s;
+                """, (limit,))
+                cols = [d[0] for d in cur.description]
+                for r in cur.fetchall():
+                    item = dict(zip(cols, r))
+                    if item.get("triggered_at") and hasattr(item["triggered_at"], "isoformat"):
+                        item["triggered_at"] = item["triggered_at"].isoformat()
+                    alerts.append(item)
+    except Exception as e:
+        logger.error(f"Error reading disaster_alerts_log from PostgreSQL: {e}")
+    return alerts
+
+

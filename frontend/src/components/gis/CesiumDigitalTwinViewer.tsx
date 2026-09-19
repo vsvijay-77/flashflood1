@@ -1,5 +1,5 @@
 import { loadSelectedAreaNetworks } from "@/services/selectedAreaNetworks";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Maximize2,
@@ -53,6 +53,7 @@ import {
   Cpu,
   Zap,
   Droplets,
+  RefreshCw,
 } from "lucide-react";
 import CesiumSelectedAreaRainOverlay from "../simulation/CesiumSelectedAreaRainOverlay";
 import SensorLiveRainController from "./SensorLiveRainController";
@@ -381,7 +382,7 @@ export function CesiumDigitalTwinViewer({
   const [evacuationRoute, setEvacuationRoute] = useState<EvacuationRouteResponse | null>(null);
 
 
-  const [evacDestMode, setEvacDestMode] = useState<"safe_exit" | "custom">("safe_exit");
+  const [evacDestMode, setEvacDestMode] = useState<"safe_exit" | "point_by_point" | "custom">("safe_exit");
   const [customDestLat, setCustomDestLat] = useState<number>(0);
   const [customDestLng, setCustomDestLng] = useState<number>(0);
   const [customDestName, setCustomDestName] = useState<string>("Safe High-Ground Exit");
@@ -423,6 +424,43 @@ export function CesiumDigitalTwinViewer({
   const [sensorAutoFlood, setSensorAutoFlood] = useState<boolean>(false);
   const [sensorSimWaterLevel, setSensorSimWaterLevel] = useState<number>(0.8);
 
+  // ─── 🚨 DISASTER ALERT DETECTION & DB LOGGING ───
+  const [activeDisasterAlert, setActiveDisasterAlert] = useState<{
+    id: string;
+    type: "flash_flood" | "landslide";
+    title: string;
+    message: string;
+    severity: "critical" | "warning";
+    sensorId: string;
+    slaveNodeId: string;
+    timestamp: string;
+  } | null>(null);
+  const [isAlertDismissed, setIsAlertDismissed] = useState<boolean>(false);
+  const [showDbAlertsModal, setShowDbAlertsModal] = useState<boolean>(false);
+  const [dbAlertsList, setDbAlertsList] = useState<any[]>([]);
+  const [isLoadingDbAlerts, setIsLoadingDbAlerts] = useState<boolean>(false);
+  const lastAlertLoggedAtRef = useRef<number>(0);
+  const lastAlertLoggedTypeRef = useRef<string>("");
+
+  const safeName = (areaName || "default").replace(/\s+/g, "_");
+
+  // ─── 🛡️ POINT-BY-POINT EVACUATION ROUTE MARKING ───
+  const evacStorageKey = `dt_evac_waypoints_${safeName}`;
+  const [evacWaypoints, setEvacWaypoints] = useState<{ id: string; name: string; lat: number; lng: number }[]>(() => {
+    try {
+      const saved = localStorage.getItem(evacStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [isMarkingEvacPoints, setIsMarkingEvacPoints] = useState<boolean>(false);
+  const [pendingEvacPoint, setPendingEvacPoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [evacPointNameInput, setEvacPointNameInput] = useState<string>("");
+  const evacWaypointsEntitiesRef = useRef<any[]>([]);
+
   // Sensor ID prompt modal state for adding master and slave nodes
   const [sensorPromptModal, setSensorPromptModal] = useState<{
     open: boolean;
@@ -447,7 +485,6 @@ export function CesiumDigitalTwinViewer({
     }
   });
 
-  const safeName = (areaName || "default").replace(/\s+/g, "_");
   const storageKey = `dt_mesh_nodes_${safeName}`;
   const activityStorageKey = `dt_user_activity_${safeName}`;
   // v6 invalidates center/viewport data saved by older viewers. Only complete
@@ -1750,6 +1787,175 @@ export function CesiumDigitalTwinViewer({
     }
   };
 
+  // ─── 🛡️ RENDER POINT-BY-POINT EVACUATION ROUTE WAYPOINTS ───
+  const renderEvacWaypointsInCesium = (waypoints: { id: string; name: string; lat: number; lng: number }[]) => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
+
+    evacWaypointsEntitiesRef.current.forEach((ent) => {
+      try { viewer.entities.remove(ent); } catch (e) {}
+    });
+    evacWaypointsEntitiesRef.current = [];
+
+    if (waypoints.length === 0) return;
+
+    // 1. Waypoint pins & user-defined names
+    waypoints.forEach((wp, index) => {
+      const isStart = index === 0;
+      const isEnd = index === waypoints.length - 1 && waypoints.length > 1;
+      const pinColor = isStart ? "#38bdf8" : isEnd ? "#10b981" : "#34d399";
+      const bgDark = isStart ? "#0369a1" : isEnd ? "#064e3b" : "#0f766e";
+
+      const wpEntity = viewer.entities.add({
+        id: `evac-wp-${wp.id}`,
+        name: `Evacuation Waypoint #${index + 1}: ${wp.name}`,
+        position: Cesium.Cartesian3.fromDegrees(wp.lng, wp.lat, 0),
+        cylinder: {
+          length: 18.0,
+          topRadius: 1.2,
+          bottomRadius: 2.2,
+          material: Cesium.Color.fromCssColorString(pinColor).withAlpha(0.95),
+          outline: true,
+          outlineColor: Cesium.Color.WHITE,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        },
+        point: {
+          pixelSize: 14,
+          color: Cesium.Color.fromCssColorString(pinColor),
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 3,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        },
+        label: {
+          text: `🛡️ ${wp.name}\nPoint #${index + 1}`,
+          font: "bold 22px system-ui, -apple-system, sans-serif",
+          scale: 0.5,
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 4,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString(bgDark).withAlpha(0.95),
+          backgroundPadding: new Cesium.Cartesian2(8, 4),
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -28),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      evacWaypointsEntitiesRef.current.push(wpEntity);
+    });
+
+    // 2. Connected Glowing Route Polyline
+    if (waypoints.length >= 2) {
+      const flatCoords = waypoints.flatMap((p) => [p.lng, p.lat]);
+      const routeLine = viewer.entities.add({
+        id: `evac-waypoint-path`,
+        name: `Evacuation Route (${waypoints.length} Points)`,
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray(flatCoords),
+          width: 5.5,
+          material: new Cesium.PolylineOutlineMaterialProperty({
+            color: Cesium.Color.fromCssColorString("#10b981"),
+            outlineColor: Cesium.Color.fromCssColorString("#064e3b"),
+            outlineWidth: 2.0,
+          }),
+          clampToGround: true,
+        },
+      });
+      evacWaypointsEntitiesRef.current.push(routeLine);
+    }
+    try { viewer.scene.requestRender(); } catch (e) {}
+  };
+
+  const confirmAddEvacPoint = () => {
+    if (!pendingEvacPoint) return;
+    const name = evacPointNameInput.trim() || `Evacuation Point #${evacWaypoints.length + 1}`;
+    const newPoint = {
+      id: `wp-${Date.now()}`,
+      name,
+      lat: pendingEvacPoint.lat,
+      lng: pendingEvacPoint.lng,
+    };
+    const updated = [...evacWaypoints, newPoint];
+    setEvacWaypoints(updated);
+    try {
+      localStorage.setItem(evacStorageKey, JSON.stringify(updated));
+    } catch (e) {}
+    renderEvacWaypointsInCesium(updated);
+    setPendingEvacPoint(null);
+    toast.success(`📍 Marked "${name}" on evacuation route!`);
+  };
+
+  const deleteEvacPoint = (id: string) => {
+    const updated = evacWaypoints.filter((p) => p.id !== id);
+    setEvacWaypoints(updated);
+    try {
+      localStorage.setItem(evacStorageKey, JSON.stringify(updated));
+    } catch (e) {}
+    renderEvacWaypointsInCesium(updated);
+  };
+
+  const clearAllEvacPoints = () => {
+    setEvacWaypoints([]);
+    try {
+      localStorage.removeItem(evacStorageKey);
+    } catch (e) {}
+    renderEvacWaypointsInCesium([]);
+    toast.info("Cleared all evacuation route waypoints");
+  };
+
+  const totalEvacDistanceKm = useMemo(() => {
+    if (evacWaypoints.length < 2) return 0;
+    let sum = 0;
+    for (let i = 0; i < evacWaypoints.length - 1; i++) {
+      sum += calculateDistanceKm(
+        evacWaypoints[i].lat, evacWaypoints[i].lng,
+        evacWaypoints[i + 1].lat, evacWaypoints[i + 1].lng
+      );
+    }
+    return sum;
+  }, [evacWaypoints]);
+
+  const flyToFullEvacRoute = () => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed() || evacWaypoints.length === 0) return;
+    try {
+      const lats = evacWaypoints.map((p) => p.lat);
+      const lngs = evacWaypoints.map((p) => p.lng);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLng = Math.min(...lngs);
+      const maxLng = Math.max(...lngs);
+      const spanLat = Math.max(maxLat - minLat, 0.005);
+      const spanLng = Math.max(maxLng - minLng, 0.005);
+      viewer.camera.flyTo({
+        destination: Cesium.Rectangle.fromDegrees(
+          minLng - spanLng * 0.3,
+          minLat - spanLat * 0.3,
+          maxLng + spanLng * 0.3,
+          maxLat + spanLat * 0.3
+        ),
+        duration: 1.5,
+      });
+    } catch (e) {}
+  };
+
+  const fetchDbAlerts = async () => {
+    setIsLoadingDbAlerts(true);
+    try {
+      const res = await fetch("/api/external-sensors/alerts?limit=50");
+      if (res.ok) {
+        const data = await res.json();
+        setDbAlertsList(data || []);
+      }
+    } catch (e) {
+      console.warn("Could not fetch DB alerts:", e);
+    } finally {
+      setIsLoadingDbAlerts(false);
+    }
+  };
+
   // ─── ⚠️ 3D FLOOD HAZARD HOTSPOTS RENDERING ───
   const render3DRiskZones = (zones: HighRiskZone[], visible: boolean) => {
     const viewer = viewerRef.current;
@@ -2366,6 +2572,47 @@ export function CesiumDigitalTwinViewer({
       (slaveMast as any)._nodeId = slave.id;
       meshNodeEntitiesRef.current.push(slaveMast);
 
+      // 🚨 DETECTED DANGER ICON / BEACON OVER PLACED SLAVE NODE
+      const isSlaveDanger = Boolean(
+        activeDisasterAlert &&
+        (activeDisasterAlert.slaveNodeId === slave.id || slaves.length === 1)
+      );
+
+      if (isSlaveDanger) {
+        const dangerEntity = viewer.entities.add({
+          id: `danger-beacon-${slave.id}`,
+          name: `⚠️ DANGER DETECTED: ${activeDisasterAlert?.title}`,
+          position: Cesium.Cartesian3.fromDegrees(slave.lng, slave.lat, 0),
+          cylinder: {
+            length: 34.0,
+            topRadius: 3.2,
+            bottomRadius: 5.2,
+            material: Cesium.Color.fromCssColorString("#ef4444").withAlpha(0.85),
+            outline: true,
+            outlineColor: Cesium.Color.fromCssColorString("#fee2e2"),
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          },
+          label: {
+            text: `🚨 ${activeDisasterAlert?.title?.toUpperCase() || "DANGER DETECTED"}\n⚠️ DANGER ON THIS SLAVE NODE`,
+            font: "bold 26px system-ui, -apple-system, sans-serif",
+            scale: 0.52,
+            fillColor: Cesium.Color.fromCssColorString("#fee2e2"),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 5,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString("#7f1d1d").withAlpha(0.96),
+            backgroundPadding: new Cesium.Cartesian2(12, 6),
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -62),
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+        (dangerEntity as any)._nodeId = slave.id;
+        meshNodeEntitiesRef.current.push(dangerEntity);
+      }
+
       // ALWAYS-ON 3D CONNECTION LINK (MASTER ↔ SLAVE) clamped directly to terrain surface
       if (master) {
         const linkLine = viewer.entities.add({
@@ -2737,6 +2984,25 @@ export function CesiumDigitalTwinViewer({
   useEffect(() => {
     let isMounted = true;
     const activeSlaveNode = meshNodes.find((n) => n.id === activeSlaveId) || meshNodes.find((n) => n.type === "slave");
+
+    // STRICT USER REQUIREMENT: "all the actions and showing the senor data happens only if slave is placed on the map"
+    if (!activeSlaveNode) {
+      setSlaveLiveTelemetry(defaultLiveTelemetry);
+      setShowSlaveDataBox(false);
+      setActiveDisasterAlert(null);
+      if (lastAutoStartedRainRef.current) {
+        lastAutoStartedRainRef.current = false;
+        setInternalRain(false);
+        setShowVisibleRain(false);
+        onToggleRain?.(false);
+        setSimRainIntensity(0);
+      }
+      try {
+        localStorage.removeItem("dt_live_disaster_alert");
+      } catch (e) {}
+      return;
+    }
+
     const targetSensorId = (activeSlaveNode?.sensorId || stagedSensorId || "node1").trim() || "node1";
 
     const fetchSlaveData = async () => {
@@ -2780,6 +3046,65 @@ export function CesiumDigitalTwinViewer({
           };
 
           setSlaveLiveTelemetry(telemetry);
+
+          // ─── 🚨 DISASTER DETECTION & CROSS-TAB BROADCAST ───
+          // "if a disaster is detected display a message all the tab if soil moisture or water level detected increases > 50 display flash flood detected and if tilt or gyro values change display landslide detected"
+          const isFlashFlood = telemetry.soilMoisture > 50 || telemetry.waterLevelMm > 50;
+          const isLandslide = telemetry.tilt > 15 || rawTilt < 85 || Math.abs(telemetry.imuMag - 1.0) > 0.35 || Math.abs(telemetry.imuX) > 400 || Math.abs(telemetry.imuY) > 400;
+
+          if (isFlashFlood || isLandslide) {
+            const disasterType: "flash_flood" | "landslide" = isFlashFlood ? "flash_flood" : "landslide";
+            const alertTitle = isFlashFlood ? "Flash Flood Detected" : "Landslide Detected";
+            const alertMsg = isFlashFlood
+              ? `Flash Flood Detected: Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) or Water level (${telemetry.waterLevelMm.toFixed(0)} mm) exceeded threshold (> 50)!`
+              : `Landslide Detected: Ground tilt (${telemetry.tilt.toFixed(1)}°) or IMU gyro motion (${telemetry.imuMag.toFixed(2)}g) detected on sensor!`;
+
+            const alertObj = {
+              id: `alert-${Date.now()}`,
+              type: disasterType,
+              title: alertTitle,
+              message: alertMsg,
+              severity: "critical" as const,
+              sensorId: targetSensorId,
+              slaveNodeId: activeSlaveNode.id,
+              timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+            };
+
+            setActiveDisasterAlert(alertObj);
+
+            // Broadcast across all browser tabs via localStorage & custom window event
+            try {
+              localStorage.setItem("dt_live_disaster_alert", JSON.stringify(alertObj));
+              window.dispatchEvent(new CustomEvent("dt_disaster_alert", { detail: alertObj }));
+            } catch (e) {}
+
+            // Persist to PostgreSQL database (throttled to once every 30s per alert type)
+            const now = Date.now();
+            if (now - lastAlertLoggedAtRef.current > 30000 || lastAlertLoggedTypeRef.current !== disasterType) {
+              lastAlertLoggedAtRef.current = now;
+              lastAlertLoggedTypeRef.current = disasterType;
+              fetch("/api/external-sensors/alerts", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  disaster_type: disasterType,
+                  alert_level: "critical",
+                  message: alertMsg,
+                  zone_name: areaName || "Digital Twin Monitored Basin",
+                  sensor_id: targetSensorId,
+                  soil_moisture: telemetry.soilMoisture,
+                  water_level_mm: telemetry.waterLevelMm,
+                  tilt: telemetry.tilt,
+                  imu_mag: telemetry.imuMag,
+                }),
+              }).catch(() => {});
+            }
+          } else {
+            setActiveDisasterAlert(null);
+            try {
+              localStorage.removeItem("dt_live_disaster_alert");
+            } catch (e) {}
+          }
 
           // ─── 1. ATMOSPHERIC RAIN (Strictly sensor rainfall, no simulation) ───
           const isRainOver20 = telemetry.rainfall > 20 || telemetry.rainfallPct > 20;
@@ -2841,6 +3166,10 @@ export function CesiumDigitalTwinViewer({
         } else {
           // "if no data display 0 in that tab"
           setSlaveLiveTelemetry(defaultLiveTelemetry);
+          setActiveDisasterAlert(null);
+          try {
+            localStorage.removeItem("dt_live_disaster_alert");
+          } catch (e) {}
           lastAutoStartedRainRef.current = false;
           lastAutoStartedFloodRef.current = false;
           if (rainActive || internalRain || showVisibleRain) {
@@ -2854,6 +3183,10 @@ export function CesiumDigitalTwinViewer({
       } catch (err) {
         if (isMounted) {
           setSlaveLiveTelemetry(defaultLiveTelemetry);
+          setActiveDisasterAlert(null);
+          try {
+            localStorage.removeItem("dt_live_disaster_alert");
+          } catch (e) {}
           lastAutoStartedRainRef.current = false;
           lastAutoStartedFloodRef.current = false;
           if (rainActive || internalRain || showVisibleRain) {
@@ -2873,7 +3206,45 @@ export function CesiumDigitalTwinViewer({
       isMounted = false;
       clearInterval(interval);
     };
-  }, [activeSlaveId, stagedSensorId, meshNodes, rainActive, onToggleRain]);
+  }, [activeSlaveId, stagedSensorId, meshNodes, rainActive, onToggleRain, areaName]);
+
+  // ─── 🚨 CROSS-TAB DISASTER ALERT SYNCHRONIZATION ───
+  useEffect(() => {
+    const syncAlertFromStorage = () => {
+      try {
+        const stored = localStorage.getItem("dt_live_disaster_alert");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setActiveDisasterAlert(parsed);
+          setIsAlertDismissed(false);
+        } else {
+          setActiveDisasterAlert(null);
+        }
+      } catch (e) {}
+    };
+
+    syncAlertFromStorage();
+
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === "dt_live_disaster_alert") {
+        syncAlertFromStorage();
+      }
+    };
+
+    const handleCustomAlert = (e: any) => {
+      if (e.detail) {
+        setActiveDisasterAlert(e.detail);
+        setIsAlertDismissed(false);
+      }
+    };
+
+    window.addEventListener("storage", handleStorageEvent);
+    window.addEventListener("dt_disaster_alert", handleCustomAlert);
+    return () => {
+      window.removeEventListener("storage", handleStorageEvent);
+      window.removeEventListener("dt_disaster_alert", handleCustomAlert);
+    };
+  }, []);
 
   // ─── SRTM 30m DEM TOPOGRAPHY LAYER (NASA / USGS SRTMGL1_003) ───
   const showSrtm30Ref = useRef(showSrtm30);
@@ -4020,12 +4391,19 @@ export function CesiumDigitalTwinViewer({
     return () => clearTimeout(timer);
   }, [isFullscreen]);
 
-  // Sync 3D Mesh Nodes whenever state or visibility changes
+  // Sync 3D Mesh Nodes whenever state, visibility or disaster alerts change
   useEffect(() => {
     if (viewerRef.current && !viewerRef.current.isDestroyed()) {
       render3DMeshNodes(meshNodes);
     }
-  }, [meshNodes, showMeshNodes, deployedSensors]);
+  }, [meshNodes, showMeshNodes, deployedSensors, activeDisasterAlert]);
+
+  // Sync 3D Evacuation Waypoints
+  useEffect(() => {
+    if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+      renderEvacWaypointsInCesium(evacWaypoints);
+    }
+  }, [evacWaypoints]);
 
   // Initial load of road & river networks — use localStorage cache if < 24h old
   useEffect(() => {
@@ -4182,7 +4560,24 @@ export function CesiumDigitalTwinViewer({
       }
 
 
-      // 2. Handle Picking Location for placing Master or Slave node
+      // 2. Handle Point-by-Point Evacuation Route Marking
+      if (isMarkingEvacPoints) {
+        const ray = viewer.camera.getPickRay(click.position);
+        let cartesian = scene.globe.pick(ray, scene);
+        if (!cartesian && scene.pickPositionSupported) {
+          try { cartesian = scene.pickPosition(click.position); } catch (e) {}
+        }
+        if (cartesian) {
+          const carto = Cesium.Cartographic.fromCartesian(cartesian);
+          const clickLng = Number(Cesium.Math.toDegrees(carto.longitude).toFixed(6));
+          const clickLat = Number(Cesium.Math.toDegrees(carto.latitude).toFixed(6));
+          setPendingEvacPoint({ lat: clickLat, lng: clickLng });
+          setEvacPointNameInput(`Evacuation Point #${evacWaypoints.length + 1}`);
+          return;
+        }
+      }
+
+      // 3. Handle Picking Location for placing Master or Slave node
       if (isPickingLocation) {
         const ray = viewer.camera.getPickRay(click.position);
         let cartesian = scene.globe.pick(ray, scene);
@@ -4265,6 +4660,7 @@ export function CesiumDigitalTwinViewer({
       setIsPickingLocation(null);
       setIsDeleteMode(false);
       setSelectedBuilding(null);
+      setPendingEvacPoint(null);
     }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
 
 
@@ -4273,7 +4669,7 @@ export function CesiumDigitalTwinViewer({
         clickHandler.destroy();
       } catch (e) {}
     };
-  }, [isPickingLocation, isDeleteMode, newNodeName, newNodeRole, meshNodes, deployedSensors, stagedSensorId]);
+  }, [isPickingLocation, isDeleteMode, newNodeName, newNodeRole, meshNodes, deployedSensors, stagedSensorId, isMarkingEvacPoints, evacWaypoints]);
 
 
 
@@ -5458,11 +5854,15 @@ export function CesiumDigitalTwinViewer({
                   Target Evacuation Destination
                 </span>
                 <span className="text-[9px] text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
-                  {evacDestMode === "safe_exit" ? "Automatic Safe Exit" : "Custom Point"}
+                  {evacDestMode === "safe_exit"
+                    ? "Automatic Safe Exit"
+                    : evacDestMode === "point_by_point"
+                    ? "Point-by-Point Marking"
+                    : "Custom Point"}
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="grid grid-cols-3 gap-1.5">
                 <button
                   type="button"
                   onClick={() => setEvacDestMode("safe_exit")}
@@ -5472,11 +5872,11 @@ export function CesiumDigitalTwinViewer({
                       : "bg-slate-900 hover:bg-slate-850 border-slate-800 text-slate-400"
                   }`}
                 >
-                  <div className="font-bold text-emerald-300 flex items-center gap-1">
-                    🛡️ Safe High-Ground Exit
+                  <div className="font-bold text-emerald-300 flex items-center gap-1 text-[11px]">
+                    🛡️ Safe Exit
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
-                    GNN finds highest, lowest-risk road exit
+                  <div className="text-[9px] text-slate-400 mt-0.5">
+                    GNN auto safe exit
                   </div>
                 </button>
 
@@ -5489,14 +5889,116 @@ export function CesiumDigitalTwinViewer({
                       : "bg-slate-900 hover:bg-slate-850 border-slate-800 text-slate-400"
                   }`}
                 >
-                  <div className="font-bold text-sky-300 flex items-center gap-1">
-                    📍 Custom Destination
+                  <div className="font-bold text-sky-300 flex items-center gap-1 text-[11px]">
+                    📍 Target GPS
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
-                    Enter target GPS coordinates
+                  <div className="text-[9px] text-slate-400 mt-0.5">
+                    Custom GPS point
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setEvacDestMode("point_by_point")}
+                  className={`p-2 rounded-lg text-xs font-semibold cursor-pointer border text-left transition-all ${
+                    evacDestMode === "point_by_point"
+                      ? "bg-emerald-950/90 border-emerald-400 ring-1 ring-emerald-500/40 text-white"
+                      : "bg-slate-900 hover:bg-slate-850 border-slate-800 text-slate-400"
+                  }`}
+                >
+                  <div className="font-bold text-teal-300 flex items-center gap-1 text-[11px]">
+                    🎯 Point-by-Point
+                  </div>
+                  <div className="text-[9px] text-slate-400 mt-0.5">
+                    Mark point by point
                   </div>
                 </button>
               </div>
+
+              {evacDestMode === "point_by_point" && (
+                <div className="space-y-2 pt-1 border-t border-slate-800">
+                  <div className="flex items-center justify-between text-[11px] text-slate-300 font-semibold">
+                    <span>Point-by-Point Evacuation</span>
+                    <span className="text-emerald-400 font-mono text-[10px]">
+                      {evacWaypoints.length} waypoints • {totalEvacDistanceKm.toFixed(2)} km
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsMarkingEvacPoints(!isMarkingEvacPoints)}
+                    className={`w-full py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md ${
+                      isMarkingEvacPoints
+                        ? "bg-amber-600 hover:bg-amber-700 text-white ring-2 ring-amber-400 animate-pulse"
+                        : "bg-emerald-600 hover:bg-emerald-500 text-white"
+                    }`}
+                  >
+                    {isMarkingEvacPoints ? (
+                      <>
+                        <Crosshair className="size-4 animate-spin text-white" />
+                        <span>Click on 3D Map to Add Point (Active)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="size-4" />
+                        <span>Mark Evacuation Points on Map</span>
+                      </>
+                    )}
+                  </button>
+
+                  {evacWaypoints.length > 0 && (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {evacWaypoints.map((wp, idx) => (
+                        <div
+                          key={wp.id}
+                          className="flex items-center justify-between p-2 rounded bg-slate-900 border border-slate-800 text-xs text-white"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="size-5 rounded-full bg-emerald-950 border border-emerald-500/60 text-emerald-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="font-semibold text-emerald-200 truncate text-[11px]">
+                                {wp.name}
+                              </p>
+                              <p className="text-[9px] font-mono text-slate-400">
+                                {wp.lat.toFixed(4)}°N, {wp.lng.toFixed(4)}°E
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => deleteEvacPoint(wp.id)}
+                            className="p-1 rounded hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
+                            title="Remove waypoint"
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        </div>
+                      ))}
+
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={flyToFullEvacRoute}
+                          className="flex-1 py-1.5 px-2.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <Eye className="size-3" />
+                          <span>Fly to Full Route</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearAllEvacPoints}
+                          className="py-1.5 px-2.5 rounded bg-slate-800 hover:bg-rose-900/60 text-rose-300 text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <Trash2 className="size-3" />
+                          <span>Clear</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {evacDestMode === "custom" && (
                 <div className="space-y-1.5 pt-1">
@@ -7018,6 +7520,251 @@ export function CesiumDigitalTwinViewer({
               >
                 <MapPin className="size-3.5 text-amber-400" />
                 <span>Click Specific Location on 3D Globe</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🚨 ACTIVE DISASTER ALERT BANNER WITH "X" DISMISS & DB ALERTS */}
+      {activeDisasterAlert && !isAlertDismissed && (
+        <div
+          data-testid="disaster-alert-banner"
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 w-[94%] sm:w-auto max-w-2xl bg-red-950/95 border-2 border-red-500 rounded-2xl px-4 py-3 shadow-[0_0_35px_rgba(239,68,68,0.7)] text-white backdrop-blur-md flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-3 duration-300"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="size-9 rounded-xl bg-red-600/30 border border-red-400 flex items-center justify-center shrink-0 animate-pulse">
+              <AlertTriangle className="size-5 text-red-400" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-black text-sm text-red-200 tracking-wide">
+                  🚨 {activeDisasterAlert.title.toUpperCase()}
+                </span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-600 text-white uppercase tracking-wider">
+                  {activeDisasterAlert.severity}
+                </span>
+                <span className="text-xs text-red-300 font-mono">
+                  {activeDisasterAlert.timestamp}
+                </span>
+              </div>
+              <p className="text-xs text-red-100 font-medium mt-0.5 truncate sm:whitespace-normal">
+                {activeDisasterAlert.message}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                fetchDbAlerts();
+                setShowDbAlertsModal(true);
+              }}
+              className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-cyan-300 border border-cyan-500/50 hover:text-white font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+              title="View all disaster alerts in Database"
+            >
+              <RefreshCw className="size-3" />
+              <span>DB Alerts</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsAlertDismissed(true)}
+              className="size-7 rounded-lg bg-red-900/80 hover:bg-red-800 text-red-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer border border-red-700"
+              title="Dismiss Alert (X)"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 📍 NAME EVACUATION POINT MODAL */}
+      {pendingEvacPoint && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-emerald-500/60 rounded-2xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="size-9 rounded-xl bg-emerald-950 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-sm">
+                  <MapPin className="size-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-emerald-300">Name Evacuation Point</h3>
+                  <p className="text-xs text-slate-400">
+                    Coords: {pendingEvacPoint.lat.toFixed(5)}°N, {pendingEvacPoint.lng.toFixed(5)}°E
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingEvacPoint(null)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-300">
+                Evacuation Point Name / Label
+              </label>
+              <input
+                type="text"
+                value={evacPointNameInput}
+                onChange={(e) => setEvacPointNameInput(e.target.value)}
+                placeholder="e.g. Primary Safe Shelter, Assembly Ridge Beta..."
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-emerald-500/50 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") confirmAddEvacPoint();
+                }}
+              />
+              <div className="text-[11px] text-slate-400 pt-1">
+                Quick Suggestions:
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  "Safe High-Ground Shelter",
+                  "Emergency Assembly Point",
+                  "Community Relief Camp",
+                  "Medical Evacuation Zone",
+                  "Helipad Landing Alpha",
+                ].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setEvacPointNameInput(s)}
+                    className="text-[10px] px-2 py-1 rounded bg-slate-800 hover:bg-emerald-950 text-slate-300 hover:text-emerald-300 border border-slate-700 hover:border-emerald-600 transition-colors cursor-pointer"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={confirmAddEvacPoint}
+                className="flex-1 py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Check className="size-4" />
+                <span>Save Point #{evacWaypoints.length + 1}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingEvacPoint(null)}
+                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📋 DATABASE DISASTER ALERTS MODAL */}
+      {showDbAlertsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-red-500/60 rounded-2xl max-w-3xl w-full max-h-[85vh] shadow-2xl text-white flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/60">
+              <div className="flex items-center gap-2.5">
+                <div className="size-9 rounded-xl bg-red-950 border border-red-500/50 flex items-center justify-center text-red-400 shadow-sm">
+                  <AlertTriangle className="size-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-red-300">
+                    Database Disaster Alerts Log (PostgreSQL)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Audit log of all flash flood & landslide alerts logged in database
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchDbAlerts}
+                  disabled={isLoadingDbAlerts}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                  title="Refresh from Database"
+                >
+                  <RefreshCw className={`size-3.5 ${isLoadingDbAlerts ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDbAlertsModal(false)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                  title="Close"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-3">
+              {isLoadingDbAlerts ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400">
+                  <Loader2 className="size-6 animate-spin text-red-400" />
+                  <span className="text-xs">Fetching alerts from PostgreSQL...</span>
+                </div>
+              ) : dbAlertsList.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-sm">
+                  No disaster alerts recorded in the database yet.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden">
+                  {dbAlertsList.map((alert: any) => (
+                    <div key={alert.id} className="p-3.5 bg-slate-950/40 hover:bg-slate-950/70 transition-colors flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-[10px] font-black uppercase px-2 py-0.5 rounded border ${
+                              alert.disaster_type === "flash_flood"
+                                ? "bg-blue-950 text-blue-300 border-blue-700"
+                                : "bg-amber-950 text-amber-300 border-amber-700"
+                            }`}
+                          >
+                            {alert.disaster_type === "flash_flood" ? "🌊 Flash Flood" : "⛰️ Landslide"}
+                          </span>
+                          <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-900/60 text-red-200 border border-red-800">
+                            {alert.alert_level || "CRITICAL"}
+                          </span>
+                          <span className="text-xs font-mono text-cyan-300 font-semibold">
+                            Node: {alert.sensor_id}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          {alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : "Recently"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-200 font-medium">
+                        {alert.message}
+                      </p>
+                      <div className="flex items-center gap-3 text-[10px] font-mono text-slate-400 pt-0.5">
+                        <span>Zone: {alert.zone_name || "Basin Area"}</span>
+                        <span>Soil Moisture: {alert.soil_moisture ?? 0}%</span>
+                        <span>Water Level: {alert.water_level_mm ?? 0} mm</span>
+                        <span>Tilt: {alert.tilt ?? 0}°</span>
+                        <span>IMU: {alert.imu_mag ?? 0}g</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between text-xs text-slate-400">
+              <span>Total records stored: <strong className="text-white font-mono">{dbAlertsList.length}</strong></span>
+              <button
+                type="button"
+                onClick={() => setShowDbAlertsModal(false)}
+                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-semibold cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>

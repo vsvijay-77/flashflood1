@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, AlertTriangle, BarChart3, Bell, Boxes, ChevronLeft, FileText, Gauge, LayoutDashboard,
   LogOut, Map, Menu, Search, Settings, ShieldAlert, ShieldCheck, User as UserIcon, Users, Radio,
+  X, RefreshCw, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -118,6 +119,59 @@ export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
+
+  // ─── 🚨 CROSS-TAB DISASTER ALERT NOTIFICATION ───
+  const [crossTabAlert, setCrossTabAlert] = useState<any>(() => {
+    try {
+      const stored = localStorage.getItem("dt_live_disaster_alert");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isCrossTabAlertDismissed, setIsCrossTabAlertDismissed] = useState(false);
+  const [showDbAlertsModalInLayout, setShowDbAlertsModalInLayout] = useState(false);
+  const [dbAlertsInLayout, setDbAlertsInLayout] = useState<any[]>([]);
+  const [loadingDbAlertsInLayout, setLoadingDbAlertsInLayout] = useState(false);
+
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "dt_live_disaster_alert") {
+        if (e.newValue) {
+          try {
+            setCrossTabAlert(JSON.parse(e.newValue));
+            setIsCrossTabAlertDismissed(false);
+          } catch {}
+        } else {
+          setCrossTabAlert(null);
+        }
+      }
+    };
+    const handleCustom = (e: any) => {
+      if (e.detail) {
+        setCrossTabAlert(e.detail);
+        setIsCrossTabAlertDismissed(false);
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("dt_disaster_alert", handleCustom);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("dt_disaster_alert", handleCustom);
+    };
+  }, []);
+
+  const fetchDbAlertsLayout = async () => {
+    setLoadingDbAlertsInLayout(true);
+    try {
+      const res = await fetch("/api/external-sensors/alerts?limit=50");
+      if (res.ok) {
+        const data = await res.json();
+        setDbAlertsInLayout(data || []);
+      }
+    } catch {}
+    setLoadingDbAlertsInLayout(false);
+  };
 
   const { data: stats } = useQuery({ queryKey: ["stats"], queryFn: () => apiGet<NetworkStats>("/stats"), retry: false });
   const role: Role = user?.role ?? "viewer";
@@ -248,10 +302,167 @@ export default function AppLayout() {
           </div>
         </header>
 
+        {/* Global Cross-Tab Disaster Alert Banner */}
+        {crossTabAlert && !isCrossTabAlertDismissed && (
+          <div
+            data-testid="cross-tab-disaster-banner"
+            className="border-b-2 border-red-500 bg-red-950 px-4 py-2.5 text-white shadow-lg flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 z-30"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="size-8 rounded-lg bg-red-600/30 border border-red-400 flex items-center justify-center shrink-0 animate-pulse">
+                <AlertTriangle className="size-4 text-red-300" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-black text-xs text-red-200 uppercase tracking-wider">
+                    🚨 {crossTabAlert.title}
+                  </span>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-600 text-white uppercase">
+                    {crossTabAlert.severity || "CRITICAL"}
+                  </span>
+                  <span className="text-xs text-red-300 font-mono">
+                    {crossTabAlert.timestamp}
+                  </span>
+                </div>
+                <p className="text-xs text-red-100 font-medium truncate sm:whitespace-normal">
+                  {crossTabAlert.message}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  fetchDbAlertsLayout();
+                  setShowDbAlertsModalInLayout(true);
+                }}
+                className="bg-slate-900/80 hover:bg-slate-800 text-cyan-300 border-cyan-500/50 hover:text-white text-xs font-semibold cursor-pointer"
+              >
+                <span>DB Alerts</span>
+              </Button>
+              <button
+                type="button"
+                onClick={() => setIsCrossTabAlertDismissed(true)}
+                className="size-7 rounded-lg bg-red-900/60 hover:bg-red-800 text-red-200 hover:text-white flex items-center justify-center transition-colors cursor-pointer border border-red-700/50"
+                title="Dismiss Alert (X)"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <Outlet />
         </main>
       </div>
+
+      {/* 📋 DATABASE DISASTER ALERTS MODAL IN APPLAYOUT */}
+      {showDbAlertsModalInLayout && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-red-500/60 rounded-2xl max-w-3xl w-full max-h-[85vh] shadow-2xl text-white flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/60">
+              <div className="flex items-center gap-2.5">
+                <div className="size-9 rounded-xl bg-red-950 border border-red-500/50 flex items-center justify-center text-red-400 shadow-sm">
+                  <AlertTriangle className="size-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-red-300">
+                    Database Disaster Alerts Log (PostgreSQL)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Audit log of all flash flood & landslide alerts logged in database
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchDbAlertsLayout}
+                  disabled={loadingDbAlertsInLayout}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                  title="Refresh from Database"
+                >
+                  <RefreshCw className={`size-3.5 ${loadingDbAlertsInLayout ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDbAlertsModalInLayout(false)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
+                  title="Close"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-3">
+              {loadingDbAlertsInLayout ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400">
+                  <Loader2 className="size-6 animate-spin text-red-400" />
+                  <span className="text-xs">Fetching alerts from PostgreSQL...</span>
+                </div>
+              ) : dbAlertsInLayout.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-sm">
+                  No disaster alerts recorded in the database yet.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden">
+                  {dbAlertsInLayout.map((alert: any) => (
+                    <div key={alert.id} className="p-3.5 bg-slate-950/40 hover:bg-slate-950/70 transition-colors flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-[10px] font-black uppercase px-2 py-0.5 rounded border ${
+                              alert.disaster_type === "flash_flood"
+                                ? "bg-blue-950 text-blue-300 border-blue-700"
+                                : "bg-amber-950 text-amber-300 border-amber-700"
+                            }`}
+                          >
+                            {alert.disaster_type === "flash_flood" ? "🌊 Flash Flood" : "⛰️ Landslide"}
+                          </span>
+                          <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-900/60 text-red-200 border border-red-800">
+                            {alert.alert_level || "CRITICAL"}
+                          </span>
+                          <span className="text-xs font-mono text-cyan-300 font-semibold">
+                            Node: {alert.sensor_id}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          {alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : "Recently"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-200 font-medium">
+                        {alert.message}
+                      </p>
+                      <div className="flex items-center gap-3 text-[10px] font-mono text-slate-400 pt-0.5">
+                        <span>Zone: {alert.zone_name || "Basin Area"}</span>
+                        <span>Soil Moisture: {alert.soil_moisture ?? 0}%</span>
+                        <span>Water Level: {alert.water_level_mm ?? 0} mm</span>
+                        <span>Tilt: {alert.tilt ?? 0}°</span>
+                        <span>IMU: {alert.imu_mag ?? 0}g</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between text-xs text-slate-400">
+              <span>Total records stored: <strong className="text-white font-mono">{dbAlertsInLayout.length}</strong></span>
+              <button
+                type="button"
+                onClick={() => setShowDbAlertsModalInLayout(false)}
+                className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

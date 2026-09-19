@@ -12,6 +12,8 @@ from services.external_sensor_service import (
     get_sensor_history,
     get_lora_packets,
     get_node_latest_reading,
+    record_sensor_alert,
+    get_sensor_alerts,
 )
 
 router = APIRouter(prefix="/external-sensors", tags=["external-sensors"])
@@ -69,4 +71,34 @@ async def get_packets(
     Get raw LoRaWAN packet logs from lora_packets table.
     """
     return get_lora_packets(limit=limit)
+
+
+@router.post("/alerts")
+async def create_sensor_alert(payload: dict, user: Optional[dict] = Depends(optional_user)):
+    """
+    Log a disaster alert (Flash Flood or Landslide) triggered by live sensor readings into PostgreSQL & MongoDB.
+    """
+    return record_sensor_alert(
+        disaster_type=payload.get("disaster_type", "flash_flood"),
+        alert_level=payload.get("alert_level", "critical"),
+        message=payload.get("message", ""),
+        zone_name=payload.get("zone_name", "Digital Twin Monitored Basin"),
+        sensor_id=payload.get("sensor_id", "LORA_NODE_1"),
+        soil_moisture=float(payload.get("soil_moisture") or 0.0),
+        water_level_mm=float(payload.get("water_level_mm") or 0.0),
+        tilt=float(payload.get("tilt") or 0.0),
+        imu_mag=float(payload.get("imu_mag") or 0.0),
+    )
+
+
+@router.get("/alerts")
+async def list_sensor_alerts(
+    limit: int = Query(50, ge=1, le=200),
+    user: Optional[dict] = Depends(optional_user),
+):
+    """
+    Retrieve all disaster alerts logged in PostgreSQL database.
+    """
+    return get_sensor_alerts(limit=limit)
+
 

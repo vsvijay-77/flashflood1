@@ -527,6 +527,7 @@ export function CesiumDigitalTwinViewer({
   const handleToggleRain = () => {
     const next = !rainActive;
     setInternalRain(next);
+    setShowVisibleRain(next);
     onToggleRain?.(next);
     setWaterSimActive(next);
     if (next) {
@@ -539,8 +540,11 @@ export function CesiumDigitalTwinViewer({
   useEffect(() => {
     if (isRaining !== undefined) {
       setWaterSimActive(isRaining);
+      setShowVisibleRain(isRaining);
       if (isRaining) {
         flashFloodRef.current?.startSimulation();
+      } else {
+        flashFloodRef.current?.pauseSimulation();
       }
     }
   }, [isRaining]);
@@ -2777,33 +2781,61 @@ export function CesiumDigitalTwinViewer({
 
           setSlaveLiveTelemetry(telemetry);
 
-          // "rain intensity change depend on that value"
-          if (telemetry.rainfall > 0 || rainActive) {
-            setSimRainIntensity(telemetry.rainfall);
-          }
-
           // "and add rainfall if greater the 20 % st rain and tilt 100 percent =0 0=100%"
+          // "while rain not load siluaion just start it"
           const isRainOver20 = telemetry.rainfall > 20 || telemetry.rainfallPct > 20;
           if (isRainOver20) {
             if (!rainActive) {
               setInternalRain(true);
               setShowVisibleRain(true);
+              setWaterSimActive(true);
               onToggleRain?.(true);
             }
             setSimRainIntensity(telemetry.rainfall);
+            flashFloodRef.current?.startSimulation();
             if (!lastAutoStartedRainRef.current) {
               lastAutoStartedRainRef.current = true;
-              toast.success(`🌧️ Live rainfall > 20% detected (${telemetry.rainfall.toFixed(1)} mm/h)! Starting simulation rain.`);
+              toast.success(`🌧️ Live rainfall > 20% detected (${telemetry.rainfall.toFixed(1)} mm/h)! Starting simulation.`);
             }
           } else {
+            // "see if no rainfall no rain"
             lastAutoStartedRainRef.current = false;
+            if (rainActive || internalRain || showVisibleRain) {
+              setInternalRain(false);
+              setShowVisibleRain(false);
+              setWaterSimActive(false);
+              onToggleRain?.(false);
+              flashFloodRef.current?.pauseSimulation();
+            }
+            setSimRainIntensity(0);
           }
         } else {
           // "if no data display 0 in that tab"
+          // "see if no rainfall no rain"
           setSlaveLiveTelemetry(defaultLiveTelemetry);
+          lastAutoStartedRainRef.current = false;
+          if (rainActive || internalRain || showVisibleRain) {
+            setInternalRain(false);
+            setShowVisibleRain(false);
+            setWaterSimActive(false);
+            onToggleRain?.(false);
+            flashFloodRef.current?.pauseSimulation();
+          }
+          setSimRainIntensity(0);
         }
       } catch (err) {
-        if (isMounted) setSlaveLiveTelemetry(defaultLiveTelemetry);
+        if (isMounted) {
+          setSlaveLiveTelemetry(defaultLiveTelemetry);
+          lastAutoStartedRainRef.current = false;
+          if (rainActive || internalRain || showVisibleRain) {
+            setInternalRain(false);
+            setShowVisibleRain(false);
+            setWaterSimActive(false);
+            onToggleRain?.(false);
+            flashFloodRef.current?.pauseSimulation();
+          }
+          setSimRainIntensity(0);
+        }
       }
     };
 
@@ -4825,6 +4857,7 @@ export function CesiumDigitalTwinViewer({
         baseElevation={groundHeightMeters}
         polygonCoords={getActivePolygon()}
         active={waterSimActive}
+        autoStart={rainActive || waterSimActive}
         riverFeatures={riverFeatures}
         roadFeatures={roadFeatures}
         buildingFeatures={buildingFeatures}

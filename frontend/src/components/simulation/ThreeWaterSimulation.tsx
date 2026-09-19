@@ -43,6 +43,7 @@ export interface ThreeWaterSimulationProps {
   onReadyChange?: (isReady: boolean) => void;
   showVisibleRain?: boolean;
   onToggleVisibleRain?: (show: boolean) => void;
+  autoStart?: boolean;
   onClose?: () => void;
   debugMode?: boolean;
 }
@@ -84,6 +85,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       onReadyChange,
       showVisibleRain,
       onToggleVisibleRain,
+      autoStart = false,
       onClose,
     },
     ref
@@ -163,7 +165,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [spreadAreaHectares, setSpreadAreaHectares] = useState<number>(0);
     const [maxDepthM, setMaxDepthM] = useState<number>(0);
     const [isReady, setIsReady] = useState(false);
-    const [controlsOpen, setControlsOpen] = useState(true);
+    const [controlsOpen, setControlsOpen] = useState(!autoStart && !showVisibleRain);
     const [parameters, setParameters] = useState({
       ...defaultFlashFloodParameters,
       soilSaturation: defaultSoilSaturation !== undefined ? defaultSoilSaturation : defaultFlashFloodParameters.soilSaturation,
@@ -620,19 +622,33 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         });
         setIsReady(true);
 
-        // Ready state: load water on river channel without premature flood
-        // Simulation starts when the user clicks Play or triggers simulation
-        isRunningRef.current = false;
-        isPausedRef.current = false;
-        setIsRunning(false);
-        setIsPaused(false);
-        setControlsOpen(false);   // show quick toolbar
-        onRunningChange?.(false);
-        onPauseChange?.(false);
+        // "while rain not load siluaion just start it"
+        const shouldAutoStart = autoStart || (showVisibleRain && active);
+        if (shouldAutoStart) {
+          if (!simulationStartedAtRef.current) {
+            simulationStartedAtRef.current = new Date().toISOString();
+          }
+          isRunningRef.current = true;
+          isPausedRef.current = false;
+          setIsRunning(true);
+          setIsPaused(false);
+          setControlsOpen(false);
+          onRunningChange?.(true);
+          onPauseChange?.(false);
+          setStatusText("Flash flood simulation running with live rainfall");
+        } else {
+          isRunningRef.current = false;
+          isPausedRef.current = false;
+          setIsRunning(false);
+          setIsPaused(false);
+          setControlsOpen(false);   // show quick toolbar
+          onRunningChange?.(false);
+          onPauseChange?.(false);
 
-        setStatusText(
-          `Ready • ${minElev.toFixed(0)}–${maxElev.toFixed(0)}m (${relief.toFixed(0)}m relief) · River loaded · Click Play to start flood simulation`
-        );
+          setStatusText(
+            `Ready • ${minElev.toFixed(0)}–${maxElev.toFixed(0)}m (${relief.toFixed(0)}m relief) · River loaded · Click Play to start flood simulation`
+          );
+        }
         try {
           cesiumViewer.scene.requestRender();
         } catch (e) {}
@@ -1490,8 +1506,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           style={{ width: "100%", height: "100%" }}
         />
 
-        {/* Sleek Loading HUD when initializing terrain and physics */}
-        {!isReady && (
+        {/* Sleek Loading HUD when initializing terrain and physics (hidden during rain auto-start: "while rain not load siluaion just start it") */}
+        {!isReady && !autoStart && !showVisibleRain && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/40 backdrop-blur-[2px] pointer-events-none transition-all duration-300">
             <div className="flex items-center gap-3.5 rounded-2xl border border-cyan-500/50 bg-slate-950/95 px-6 py-4 text-white shadow-2xl shadow-cyan-950/80">
               <Loader2 className="size-6 animate-spin text-cyan-400" />

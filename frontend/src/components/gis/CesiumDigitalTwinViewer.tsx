@@ -418,6 +418,8 @@ export function CesiumDigitalTwinViewer({
   const [activeSlaveId, setActiveSlaveId] = useState<string | null>(null);
   const [slaveLiveTelemetry, setSlaveLiveTelemetry] = useState<LiveSlaveTelemetry>(defaultLiveTelemetry);
   const lastAutoStartedRainRef = useRef<boolean>(false);
+  const lastAutoStartedFloodRef = useRef<boolean>(false);
+  const autoStartedBySensorRef = useRef<boolean>(false);
 
   // Sensor ID prompt modal state for adding master and slave nodes
   const [sensorPromptModal, setSensorPromptModal] = useState<{
@@ -2777,8 +2779,7 @@ export function CesiumDigitalTwinViewer({
 
           setSlaveLiveTelemetry(telemetry);
 
-          // "if sensor rainfalll is detected make the rain thats all rain based on that intensity create a separate code for it 
-          //  no simultaion page no water incresase nothing"
+          // ─── 1. ATMOSPHERIC RAIN (Strictly sensor rainfall, no simulation) ───
           const isRainOver20 = telemetry.rainfall > 20 || telemetry.rainfallPct > 20;
           if (isRainOver20) {
             if (!rainActive) {
@@ -2787,33 +2788,59 @@ export function CesiumDigitalTwinViewer({
               onToggleRain?.(true);
             }
             setSimRainIntensity(telemetry.rainfall);
-            // User requirement: "no simultaion page no water incresase nothing"
-            setWaterSimActive(false);
             if (!lastAutoStartedRainRef.current) {
               lastAutoStartedRainRef.current = true;
               toast.success(`🌧️ Sensor rainfall detected (${telemetry.rainfall.toFixed(1)} mm/h)! Atmospheric rain active.`);
             }
           } else {
-            // "see if no rainfall no rain"
             lastAutoStartedRainRef.current = false;
             if (rainActive || internalRain || showVisibleRain) {
               setInternalRain(false);
               setShowVisibleRain(false);
-              setWaterSimActive(false);
               onToggleRain?.(false);
             }
             setSimRainIntensity(0);
           }
+
+          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Water level > 40 OR Soil moisture > 40) ───
+          // "if water level and soil moisture lvel raised by 40 or eithier one of them simulate flood slowly nomal is enough"
+          const isFloodRiskTriggered = telemetry.hasData && (telemetry.waterLevelMm > 40 || telemetry.soilMoisture > 40);
+          if (isFloodRiskTriggered) {
+            setWaterSimActive(true);
+            autoStartedBySensorRef.current = true;
+            flashFloodRef.current?.setSpeed(1.0);
+            flashFloodRef.current?.startSimulation();
+            if (!lastAutoStartedFloodRef.current) {
+              lastAutoStartedFloodRef.current = true;
+              const triggerReason = telemetry.waterLevelMm > 40 && telemetry.soilMoisture > 40
+                ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) & Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) > 40`
+                : telemetry.waterLevelMm > 40
+                ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) > 40`
+                : `Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) > 40`;
+              toast.success(`🌊 ${triggerReason}: Simulating flood slowly.`);
+            }
+          } else {
+            lastAutoStartedFloodRef.current = false;
+            if (autoStartedBySensorRef.current) {
+              autoStartedBySensorRef.current = false;
+              setWaterSimActive(false);
+              flashFloodRef.current?.pauseSimulation();
+            }
+          }
         } else {
           // "if no data display 0 in that tab"
-          // "see if no rainfall no rain"
           setSlaveLiveTelemetry(defaultLiveTelemetry);
           lastAutoStartedRainRef.current = false;
+          lastAutoStartedFloodRef.current = false;
           if (rainActive || internalRain || showVisibleRain) {
             setInternalRain(false);
             setShowVisibleRain(false);
-            setWaterSimActive(false);
             onToggleRain?.(false);
+          }
+          if (autoStartedBySensorRef.current) {
+            autoStartedBySensorRef.current = false;
+            setWaterSimActive(false);
+            flashFloodRef.current?.pauseSimulation();
           }
           setSimRainIntensity(0);
         }
@@ -2821,11 +2848,16 @@ export function CesiumDigitalTwinViewer({
         if (isMounted) {
           setSlaveLiveTelemetry(defaultLiveTelemetry);
           lastAutoStartedRainRef.current = false;
+          lastAutoStartedFloodRef.current = false;
           if (rainActive || internalRain || showVisibleRain) {
             setInternalRain(false);
             setShowVisibleRain(false);
-            setWaterSimActive(false);
             onToggleRain?.(false);
+          }
+          if (autoStartedBySensorRef.current) {
+            autoStartedBySensorRef.current = false;
+            setWaterSimActive(false);
+            flashFloodRef.current?.pauseSimulation();
           }
           setSimRainIntensity(0);
         }
@@ -4849,7 +4881,7 @@ export function CesiumDigitalTwinViewer({
         baseElevation={groundHeightMeters}
         polygonCoords={getActivePolygon()}
         active={waterSimActive}
-        autoStart={false}
+        autoStart={autoStartedBySensorRef.current}
         riverFeatures={riverFeatures}
         roadFeatures={roadFeatures}
         buildingFeatures={buildingFeatures}
@@ -4873,14 +4905,16 @@ export function CesiumDigitalTwinViewer({
         }}
       />
 
-      {/* 🗺️ Selected Area Map Layers Status Box */}
+      {/* 🗺️ Selected Area Map Layers Status Box (Moved below ML Footprint box so they do not overlap) */}
       {!loading && showLayersStatusBox && (
         <div
           role="status"
           aria-label="Selected area map layers"
           className={`absolute z-30 pointer-events-auto ${
-            forecastRailHidden ? "top-[138px] left-3" : "top-[138px] left-[276px]"
-          } min-w-[280px] max-w-[calc(100%-1.5rem)] rounded-xl border border-slate-700/80 bg-slate-950/90 backdrop-blur-md px-3.5 py-2.5 shadow-xl transition-all duration-200`}
+            showBuildings && showBuildingStats && buildingFeatures.length > 0
+              ? "top-[235px]"
+              : "top-14"
+          } ${forecastRailHidden ? "left-14" : "left-[276px]"} w-80 max-w-[calc(100%-1.5rem)] rounded-xl border border-slate-700/80 bg-slate-950/90 backdrop-blur-md px-3.5 py-2.5 shadow-xl transition-all duration-300`}
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-medium">

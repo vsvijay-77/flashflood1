@@ -36,6 +36,8 @@ export interface ThreeWaterSimulationProps {
   rainfallMmH?: number;
   windSpeedKmh?: number;
   isFlatView?: boolean;
+  defaultSoilSaturation?: number;
+  defaultSourceRise?: number;
   onPauseChange?: (isPaused: boolean) => void;
   onRunningChange?: (isRunning: boolean) => void;
   onReadyChange?: (isReady: boolean) => void;
@@ -75,6 +77,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       rainfallMmH = 150,
       windSpeedKmh = 20,
       isFlatView = false,
+      defaultSoilSaturation,
+      defaultSourceRise,
       onPauseChange,
       onRunningChange,
       onReadyChange,
@@ -148,7 +152,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [isPaused, setIsPaused] = useState<boolean>(false);
     const [showWater, setShowWater] = useState<boolean>(true);
-    const [sourceRise, setSourceRise] = useState<number>(1.2);
+    const [sourceRise, setSourceRise] = useState<number>(defaultSourceRise !== undefined && defaultSourceRise > 0 ? defaultSourceRise : 1.2);
     const [speed, setSpeed] = useState<number>(1);
     const [waveIntensity, setWaveIntensity] = useState<number>(1.0);
     const [statusText, setStatusText] = useState<string>("Initializing terrain & water sources…");
@@ -160,9 +164,26 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [maxDepthM, setMaxDepthM] = useState<number>(0);
     const [isReady, setIsReady] = useState(false);
     const [controlsOpen, setControlsOpen] = useState(true);
-    const [parameters, setParameters] = useState({ ...defaultFlashFloodParameters, windSpeedKmh });
+    const [parameters, setParameters] = useState({
+      ...defaultFlashFloodParameters,
+      soilSaturation: defaultSoilSaturation !== undefined ? defaultSoilSaturation : defaultFlashFloodParameters.soilSaturation,
+      windSpeedKmh,
+    });
     const parametersRef = useRef(parameters);
     parametersRef.current = parameters;
+
+    useEffect(() => {
+      if (defaultSoilSaturation !== undefined) {
+        setParameters((prev) => ({ ...prev, soilSaturation: defaultSoilSaturation }));
+      }
+    }, [defaultSoilSaturation]);
+
+    useEffect(() => {
+      if (defaultSourceRise !== undefined && defaultSourceRise > 0) {
+        setSourceRise(defaultSourceRise);
+      }
+    }, [defaultSourceRise]);
+
     const [rainfall, setRainfall] = useState(rainfallMmH ?? 0);
     const [fps, setFps] = useState(0);
     const [effectiveSpeed, setEffectiveSpeed] = useState(0);

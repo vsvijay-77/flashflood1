@@ -127,3 +127,11 @@ def require_roles(*allowed: str):
             raise HTTPException(status_code=403, detail="You do not have permission to access this resource.")
         return user
     return guard
+
+
+async def optional_user(request: Request) -> Optional[dict]:
+    try:
+        return await current_user(request)
+    except HTTPException:
+        return None
+

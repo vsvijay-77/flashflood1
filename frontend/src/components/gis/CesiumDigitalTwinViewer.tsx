@@ -118,6 +118,50 @@ export interface UserActivityLog {
   timestamp: string;
 }
 
+export interface LiveSlaveTelemetry {
+  deviceId: string;
+  hasData: boolean;
+  status: "online" | "offline" | "no_data";
+  soilMoisture: number;
+  waterLevelMm: number;
+  waterLevelM: number;
+  rainfall: number;
+  rainfallMm: number;
+  rainfallPct: number;
+  tilt: number;
+  imuX: number;
+  imuY: number;
+  imuZ: number;
+  imuMag: number;
+  rssi: number;
+  snr: number;
+  battery: number;
+  txt: string;
+  createdAt: string | null;
+}
+
+export const defaultLiveTelemetry: LiveSlaveTelemetry = {
+  deviceId: "node1",
+  hasData: false,
+  status: "no_data",
+  soilMoisture: 0,
+  waterLevelMm: 0,
+  waterLevelM: 0,
+  rainfall: 0,
+  rainfallMm: 0,
+  rainfallPct: 0,
+  tilt: 0,
+  imuX: 0,
+  imuY: 0,
+  imuZ: 0,
+  imuMag: 0,
+  rssi: 0,
+  snr: 0,
+  battery: 0,
+  txt: "",
+  createdAt: null,
+};
+
 export interface CesiumDigitalTwinViewerProps {
   latitude: number;
   longitude: number;
@@ -369,6 +413,8 @@ export function CesiumDigitalTwinViewer({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [showSlaveDataBox, setShowSlaveDataBox] = useState<boolean>(false);
   const [activeSlaveId, setActiveSlaveId] = useState<string | null>(null);
+  const [slaveLiveTelemetry, setSlaveLiveTelemetry] = useState<LiveSlaveTelemetry>(defaultLiveTelemetry);
+  const lastAutoStartedRainRef = useRef<boolean>(false);
 
   // Sensor ID prompt modal state for adding master and slave nodes
   const [sensorPromptModal, setSensorPromptModal] = useState<{
@@ -2681,6 +2727,85 @@ export function CesiumDigitalTwinViewer({
     } catch (e) {}
   };
 
+  // ─── 📡 FETCH LIVE DATA FOR SLAVE NODE 1 (Poll every 1s) ───
+  useEffect(() => {
+    let isMounted = true;
+    const activeSlaveNode = meshNodes.find((n) => n.id === activeSlaveId) || meshNodes.find((n) => n.type === "slave");
+    const targetSensorId = (activeSlaveNode?.sensorId || stagedSensorId || "node1").trim() || "node1";
+
+    const fetchSlaveData = async () => {
+      try {
+        const res = await fetch(`/api/external-sensors/node/${encodeURIComponent(targetSensorId)}`);
+        if (!res.ok) {
+          if (isMounted) setSlaveLiveTelemetry(defaultLiveTelemetry);
+          return;
+        }
+        const data = await res.json();
+        if (!isMounted) return;
+
+        if (data && data.has_data) {
+          const telemetry: LiveSlaveTelemetry = {
+            deviceId: data.device_id || targetSensorId,
+            hasData: true,
+            status: "online",
+            soilMoisture: Number(data.soil_moisture ?? 0),
+            waterLevelMm: Number(data.water_level_mm ?? data.water_level ?? 0),
+            waterLevelM: Number(data.water_level_m ?? (Number(data.water_level ?? 0) / 1000.0)),
+            rainfall: Number(data.rainfall ?? data.rainfall_mm ?? 0),
+            rainfallMm: Number(data.rainfall_mm ?? data.rainfall ?? 0),
+            rainfallPct: Number(data.rainfall_pct ?? data.rainfall ?? 0),
+            tilt: Number(data.tilt ?? 0),
+            imuX: Number(data.imu_x ?? 0),
+            imuY: Number(data.imu_y ?? 0),
+            imuZ: Number(data.imu_z ?? 0),
+            imuMag: Number(data.imu_mag ?? 0),
+            rssi: Number(data.rssi ?? 0),
+            snr: Number(data.snr ?? 0),
+            battery: Number(data.battery ?? 0),
+            txt: String(data.txt || ""),
+            createdAt: data.created_at || null,
+          };
+
+          setSlaveLiveTelemetry(telemetry);
+
+          // "also in simulation give that data as default"
+          if (!rainActive && telemetry.rainfall > 0) {
+            setSimRainIntensity(telemetry.rainfall);
+          }
+
+          // "if rain is 100 % from the live data start the rain in simulation based on the value received"
+          const isRain100 = telemetry.rainfall >= 100 || telemetry.rainfallPct >= 100;
+          if (isRain100) {
+            if (!rainActive) {
+              setInternalRain(true);
+              setShowVisibleRain(true);
+              onToggleRain?.(true);
+            }
+            setSimRainIntensity(telemetry.rainfall);
+            if (!lastAutoStartedRainRef.current) {
+              lastAutoStartedRainRef.current = true;
+              toast.success(`🌧️ Rain is 100% from Slave Node 1 live data! Simulation rain started at ${telemetry.rainfall} mm/h`);
+            }
+          } else if (telemetry.rainfall < 100) {
+            lastAutoStartedRainRef.current = false;
+          }
+        } else {
+          // "if no data display 0 in that tab"
+          setSlaveLiveTelemetry(defaultLiveTelemetry);
+        }
+      } catch (err) {
+        if (isMounted) setSlaveLiveTelemetry(defaultLiveTelemetry);
+      }
+    };
+
+    fetchSlaveData();
+    const interval = setInterval(fetchSlaveData, 1000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [activeSlaveId, stagedSensorId, meshNodes, rainActive, onToggleRain]);
+
   // ─── SRTM 30m DEM TOPOGRAPHY LAYER (NASA / USGS SRTMGL1_003) ───
   const showSrtm30Ref = useRef(showSrtm30);
   showSrtm30Ref.current = showSrtm30;
@@ -4696,6 +4821,8 @@ export function CesiumDigitalTwinViewer({
         buildingFeatures={buildingFeatures}
         rainfallMmH={simRainIntensity}
         windSpeedKmh={simWindSpeed}
+        defaultSoilSaturation={slaveLiveTelemetry.hasData ? slaveLiveTelemetry.soilMoisture : undefined}
+        defaultSourceRise={slaveLiveTelemetry.hasData && slaveLiveTelemetry.waterLevelM > 0 ? Math.max(0.5, slaveLiveTelemetry.waterLevelM * 5) : undefined}
         isFlatView={viewMode === "flat"}
         onPauseChange={setIsFloodPaused}
         onRunningChange={setIsFloodRunning}
@@ -6163,8 +6290,14 @@ export function CesiumDigitalTwinViewer({
                     <h3 className="font-bold text-sm text-cyan-300 leading-none">
                       {activeSlave.name}
                     </h3>
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
-                      ● Online
+                    <span
+                      className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-semibold border ${
+                        slaveLiveTelemetry.hasData
+                          ? "bg-emerald-950 border-emerald-500/40 text-emerald-300"
+                          : "bg-slate-800 border-slate-700 text-slate-400"
+                      }`}
+                    >
+                      {slaveLiveTelemetry.hasData ? "● Live Data" : "● No Data (0)"}
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
@@ -6195,7 +6328,7 @@ export function CesiumDigitalTwinViewer({
                     <span>Signal</span>
                   </div>
                   <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
-                    {activeSlave.signalDbm} dBm
+                    {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.rssi} dBm` : "0 dBm"}
                   </div>
                 </div>
                 <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
@@ -6204,7 +6337,7 @@ export function CesiumDigitalTwinViewer({
                     <span>Battery</span>
                   </div>
                   <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
-                    {activeSlave.battery}%
+                    {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.battery}%` : "0%"}
                   </div>
                 </div>
                 <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
@@ -6245,7 +6378,9 @@ export function CesiumDigitalTwinViewer({
                     <Activity className="size-3 text-cyan-400" />
                     <span>Live Probe Telemetry</span>
                   </span>
-                  <span className="text-[9px] text-emerald-400 font-mono animate-pulse">● Live 1 Hz</span>
+                  <span className="text-[9px] text-emerald-400 font-mono animate-pulse">
+                    {slaveLiveTelemetry.hasData ? "● Live 1 Hz" : "● No Data"}
+                  </span>
                 </div>
 
                 {/* 1. Submersible Water Level */}
@@ -6256,19 +6391,21 @@ export function CesiumDigitalTwinViewer({
                       <span className="font-semibold text-slate-200 text-xs">Submersible Water Level</span>
                     </div>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 font-mono border border-blue-800/50">
-                      Normal
+                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.waterLevelM > 0.8 ? "High" : "Normal") : "0"}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between mt-1.5">
                     <span className="text-[10px] text-slate-400 font-mono">Current Depth:</span>
                     <span className="font-mono font-bold text-cyan-300 text-sm">
-                      {calculatedWaterDepth.toFixed(2)} m
+                      {slaveLiveTelemetry.hasData
+                        ? `${slaveLiveTelemetry.waterLevelM.toFixed(2)} m (${slaveLiveTelemetry.waterLevelMm.toFixed(0)} mm)`
+                        : "0 m"}
                     </span>
                   </div>
                   <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
                     <div
                       className="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(100, Math.max(12, (calculatedWaterDepth / 2.0) * 100))}%` }}
+                      style={{ width: `${Math.min(100, (slaveLiveTelemetry.waterLevelM / 2.0) * 100)}%` }}
                     />
                   </div>
                 </div>
@@ -6281,19 +6418,19 @@ export function CesiumDigitalTwinViewer({
                       <span className="font-semibold text-slate-200 text-xs">Capacitive Soil Moisture</span>
                     </div>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 font-mono border border-emerald-800/50">
-                      Saturated
+                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.soilMoisture > 70 ? "Saturated" : "Moist") : "0"}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between mt-1.5">
                     <span className="text-[10px] text-slate-400 font-mono">Volumetric Content:</span>
                     <span className="font-mono font-bold text-emerald-300 text-sm">
-                      {calculatedMoisture.toFixed(1)}%
+                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.soilMoisture.toFixed(1)}%` : "0%"}
                     </span>
                   </div>
                   <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
                     <div
                       className="bg-emerald-500 h-full rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(100, calculatedMoisture)}%` }}
+                      style={{ width: `${Math.min(100, slaveLiveTelemetry.soilMoisture)}%` }}
                     />
                   </div>
                 </div>
@@ -6306,13 +6443,13 @@ export function CesiumDigitalTwinViewer({
                       <span className="font-semibold text-slate-200 text-xs">Slope Inclinometer (Tilt)</span>
                     </div>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 font-mono border border-amber-800/50">
-                      Stable &lt; 5°
+                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.tilt > 5 ? "Warning" : "Stable") : "0"}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between mt-1.5">
                     <span className="text-[10px] text-slate-400 font-mono">Axis Deviation:</span>
                     <span className="font-mono font-bold text-amber-300 text-sm">
-                      1.42°
+                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.tilt.toFixed(1)}°` : "0°"}
                     </span>
                   </div>
                 </div>
@@ -6324,18 +6461,88 @@ export function CesiumDigitalTwinViewer({
                       <CloudRain className="size-3.5 text-cyan-400" />
                       <span className="font-semibold text-slate-200 text-xs">Optical Rain Sensor</span>
                     </div>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 font-mono border border-cyan-800/50">
-                      Active
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                        slaveLiveTelemetry.rainfall >= 100
+                          ? "bg-rose-950 text-rose-300 border-rose-800/50 animate-pulse font-bold"
+                          : slaveLiveTelemetry.hasData && slaveLiveTelemetry.rainfall > 0
+                          ? "bg-cyan-950 text-cyan-300 border-cyan-800/50"
+                          : "bg-slate-900 text-slate-400 border-slate-800"
+                      }`}
+                    >
+                      {slaveLiveTelemetry.rainfall >= 100
+                        ? "100% (Storm)"
+                        : slaveLiveTelemetry.hasData && slaveLiveTelemetry.rainfall > 0
+                        ? `${slaveLiveTelemetry.rainfall.toFixed(0)} mm/h`
+                        : "0"}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between mt-1.5">
                     <span className="text-[10px] text-slate-400 font-mono">Precipitation:</span>
                     <span className="font-mono font-bold text-cyan-300 text-sm">
-                      {(simRainIntensity || 45.0).toFixed(1)} mm/h
+                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.rainfall.toFixed(1)} mm/h` : "0 mm/h"}
                     </span>
                   </div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                    <div
+                      className="bg-cyan-500 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, slaveLiveTelemetry.rainfall)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 5. 9-Axis Ground IMU */}
+                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Activity className="size-3.5 text-purple-400" />
+                      <span className="font-semibold text-slate-200 text-xs">9-Axis Ground IMU</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 font-mono border border-purple-800/50">
+                      {slaveLiveTelemetry.hasData ? "Active" : "0"}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between mt-1.5">
+                    <span className="text-[10px] text-slate-400 font-mono">Vibration / Accel:</span>
+                    <span className="font-mono font-bold text-purple-300 text-sm">
+                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.imuMag.toFixed(2)} g` : "0 g"}
+                    </span>
+                  </div>
+                  {slaveLiveTelemetry.hasData && (
+                    <div className="text-[9px] font-mono text-slate-400 mt-1 flex justify-between">
+                      <span>X: {slaveLiveTelemetry.imuX.toFixed(0)}</span>
+                      <span>Y: {slaveLiveTelemetry.imuY.toFixed(0)}</span>
+                      <span>Z: {slaveLiveTelemetry.imuZ.toFixed(0)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* Simulate 100% Rain Packet Test Trigger */}
+              <button
+                type="button"
+                onClick={() => {
+                  setSlaveLiveTelemetry((prev) => ({
+                    ...prev,
+                    hasData: true,
+                    rainfall: 100,
+                    rainfallMm: 100,
+                    rainfallPct: 100,
+                  }));
+                  if (!rainActive) {
+                    setInternalRain(true);
+                    setShowVisibleRain(true);
+                    onToggleRain?.(true);
+                  }
+                  setSimRainIntensity(100);
+                  toast.success("🌧️ Simulating 100% Rain live telemetry packet! Simulation rain started at 100 mm/h.");
+                }}
+                className="w-full flex items-center justify-center gap-1.5 bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-200 hover:text-white rounded-xl py-2 text-xs font-semibold cursor-pointer transition-all shadow-md active:scale-95"
+                title="Test live 100% rain trigger: auto-starts rain in simulation at 100 mm/h"
+              >
+                <CloudRain className="size-3.5 text-cyan-400" />
+                <span>Test 100% Rain (Auto-Start Simulation)</span>
+              </button>
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-1">

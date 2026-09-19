@@ -208,3 +208,95 @@ def get_lora_packets(limit: int = 50) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching lora_packets from sensor_db: {e}")
         return []
+
+
+def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
+    """
+    Fetches the single latest telemetry record for a specific node.
+    Normalizes node identifiers (node1 -> LORA_NODE_1, etc.).
+    Returns real values or 0s if no data exists.
+    """
+    clean_id = (node_id or "node1").strip()
+    digits = "".join([c for c in clean_id if c.isdigit()])
+    alt_id = f"LORA_NODE_{digits}" if digits else clean_id
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, device_id, soil_moisture, water_level, rainfall, tilt,
+                           imu_x, imu_y, imu_z, rssi, snr, created_at, txt
+                    FROM sensor_data
+                    WHERE device_id = %s OR device_id = %s OR device_id ILIKE %s
+                    ORDER BY id DESC
+                    LIMIT 1
+                """, (clean_id, alt_id, f"%{clean_id}%"))
+                row = cur.fetchone()
+                if row:
+                    cols = [d[0] for d in cur.description]
+                    item = dict(zip(cols, row))
+                    created_at = item.get("created_at")
+                    if created_at and hasattr(created_at, "isoformat"):
+                        created_at = created_at.isoformat()
+
+                    soil_moisture = float(item.get("soil_moisture") or 0.0)
+                    water_level = float(item.get("water_level") or 0.0)
+                    rainfall = float(item.get("rainfall") or 0.0)
+                    tilt = float(item.get("tilt") or 0.0)
+                    imu_x = float(item.get("imu_x") or 0.0)
+                    imu_y = float(item.get("imu_y") or 0.0)
+                    imu_z = float(item.get("imu_z") or 0.0)
+                    rssi = float(item.get("rssi") or 0.0)
+                    snr = float(item.get("snr") or 0.0)
+
+                    imu_mag = round((imu_x**2 + imu_y**2 + imu_z**2)**0.5 / 4096.0, 2) if (imu_x or imu_y or imu_z) else 0.0
+                    battery_pct = max(10, min(100, int(100 - (abs(rssi) - 90) * 1.5))) if rssi < 0 else 98
+
+                    return {
+                        "device_id": item.get("device_id") or clean_id,
+                        "has_data": True,
+                        "status": "online",
+                        "soil_moisture": soil_moisture,
+                        "water_level": water_level,
+                        "water_level_mm": water_level,
+                        "water_level_m": round(water_level / 1000.0, 3),
+                        "rainfall": rainfall,
+                        "rainfall_mm": rainfall,
+                        "rainfall_pct": rainfall,
+                        "tilt": tilt,
+                        "imu_x": imu_x,
+                        "imu_y": imu_y,
+                        "imu_z": imu_z,
+                        "imu_mag": imu_mag,
+                        "rssi": rssi,
+                        "snr": snr,
+                        "battery": battery_pct,
+                        "txt": item.get("txt") or "",
+                        "created_at": created_at,
+                    }
+    except Exception as e:
+        logger.error(f"Error fetching node latest reading for {node_id}: {e}")
+
+    # Fallback when no data exists: ALL READINGS MUST BE 0 AS SPECIFIED
+    return {
+        "device_id": clean_id,
+        "has_data": False,
+        "status": "no_data",
+        "soil_moisture": 0.0,
+        "water_level": 0.0,
+        "water_level_mm": 0.0,
+        "water_level_m": 0.0,
+        "rainfall": 0.0,
+        "rainfall_mm": 0.0,
+        "rainfall_pct": 0.0,
+        "tilt": 0.0,
+        "imu_x": 0.0,
+        "imu_y": 0.0,
+        "imu_z": 0.0,
+        "imu_mag": 0.0,
+        "rssi": 0.0,
+        "snr": 0.0,
+        "battery": 0,
+        "txt": "",
+        "created_at": None,
+    }
+

@@ -285,6 +285,7 @@ export function CesiumDigitalTwinViewer({
   // ─── 🛣️ REAL ROAD NETWORK, 🌊 RIVERS & 🚨 EVACUATION ROUTING ───
   const roadEntitiesRef = useRef<any[]>([]);
   const riverEntitiesRef = useRef<any[]>([]);
+  const riverPrimitivesRef = useRef<any[]>([]); // Batched GroundPolylinePrimitives (fast path)
   const buildingEntitiesRef = useRef<any[]>([]);
   const evacuationEntitiesRef = useRef<any[]>([]);
   const riskZoneEntitiesRef = useRef<any[]>([]);
@@ -1172,31 +1173,49 @@ export function CesiumDigitalTwinViewer({
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
 
+    // --- Cleanup previous river entities (polygons/labels) ---
     viewer.entities.suspendEvents();
     try {
       riverEntitiesRef.current.forEach((ent) => {
         try { viewer.entities.remove(ent); } catch (e) {}
       });
       riverEntitiesRef.current = [];
+    } finally {
+      viewer.entities.resumeEvents();
+    }
 
-      if (!rivers || rivers.length === 0) {
-        return;
+    // --- Cleanup previous batched primitives (channel lines) ---
+    riverPrimitivesRef.current.forEach((prim) => {
+      try {
+        if (!prim.isDestroyed()) viewer.scene.primitives.remove(prim);
+      } catch (e) {}
+    });
+    riverPrimitivesRef.current = [];
+
+    if (!rivers || rivers.length === 0) {
+      viewer.scene.requestRender();
+      return;
+    }
+
+    const activePoly = getActivePolygon();
+    let minPolyLat = Infinity, maxPolyLat = -Infinity;
+    let minPolyLng = Infinity, maxPolyLng = -Infinity;
+    if (activePoly && activePoly.length >= 3) {
+      for (const [pLat, pLng] of activePoly) {
+        if (pLat < minPolyLat) minPolyLat = pLat;
+        if (pLat > maxPolyLat) maxPolyLat = pLat;
+        if (pLng < minPolyLng) minPolyLng = pLng;
+        if (pLng > maxPolyLng) maxPolyLng = pLng;
       }
+    }
 
-      const activePoly = getActivePolygon();
-      let minPolyLat = Infinity, maxPolyLat = -Infinity;
-      let minPolyLng = Infinity, maxPolyLng = -Infinity;
-      if (activePoly && activePoly.length >= 3) {
-        for (const [pLat, pLng] of activePoly) {
-          if (pLat < minPolyLat) minPolyLat = pLat;
-          if (pLat > maxPolyLat) maxPolyLat = pLat;
-          if (pLng < minPolyLng) minPolyLng = pLng;
-          if (pLng > maxPolyLng) maxPolyLng = pLng;
-        }
-      }
-      const padLat = Math.max(0.02, (maxPolyLat - minPolyLat) * 0.5);
-      const padLng = Math.max(0.02, (maxPolyLng - minPolyLng) * 0.5);
+    // Collect all channel line instances for batching into one primitive per width tier
+    // (main rivers wider, tributaries narrower)
+    const mainInstances: any[] = [];
+    const tributaryInstances: any[] = [];
 
+    viewer.entities.suspendEvents();
+    try {
       rivers.forEach((river) => {
         const geom = river.geometry as any;
         const props = (river.properties as any) || {};
@@ -1206,7 +1225,7 @@ export function CesiumDigitalTwinViewer({
           ["water", "lake", "reservoir", "pond", "basin", "riverbank", "lagoon", "oxbow"].includes(wType)
         );
 
-        // 1. Water surface polygons (lakes, reservoirs, ponds, basins)
+        // 1. Water surface polygons (lakes, reservoirs, ponds, basins) — keep as entities
         const polygons = geom?.type === "Polygon" ? [geom.coordinates] : geom?.type === "MultiPolygon" ? geom.coordinates : [];
         for (const rings of polygons as number[][][][]) {
           if (!rings || !rings[0] || rings[0].length < 3) continue;
@@ -1257,7 +1276,7 @@ export function CesiumDigitalTwinViewer({
           riverEntitiesRef.current.push(ent);
         }
 
-        // 2. Waterway channels (rivers, canals, streams, brooks)
+        // 2. Waterway channels (rivers, canals, streams, brooks) — collect for batch primitive
         const rawLines = geom?.type === "LineString" ? [geom.coordinates] : geom?.type === "MultiLineString" ? geom.coordinates : [];
         for (const line of rawLines as [number, number][][]) {
           if (!line || line.length < 2) continue;
@@ -1270,9 +1289,7 @@ export function CesiumDigitalTwinViewer({
           if (isWaterBody && isClosed) {
             if (activePoly && activePoly.length >= 3) {
               const hasPointInside = line.some(([lng, lat]) => isPointInPolygon(lat, lng, activePoly));
-              if (!hasPointInside) {
-                continue;
-              }
+              if (!hasPointInside) continue;
             }
             const flatRing = line.flat();
             if (flatRing.length >= 6) {
@@ -1296,36 +1313,72 @@ export function CesiumDigitalTwinViewer({
           if (clippedSegments.length === 0) continue;
 
           const isMain = wType === "river" || wType === "canal" || Boolean(props.is_main_river);
-          const mappedWidth = Number(props.width_m ?? props.width);
-          // Use plain Color material (fastest path in Cesium — no glow shader passes).
-          // Same teal-cyan #06b6d4 as the bottom water body for visual consistency.
-          const lineWidth = Number.isFinite(mappedWidth) && mappedWidth > 0
-            ? Math.max(isMain ? 16 : 10, Math.min(24, mappedWidth * 1.0))
-            : isMain ? 18 : 11;
 
+          // Batch into GeometryInstance array — one GroundPolylinePrimitive per tier
           clippedSegments.forEach((seg) => {
             const flat = seg.flat();
             if (flat.length < 4) return;
-            const ent = viewer.entities.add({
-              name: `🌊 ${props.name || (isMain ? "River Channel" : "Waterway")}`,
-              show: visible,
-              polyline: {
-                positions: Cesium.Cartesian3.fromDegreesArray(flat),
-                width: lineWidth,
-                material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.90),
-                clampToGround: true,
-                zIndex: 30,
-              },
+            const positions = Cesium.Cartesian3.fromDegreesArray(flat);
+            if (positions.length < 2) return;
+            const instance = new Cesium.GeometryInstance({
+              geometry: new Cesium.GroundPolylineGeometry({
+                positions,
+                width: isMain ? 6.0 : 4.0, // GroundPolylineGeometry width is in metres, not pixels — keep compact
+              }),
             });
-            riverEntitiesRef.current.push(ent);
+            if (isMain) {
+              mainInstances.push(instance);
+            } else {
+              tributaryInstances.push(instance);
+            }
           });
         }
       });
     } finally {
       viewer.entities.resumeEvents();
-      viewer.scene.requestRender();
-      console.log(`[DT] render3DRivers: added ${riverEntitiesRef.current.length} entities to viewer`);
     }
+
+    // --- Batch all channel instances into two GroundPolylinePrimitive (main + tributary) ---
+    // This replaces hundreds of individual entity draw calls with just 2 GPU draw calls.
+    const riverColor = Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.90);
+
+    if (mainInstances.length > 0) {
+      try {
+        const prim = new Cesium.GroundPolylinePrimitive({
+          geometryInstances: mainInstances,
+          appearance: new Cesium.PolylineMaterialAppearance({
+            material: Cesium.Material.fromType("Color", { color: riverColor }),
+          }),
+          show: visible,
+          asynchronous: false,
+        });
+        viewer.scene.primitives.add(prim);
+        riverPrimitivesRef.current.push(prim);
+      } catch (e) {
+        console.warn("[DT] GroundPolylinePrimitive (main) failed, skipping:", e);
+      }
+    }
+
+    if (tributaryInstances.length > 0) {
+      try {
+        const tributaryColor = Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.75);
+        const prim = new Cesium.GroundPolylinePrimitive({
+          geometryInstances: tributaryInstances,
+          appearance: new Cesium.PolylineMaterialAppearance({
+            material: Cesium.Material.fromType("Color", { color: tributaryColor }),
+          }),
+          show: visible,
+          asynchronous: false,
+        });
+        viewer.scene.primitives.add(prim);
+        riverPrimitivesRef.current.push(prim);
+      } catch (e) {
+        console.warn("[DT] GroundPolylinePrimitive (tributary) failed, skipping:", e);
+      }
+    }
+
+    viewer.scene.requestRender();
+    console.log(`[DT] render3DRivers: ${riverEntitiesRef.current.length} polygon entities + ${mainInstances.length} main + ${tributaryInstances.length} tributary channel instances (2 primitives)`);
   };
 
   // ─── 🏢 MICROSOFT GLOBAL ML BUILDING FOOTPRINTS (3D EXTRUDED & RISK-COLORED) ───
@@ -3753,13 +3806,15 @@ export function CesiumDigitalTwinViewer({
     }
   }, [showRoads]);
 
-  // Toggle Rivers visibility without re-creating entities
+  // Toggle Rivers visibility without re-creating entities/primitives
   useEffect(() => {
-    if (riverEntitiesRef.current.length > 0) {
-      riverEntitiesRef.current.forEach((ent) => {
-        try { ent.show = showRivers; } catch (e) {}
-      });
-    }
+    riverEntitiesRef.current.forEach((ent) => {
+      try { ent.show = showRivers; } catch (e) {}
+    });
+    riverPrimitivesRef.current.forEach((prim) => {
+      try { prim.show = showRivers; } catch (e) {}
+    });
+    viewerRef.current?.scene?.requestRender();
   }, [showRivers]);
 
 

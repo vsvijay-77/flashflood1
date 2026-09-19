@@ -110,7 +110,7 @@ async def save_to_postgres(
     return {
         "status": "queued",
         "run_id": payload.run_id,
-        "database": "sensor_db@db.nishanth.qzz.io",
+        "database": "Simulation Database (PostgreSQL)",
         "message": "Simulation results are being written to PostgreSQL in the background.",
     }
 
@@ -146,7 +146,7 @@ async def save_to_postgres_sync(
             "status": "saved",
             "simulation_id": sim_id,
             "run_id": payload.run_id,
-            "database": "sensor_db@db.nishanth.qzz.io",
+            "database": "Simulation Database (PostgreSQL)",
         }
     except Exception as exc:
         logger.error("save_to_postgres_sync failed: %s", exc)
@@ -158,7 +158,7 @@ async def list_runs(
     limit: int = Query(50, ge=1, le=500),
     user: dict = Depends(current_user),
 ):
-    """List recent simulation runs stored in sensor_db."""
+    """List recent simulation runs stored in database."""
     return get_simulation_runs(limit=limit)
 
 
@@ -173,7 +173,7 @@ async def list_flood_alerts(
 
 @router.get("/status")
 async def db_status(user: dict = Depends(current_user)):
-    """Check connectivity to sensor_db and return table row counts."""
+    """Check connectivity to database and return table row counts."""
     from services.simulation_pg_service import _conn
     try:
         with _conn() as conn:
@@ -186,7 +186,7 @@ async def db_status(user: dict = Depends(current_user)):
                 bfe_count = cur.fetchone()[0]
         return {
             "connected": True,
-            "database": "sensor_db@db.nishanth.qzz.io",
+            "database": "Simulation Database (PostgreSQL)",
             "simulation_runs": sim_count,
             "flood_alerts": alert_count,
             "building_exposures": bfe_count,

@@ -168,8 +168,7 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
             </h3>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Real-time environmental sensor ingest directly from PostgreSQL{" "}
-            <span className="font-mono font-semibold text-slate-700">sensor_db</span> and node fleet management.
+            Real-time environmental sensor ingest directly from live telemetry hub and node fleet management.
           </p>
         </div>
 
@@ -222,8 +221,8 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
                     LIVE TELEMETRY
                   </span>
                 </div>
-                <p className="font-mono text-xs text-emerald-800 mt-0.5">
-                  postgresql://sensor_user:***@db.nishanth.qzz.io:5432/sensor_db
+                <p className="text-xs text-emerald-800/90 mt-0.5 font-medium">
+                  Encrypted LoRaWAN Telemetry Stream &bull; Secure Real-time Pipeline
                 </p>
               </div>
             </div>
@@ -415,7 +414,7 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
           <SectionCard
             testId="sensor-telemetry-card"
             title="Real-time LoRaWAN Stream (1s Live DB Polling)"
-            description="Live historical sensor readings and raw packet frames directly from sensor_db"
+            description="Live historical sensor readings and raw packet frames directly from IoT sensor stream"
             actions={
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">

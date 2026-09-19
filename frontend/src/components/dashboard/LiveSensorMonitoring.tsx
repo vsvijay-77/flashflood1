@@ -88,7 +88,7 @@ export function LiveSensorMonitoring() {
         <div>
           <h3 className="text-lg font-semibold text-slate-900">Live Sensor Readings</h3>
           <p className="text-xs text-slate-500">
-            Real telemetry from PostgreSQL <span className="font-mono text-slate-700">sensor_db</span> ({history.length} records in buffer)
+            Real telemetry from live LoRaWAN sensor network ({history.length} records in buffer)
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-xs font-semibold text-emerald-700">

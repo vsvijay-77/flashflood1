@@ -69,7 +69,7 @@ export function NetworkOverviewKPIs() {
       <KPICard
         title="LoRaWAN Signal"
         value={`${avgRssi} dBm`}
-        status={`📡 SNR ${snr} dB (sensor_db)`}
+        status={`📡 SNR ${snr} dB (Live Mesh)`}
         icon={<Wifi className="size-5 text-cyan-600" />}
       />
       <KPICard

@@ -116,7 +116,7 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                     })
 
                 return {
-                    "database": "sensor_db@db.nishanth.qzz.io",
+                    "database": "Live Telemetry Ingest",
                     "connected": True,
                     "total_readings": total_readings,
                     "total_packets": total_packets,
@@ -126,9 +126,9 @@ def get_live_sensor_summary() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error connecting to sensor_db: {e}")
         return {
-            "database": "sensor_db@db.nishanth.qzz.io",
+            "database": "Live Telemetry Ingest",
             "connected": False,
-            "error": str(e),
+            "error": "Sensor database connection unavailable",
             "total_readings": 0,
             "total_packets": 0,
             "active_devices_count": 0,

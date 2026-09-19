@@ -134,6 +134,8 @@ export default function AppLayout() {
   const [dbAlertsInLayout, setDbAlertsInLayout] = useState<any[]>([]);
   const [loadingDbAlertsInLayout, setLoadingDbAlertsInLayout] = useState(false);
 
+  const [settingsVer, setSettingsVer] = useState(0);
+
   useEffect(() => {
     const handleStorage = (e: StorageEvent) => {
       if (e.key === "dt_live_disaster_alert") {
@@ -145,6 +147,8 @@ export default function AppLayout() {
         } else {
           setCrossTabAlert(null);
         }
+      } else if (e.key?.startsWith("settings_allow_")) {
+        setSettingsVer((v) => v + 1);
       }
     };
     const handleCustom = (e: any) => {
@@ -153,13 +157,28 @@ export default function AppLayout() {
         setIsCrossTabAlertDismissed(false);
       }
     };
+    const handleSettingsUpdated = () => {
+      setSettingsVer((v) => v + 1);
+    };
+
     window.addEventListener("storage", handleStorage);
     window.addEventListener("dt_disaster_alert", handleCustom);
+    window.addEventListener("settings_updated", handleSettingsUpdated);
     return () => {
       window.removeEventListener("storage", handleStorage);
       window.removeEventListener("dt_disaster_alert", handleCustom);
+      window.removeEventListener("settings_updated", handleSettingsUpdated);
     };
   }, []);
+
+  const allowFloodAlerts = localStorage.getItem("settings_allow_flood_alerts") !== "false";
+  const allowLandslideAlerts = localStorage.getItem("settings_allow_landslide_alerts") !== "false";
+
+  const isAlertAllowed = Boolean(
+    crossTabAlert &&
+    ((crossTabAlert.type === "flash_flood" && allowFloodAlerts) ||
+     (crossTabAlert.type === "landslide" && allowLandslideAlerts))
+  );
 
   const fetchDbAlertsLayout = async () => {
     setLoadingDbAlertsInLayout(true);
@@ -303,7 +322,7 @@ export default function AppLayout() {
         </header>
 
         {/* Global Cross-Tab Disaster Alert Banner */}
-        {crossTabAlert && !isCrossTabAlertDismissed && (
+        {isAlertAllowed && !isCrossTabAlertDismissed && (
           <div
             data-testid="cross-tab-disaster-banner"
             className="border-b-2 border-red-500 bg-red-950 px-4 py-2.5 text-white shadow-lg flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 z-30"

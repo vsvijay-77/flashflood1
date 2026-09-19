@@ -2681,10 +2681,91 @@ export function SettingsPage() {
   const { user } = useSession();
   const [prefs, setPrefs] = useState({ critical: true, sensorOffline: true, aiPrediction: false, weekly: true });
 
+  const [allowFloodAlerts, setAllowFloodAlerts] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("settings_allow_flood_alerts") !== "false";
+    } catch {
+      return true;
+    }
+  });
+
+  const [allowLandslideAlerts, setAllowLandslideAlerts] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("settings_allow_landslide_alerts") !== "false";
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleFloodAlerts = (enabled: boolean) => {
+    setAllowFloodAlerts(enabled);
+    try {
+      localStorage.setItem("settings_allow_flood_alerts", enabled ? "true" : "false");
+      window.dispatchEvent(new Event("settings_updated"));
+    } catch {}
+    toast.success(`Flood alerts ${enabled ? "enabled (ON)" : "disabled (OFF)"}`);
+  };
+
+  const toggleLandslideAlerts = (enabled: boolean) => {
+    setAllowLandslideAlerts(enabled);
+    try {
+      localStorage.setItem("settings_allow_landslide_alerts", enabled ? "true" : "false");
+      window.dispatchEvent(new Event("settings_updated"));
+    } catch {}
+    toast.success(`Landslide alerts ${enabled ? "enabled (ON)" : "disabled (OFF)"}`);
+  };
+
   return (
     <div data-testid="settings-page">
-      <PageHeader title="System Settings" description="Notification preferences and platform configuration." />
+      <PageHeader title="System Settings" description="Notification preferences, disaster early warning controls, and platform configuration." />
       <div className="grid gap-6 lg:grid-cols-2">
+        {/* 🚨 Disaster Alert Options: Allow Flood Alerts and Allow Landslide Alerts */}
+        <SectionCard testId="settings-disaster-alerts-card" title="Disaster & Early Warning Alert Rules" description="Configure active automated alert policies for sensor triggers">
+          <div className="space-y-3">
+            <label className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm text-slate-700 bg-white">
+              <div>
+                <div className="font-semibold text-slate-900 flex items-center gap-2">
+                  <span>🌊 Allow Flood Alerts</span>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${allowFloodAlerts ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>
+                    {allowFloodAlerts ? "ON" : "OFF"}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Allow automated Flash Flood detection banner & DB logging when water level or soil moisture exceeds safe limits
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={allowFloodAlerts}
+                onChange={(e) => toggleFloodAlerts(e.target.checked)}
+                className="size-4.5 accent-[#0F4C81] cursor-pointer"
+                data-testid="settings-toggle-flood-alerts"
+              />
+            </label>
+
+            <label className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm text-slate-700 bg-white">
+              <div>
+                <div className="font-semibold text-slate-900 flex items-center gap-2">
+                  <span>⛰️ Allow Landslide Alerts</span>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${allowLandslideAlerts ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>
+                    {allowLandslideAlerts ? "ON" : "OFF"}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Allow automated Landslide detection when Gyro Y &gt; 2000 (50% risk) or Gyro Z &lt; 2050
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={allowLandslideAlerts}
+                onChange={(e) => toggleLandslideAlerts(e.target.checked)}
+                className="size-4.5 accent-[#0F4C81] cursor-pointer"
+                data-testid="settings-toggle-landslide-alerts"
+              />
+            </label>
+          </div>
+        </SectionCard>
+
         <SectionCard testId="settings-notifications-card" title="Notification preferences" description="Channels used to reach you during an escalation">
           <div className="space-y-3">
             {([

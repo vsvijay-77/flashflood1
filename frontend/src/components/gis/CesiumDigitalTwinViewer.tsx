@@ -3048,23 +3048,54 @@ export function CesiumDigitalTwinViewer({
           setSlaveLiveTelemetry(telemetry);
 
           // ─── 🚨 DISASTER DETECTION & CROSS-TAB BROADCAST ───
-          // "if a disaster is detected display a message all the tab if soil moisture or water level detected increases > 50 display flash flood detected and if tilt or gyro values change display landslide detected"
-          const isFlashFlood = telemetry.soilMoisture > 50 || telemetry.waterLevelMm > 50;
-          const isLandslide = telemetry.tilt > 15 || rawTilt < 85 || Math.abs(telemetry.imuMag - 1.0) > 0.35 || Math.abs(telemetry.imuX) > 400 || Math.abs(telemetry.imuY) > 400;
+          // "in setting add a option like allow flood alerts on or off like that for landslide"
+          let allowFlood = true;
+          let allowLandslide = true;
+          try {
+            allowFlood = localStorage.getItem("settings_allow_flood_alerts") !== "false";
+            allowLandslide = localStorage.getItem("settings_allow_landslide_alerts") !== "false";
+          } catch (e) {}
+
+          const rawFlashFlood = telemetry.soilMoisture > 50 || telemetry.waterLevelMm > 50;
+
+          // User requirement: "y is grater than 2000 in gryo lanslide 50% for z 2050 less"
+          // "if these only show landslide"
+          const isGyroYLandslide = telemetry.imuY > 2000;
+          const isGyroZLandslide = telemetry.imuZ > 0 && telemetry.imuZ < 2050;
+          const rawLandslide = isGyroYLandslide || isGyroZLandslide;
+
+          const isFlashFlood = allowFlood && rawFlashFlood;
+          const isLandslide = allowLandslide && rawLandslide;
 
           if (isFlashFlood || isLandslide) {
             const disasterType: "flash_flood" | "landslide" = isFlashFlood ? "flash_flood" : "landslide";
-            const alertTitle = isFlashFlood ? "Flash Flood Detected" : "Landslide Detected";
-            const alertMsg = isFlashFlood
-              ? `Flash Flood Detected: Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) or Water level (${telemetry.waterLevelMm.toFixed(0)} mm) exceeded threshold (> 50)!`
-              : `Landslide Detected: Ground tilt (${telemetry.tilt.toFixed(1)}°) or IMU gyro motion (${telemetry.imuMag.toFixed(2)}g) detected on sensor!`;
+
+            let alertTitle = "Disaster Detected";
+            let alertMsg = "";
+            let alertSeverity: "critical" | "warning" = "critical";
+
+            if (isFlashFlood) {
+              alertTitle = "Flash Flood Detected";
+              alertMsg = `Flash Flood Detected: Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) or Water level (${telemetry.waterLevelMm.toFixed(0)} mm) exceeded threshold (> 50)!`;
+              alertSeverity = "critical";
+            } else if (isLandslide) {
+              if (isGyroYLandslide && !isGyroZLandslide) {
+                alertTitle = "Landslide Detected (50% Risk)";
+                alertMsg = `⚠️ Landslide 50% Risk: Gyro Y-axis (${telemetry.imuY.toFixed(0)}) exceeded 2000 threshold!`;
+                alertSeverity = "warning";
+              } else {
+                alertTitle = "Landslide Detected";
+                alertMsg = `⚠️ Landslide Detected: Gyro Z-axis (${telemetry.imuZ.toFixed(0)}) dropped below 2050 safe threshold!`;
+                alertSeverity = "critical";
+              }
+            }
 
             const alertObj = {
               id: `alert-${Date.now()}`,
               type: disasterType,
               title: alertTitle,
               message: alertMsg,
-              severity: "critical" as const,
+              severity: alertSeverity,
               sensorId: targetSensorId,
               slaveNodeId: activeSlaveNode.id,
               timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
@@ -3088,7 +3119,7 @@ export function CesiumDigitalTwinViewer({
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   disaster_type: disasterType,
-                  alert_level: "critical",
+                  alert_level: alertSeverity,
                   message: alertMsg,
                   zone_name: areaName || "Digital Twin Monitored Basin",
                   sensor_id: targetSensorId,
@@ -3129,10 +3160,9 @@ export function CesiumDigitalTwinViewer({
             setSimRainIntensity(0);
           }
 
-          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Water level > 40 OR Soil moisture > 40) ───
-          // "if water level and soil moisture lvel raised by 40 or eithier one of them simulate flood slowly nomal is enough"
-          // "start simulation without showing opening simulation also for this display the simlation water level based on the water level from sensor coming to time make it less by 30%"
-          const isFloodRiskTriggered = telemetry.hasData && (telemetry.waterLevelMm > 40 || telemetry.soilMoisture > 40);
+          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Soil moisture or water level detected) ───
+          // "also when soil or water level deteced start simu with water even no value in sensors continue simulation simulation not stop water evoving"
+          const isFloodRiskTriggered = telemetry.hasData && (telemetry.waterLevelMm > 0 || telemetry.soilMoisture > 0 || telemetry.waterLevelMm > 40 || telemetry.soilMoisture > 40);
           if (isFloodRiskTriggered) {
             const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
               ? Number(telemetry.waterLevelM.toFixed(2))
@@ -3153,15 +3183,15 @@ export function CesiumDigitalTwinViewer({
               lastAutoStartedFloodRef.current = true;
               const triggerReason = telemetry.waterLevelMm > 40 && telemetry.soilMoisture > 40
                 ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) & Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) > 40`
-                : telemetry.waterLevelMm > 40
-                ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) > 40`
-                : `Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) > 40`;
-              toast.success(`🌊 ${triggerReason}: Simulating flood slowly (Water Level: ${calculatedSimWaterLevel.toFixed(2)}m, time -30%).`);
+                : telemetry.waterLevelMm > 0
+                ? `Water level detected (${telemetry.waterLevelMm.toFixed(0)} mm)`
+                : `Soil moisture detected (${telemetry.soilMoisture.toFixed(0)}%)`;
+              toast.success(`🌊 ${triggerReason}: Simulation started with water! Water continues evolving.`);
             }
-          } else {
-            // User requirement: "now not stop the water level even if water level and soil moisture reaches 0"
-            // Water simulation continues running uninterrupted even when sensor readings drop to 0 or below 40
-            lastAutoStartedFloodRef.current = false;
+          } else if (autoStartedBySensorRef.current) {
+            // User requirement: "even no value in sensors continue simulation simulation not stop water evoving"
+            setWaterSimActive(true);
+            flashFloodRef.current?.startSimulation();
           }
         } else {
           // "if no data display 0 in that tab"
@@ -3171,14 +3201,18 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem("dt_live_disaster_alert");
           } catch (e) {}
           lastAutoStartedRainRef.current = false;
-          lastAutoStartedFloodRef.current = false;
           if (rainActive || internalRain || showVisibleRain) {
             setInternalRain(false);
             setShowVisibleRain(false);
             onToggleRain?.(false);
           }
-          // User requirement: "now not stop the water level even if water level and soil moisture reaches 0"
           setSimRainIntensity(0);
+
+          // User requirement: "even no value in sensors continue simulation simulation not stop water evoving"
+          if (autoStartedBySensorRef.current) {
+            setWaterSimActive(true);
+            flashFloodRef.current?.startSimulation();
+          }
         }
       } catch (err) {
         if (isMounted) {
@@ -3188,14 +3222,18 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem("dt_live_disaster_alert");
           } catch (e) {}
           lastAutoStartedRainRef.current = false;
-          lastAutoStartedFloodRef.current = false;
           if (rainActive || internalRain || showVisibleRain) {
             setInternalRain(false);
             setShowVisibleRain(false);
             onToggleRain?.(false);
           }
-          // User requirement: "now not stop the water level even if water level and soil moisture reaches 0"
           setSimRainIntensity(0);
+
+          // User requirement: "even no value in sensors continue simulation simulation not stop water evoving"
+          if (autoStartedBySensorRef.current) {
+            setWaterSimActive(true);
+            flashFloodRef.current?.startSimulation();
+          }
         }
       }
     };

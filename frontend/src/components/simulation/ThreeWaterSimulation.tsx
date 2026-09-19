@@ -945,7 +945,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           } else if (stormPhase < 1.0) {
             timeRiseFactor = Math.cos(((stormPhase - 0.80) / 0.20) * (Math.PI / 2));
           } else {
-            timeRiseFactor = 0.0;
+            // User requirement: "simulation not stop water evoving" - keep active evolving
+            timeRiseFactor = 0.5;
           }
 
           // If changes were applied live to an existing scenario, ramp in the new environment change immediately:

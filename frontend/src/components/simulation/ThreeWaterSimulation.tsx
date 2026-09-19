@@ -38,6 +38,8 @@ export interface ThreeWaterSimulationProps {
   isFlatView?: boolean;
   defaultSoilSaturation?: number;
   defaultSourceRise?: number;
+  defaultDurationMinutes?: number;
+  hideControlsOnStart?: boolean;
   onPauseChange?: (isPaused: boolean) => void;
   onRunningChange?: (isRunning: boolean) => void;
   onReadyChange?: (isReady: boolean) => void;
@@ -50,6 +52,7 @@ export interface ThreeWaterSimulationProps {
 
 export interface ThreeWaterSimulationHandle {
   openControls: () => void;
+  closeControls?: () => void;
   startSimulation: () => void;
   pauseSimulation: () => void;
   resumeSimulation: () => void;
@@ -80,6 +83,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       isFlatView = false,
       defaultSoilSaturation,
       defaultSourceRise,
+      defaultDurationMinutes,
+      hideControlsOnStart = false,
       onPauseChange,
       onRunningChange,
       onReadyChange,
@@ -165,9 +170,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [spreadAreaHectares, setSpreadAreaHectares] = useState<number>(0);
     const [maxDepthM, setMaxDepthM] = useState<number>(0);
     const [isReady, setIsReady] = useState(false);
-    const [controlsOpen, setControlsOpen] = useState(!autoStart && !showVisibleRain);
+    const [controlsOpen, setControlsOpen] = useState(!autoStart && !showVisibleRain && !hideControlsOnStart);
     const [parameters, setParameters] = useState({
       ...defaultFlashFloodParameters,
+      durationMinutes: defaultDurationMinutes !== undefined && defaultDurationMinutes > 0 ? defaultDurationMinutes : defaultFlashFloodParameters.durationMinutes,
       soilSaturation: defaultSoilSaturation !== undefined ? defaultSoilSaturation : defaultFlashFloodParameters.soilSaturation,
       windSpeedKmh,
     });
@@ -179,6 +185,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         setParameters((prev) => ({ ...prev, soilSaturation: defaultSoilSaturation }));
       }
     }, [defaultSoilSaturation]);
+
+    useEffect(() => {
+      if (defaultDurationMinutes !== undefined && defaultDurationMinutes > 0) {
+        setParameters((prev) => ({ ...prev, durationMinutes: defaultDurationMinutes }));
+      }
+    }, [defaultDurationMinutes]);
 
     useEffect(() => {
       if (defaultSourceRise !== undefined && defaultSourceRise > 0) {
@@ -222,7 +234,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       setIsRunning(false);
       setIsPaused(false);
       setIsReady(false);
-      setControlsOpen(true);
+      setControlsOpen(!autoStart && !showVisibleRain && !hideControlsOnStart);
       setElapsedSeconds(0);
       setOsmFeatureCount(0);
       if (waterMeshRef.current) waterMeshRef.current.visible = false;
@@ -1470,6 +1482,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
     useImperativeHandle(ref, () => ({
       openControls: () => setControlsOpen(true),
+      closeControls: () => setControlsOpen(false),
       startSimulation: handleStart,
       pauseSimulation: handlePause,
       resumeSimulation: handleResume,

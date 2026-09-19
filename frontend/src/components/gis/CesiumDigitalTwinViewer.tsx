@@ -420,6 +420,8 @@ export function CesiumDigitalTwinViewer({
   const lastAutoStartedRainRef = useRef<boolean>(false);
   const lastAutoStartedFloodRef = useRef<boolean>(false);
   const autoStartedBySensorRef = useRef<boolean>(false);
+  const [sensorAutoFlood, setSensorAutoFlood] = useState<boolean>(false);
+  const [sensorSimWaterLevel, setSensorSimWaterLevel] = useState<number>(0.8);
 
   // Sensor ID prompt modal state for adding master and slave nodes
   const [sensorPromptModal, setSensorPromptModal] = useState<{
@@ -2760,7 +2762,7 @@ export function CesiumDigitalTwinViewer({
             status: "online",
             soilMoisture: Number(data.soil_moisture ?? 0),
             waterLevelMm: Number(data.water_level_mm ?? data.water_level ?? 0),
-            waterLevelM: Number(data.water_level_m ?? (Number(data.water_level ?? 0) / 1000.0)),
+            waterLevelM: Number(data.water_level_m ?? ((Number(data.water_level_mm ?? data.water_level ?? 0)) / 1000.0)),
             rainfall: Number(data.rainfall ?? data.rainfall_mm ?? 0),
             rainfallMm: Number(data.rainfall_mm ?? data.rainfall ?? 0),
             rainfallPct: Number(data.rainfall_pct ?? data.rainfall ?? 0),
@@ -2804,12 +2806,24 @@ export function CesiumDigitalTwinViewer({
 
           // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Water level > 40 OR Soil moisture > 40) ───
           // "if water level and soil moisture lvel raised by 40 or eithier one of them simulate flood slowly nomal is enough"
+          // "start simulation without showing opening simulation also for this display the simlation water level based on the water level from sensor coming to time make it less by 30%"
           const isFloodRiskTriggered = telemetry.hasData && (telemetry.waterLevelMm > 40 || telemetry.soilMoisture > 40);
           if (isFloodRiskTriggered) {
-            setWaterSimActive(true);
+            const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
+              ? Number(telemetry.waterLevelM.toFixed(2))
+              : telemetry.waterLevelMm > 0
+              ? Number(Math.max(0.4, telemetry.waterLevelMm >= 10 ? telemetry.waterLevelMm / 100.0 : telemetry.waterLevelMm).toFixed(2))
+              : 0.8;
+
+            setSensorSimWaterLevel(calculatedSimWaterLevel);
+            setSensorAutoFlood(true);
             autoStartedBySensorRef.current = true;
+            setWaterSimActive(true);
             flashFloodRef.current?.setSpeed(1.0);
+            flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
+            flashFloodRef.current?.closeControls?.();
             flashFloodRef.current?.startSimulation();
+
             if (!lastAutoStartedFloodRef.current) {
               lastAutoStartedFloodRef.current = true;
               const triggerReason = telemetry.waterLevelMm > 40 && telemetry.soilMoisture > 40
@@ -2817,12 +2831,13 @@ export function CesiumDigitalTwinViewer({
                 : telemetry.waterLevelMm > 40
                 ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) > 40`
                 : `Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) > 40`;
-              toast.success(`🌊 ${triggerReason}: Simulating flood slowly.`);
+              toast.success(`🌊 ${triggerReason}: Simulating flood slowly (Water Level: ${calculatedSimWaterLevel.toFixed(2)}m, time -30%).`);
             }
           } else {
             lastAutoStartedFloodRef.current = false;
-            if (autoStartedBySensorRef.current) {
+            if (autoStartedBySensorRef.current || sensorAutoFlood) {
               autoStartedBySensorRef.current = false;
+              setSensorAutoFlood(false);
               setWaterSimActive(false);
               flashFloodRef.current?.pauseSimulation();
             }
@@ -2837,8 +2852,9 @@ export function CesiumDigitalTwinViewer({
             setShowVisibleRain(false);
             onToggleRain?.(false);
           }
-          if (autoStartedBySensorRef.current) {
+          if (autoStartedBySensorRef.current || sensorAutoFlood) {
             autoStartedBySensorRef.current = false;
+            setSensorAutoFlood(false);
             setWaterSimActive(false);
             flashFloodRef.current?.pauseSimulation();
           }
@@ -2854,8 +2870,9 @@ export function CesiumDigitalTwinViewer({
             setShowVisibleRain(false);
             onToggleRain?.(false);
           }
-          if (autoStartedBySensorRef.current) {
+          if (autoStartedBySensorRef.current || sensorAutoFlood) {
             autoStartedBySensorRef.current = false;
+            setSensorAutoFlood(false);
             setWaterSimActive(false);
             flashFloodRef.current?.pauseSimulation();
           }
@@ -4881,14 +4898,16 @@ export function CesiumDigitalTwinViewer({
         baseElevation={groundHeightMeters}
         polygonCoords={getActivePolygon()}
         active={waterSimActive}
-        autoStart={autoStartedBySensorRef.current}
+        autoStart={autoStartedBySensorRef.current || sensorAutoFlood}
+        hideControlsOnStart={autoStartedBySensorRef.current || sensorAutoFlood}
         riverFeatures={riverFeatures}
         roadFeatures={roadFeatures}
         buildingFeatures={buildingFeatures}
         rainfallMmH={simRainIntensity}
         windSpeedKmh={simWindSpeed}
         defaultSoilSaturation={slaveLiveTelemetry.hasData ? slaveLiveTelemetry.soilMoisture : undefined}
-        defaultSourceRise={slaveLiveTelemetry.hasData && slaveLiveTelemetry.waterLevelM > 0 ? Math.max(0.5, slaveLiveTelemetry.waterLevelM * 5) : undefined}
+        defaultSourceRise={sensorSimWaterLevel}
+        defaultDurationMinutes={2.1}
         isFlatView={viewMode === "flat"}
         onPauseChange={setIsFloodPaused}
         onRunningChange={setIsFloodRunning}
@@ -4896,6 +4915,8 @@ export function CesiumDigitalTwinViewer({
         showVisibleRain={showVisibleRain}
         onToggleVisibleRain={setShowVisibleRain}
         onClose={() => {
+          setSensorAutoFlood(false);
+          autoStartedBySensorRef.current = false;
           setWaterSimActive(false);
           setIsFloodRunning(false);
           setIsFloodPaused(false);
@@ -6476,6 +6497,14 @@ export function CesiumDigitalTwinViewer({
                       style={{ width: `${Math.min(100, (slaveLiveTelemetry.waterLevelM / 2.0) * 100)}%` }}
                     />
                   </div>
+                  {waterSimActive && (
+                    <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono">
+                      <span className="text-cyan-400 flex items-center gap-1 font-semibold">
+                        <Waves className="size-3" /> Sim Flood Level:
+                      </span>
+                      <span className="text-white font-bold">{sensorSimWaterLevel.toFixed(2)} m <span className="text-amber-300 font-normal">(-30% time)</span></span>
+                    </div>
+                  )}
                 </div>
 
                 {/* 2. Capacitive Soil Moisture */}

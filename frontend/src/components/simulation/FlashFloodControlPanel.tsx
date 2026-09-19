@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CloudRain, Mountain, Pause, Play, RotateCcw, SlidersHorizontal, X, Eye, EyeOff, Network, Check, FileText } from "lucide-react";
+import { CloudRain, Mountain, Pause, Play, RotateCcw, SlidersHorizontal, X, Eye, EyeOff, Network, Check, FileText, Waves } from "lucide-react";
 import { runoffRainfall } from "./flashFloodParameters";
 import type { FlashFloodParameters } from "./flashFloodParameters";
 import type { WaterSimulationControlPanelProps } from "./WaterSimulationControlPanel";
@@ -80,7 +80,15 @@ export function FlashFloodControlPanel(props: Props) {
     <div role="toolbar" aria-label="Flash Flood quick controls" className="absolute right-3 top-16 z-30 flex items-center gap-1.5 rounded-xl border border-cyan-600/60 bg-slate-950/95 p-2 text-white shadow-xl">
       <button type="button" onClick={() => props.onOpenChange(true)} aria-label="Open Flash Flood parameters" className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold hover:bg-slate-800">
         <SlidersHorizontal className="size-4 text-cyan-300" /> Flash Flood <span className="text-cyan-300">{elapsed}</span>
+        {parameters.durationMinutes <= 2.2 && (
+          <span className="text-[10px] text-amber-300 font-mono font-normal">(-30% time)</span>
+        )}
       </button>
+      <div className="flex items-center gap-1.5 rounded-lg border border-cyan-700/60 bg-cyan-950/80 px-2.5 py-1.5 text-xs" title="Simulation Water Level based on sensor telemetry">
+        <Waves className="size-3.5 text-cyan-400" />
+        <span className="text-slate-400">Water Level:</span>
+        <span className="font-mono font-bold text-cyan-200">{props.sourceRise.toFixed(2)} m</span>
+      </div>
       {props.onApply && (
         <button
           type="button"

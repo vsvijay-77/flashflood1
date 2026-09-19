@@ -1238,7 +1238,7 @@ export function CesiumDigitalTwinViewer({
             show: visible,
             polygon: {
               hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outerRing), holes),
-              material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
+              material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.80),
               height: 0,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               classificationType: Cesium.ClassificationType.TERRAIN,
@@ -1281,7 +1281,7 @@ export function CesiumDigitalTwinViewer({
                 show: visible,
                 polygon: {
                   hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(flatRing)),
-                  material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.65),
+                  material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.80),
                   height: 0,
                   heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                   classificationType: Cesium.ClassificationType.TERRAIN,
@@ -1297,12 +1297,12 @@ export function CesiumDigitalTwinViewer({
 
           const isMain = wType === "river" || wType === "canal" || Boolean(props.is_main_river);
           const mappedWidth = Number(props.width_m ?? props.width);
-          // Keep the mapped river network visible above satellite imagery and
-          // translucent floodwater. Every waterway uses the same saturated
-          // sky-blue center so tributaries do not fade into pale white lines.
+          // Match the rich teal-cyan color and soft glow of the bottom water body.
+          // Use PolylineGlowMaterialProperty so river channels have the same
+          // luminous, soft-edged quality as the Three.js water shader mesh below.
           const lineWidth = Number.isFinite(mappedWidth) && mappedWidth > 0
-            ? Math.max(isMain ? 12 : 8, Math.min(18, mappedWidth * 0.7))
-            : isMain ? 14 : 9;
+            ? Math.max(isMain ? 18 : 12, Math.min(28, mappedWidth * 1.0))
+            : isMain ? 22 : 14;
 
           clippedSegments.forEach((seg) => {
             const flat = seg.flat();
@@ -1313,10 +1313,10 @@ export function CesiumDigitalTwinViewer({
               polyline: {
                 positions: Cesium.Cartesian3.fromDegreesArray(flat),
                 width: lineWidth,
-                material: new Cesium.PolylineOutlineMaterialProperty({
-                  color: Cesium.Color.fromCssColorString("#0ea5e9"),
-                  outlineColor: Cesium.Color.fromCssColorString("#075985"),
-                  outlineWidth: 2.0,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: 0.35,
+                  taperPower: 1.0,
+                  color: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.92),
                 }),
                 clampToGround: true,
                 zIndex: 30,

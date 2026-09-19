@@ -367,6 +367,8 @@ export function CesiumDigitalTwinViewer({
   const [isPickingLocation, setIsPickingLocation] = useState<"master" | "slave" | SensorType | null>(null);
   const [isDeleteMode, setIsDeleteMode] = useState<boolean>(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [showSlaveDataBox, setShowSlaveDataBox] = useState<boolean>(false);
+  const [activeSlaveId, setActiveSlaveId] = useState<string | null>(null);
 
   // Sensor ID prompt modal state for adding master and slave nodes
   const [sensorPromptModal, setSensorPromptModal] = useState<{
@@ -2516,6 +2518,8 @@ export function CesiumDigitalTwinViewer({
       };
       setMeshNodes((prev) => [...prev, newSlave]);
       setSelectedNodeId(newSlave.id);
+      setActiveSlaveId(newSlave.id);
+      setShowSlaveDataBox(true);
       logUserActivity(
         "Added Slave Node",
         `Placed ${newSlave.name} (${finalSensorId}) at (${lat.toFixed(5)}° N, ${lng.toFixed(5)}° E)`,
@@ -2551,6 +2555,12 @@ export function CesiumDigitalTwinViewer({
         connectedStatus: "Sensor connected successfully",
       }))
     );
+
+    const firstSlave = meshNodes.find((n) => n.type === "slave");
+    if (firstSlave) {
+      setActiveSlaveId(firstSlave.id);
+      setShowSlaveDataBox(true);
+    }
   };
 
   const addMasterAtCenter = () => {
@@ -2581,6 +2591,10 @@ export function CesiumDigitalTwinViewer({
       setDeployedSensors((prev) => prev.filter((s) => s.slaveId !== id));
     }
     if (selectedNodeId === id) setSelectedNodeId(null);
+    if (activeSlaveId === id) {
+      setActiveSlaveId(null);
+      setShowSlaveDataBox(false);
+    }
     logUserActivity("Deleted Node", `Removed ${toDelete.name} [${toDelete.type.toUpperCase()}]`, toDelete);
   };
 
@@ -2598,7 +2612,7 @@ export function CesiumDigitalTwinViewer({
     }
   };
 
-  const addPresetSlaveNode = (
+  const addPresetSlave = (
     presetType: SensorType
   ) => {
     const master = meshNodes.find((n) => n.type === "master");
@@ -2623,8 +2637,12 @@ export function CesiumDigitalTwinViewer({
       battery: 96,
       signalDbm: -69,
       status: "online",
+      sensorId: stagedSensorId || "node1",
     };
     setMeshNodes((prev) => [...prev, newSlave]);
+    setSelectedNodeId(newSlaveId);
+    setActiveSlaveId(newSlaveId);
+    setShowSlaveDataBox(true);
 
     const sensorNameMap: Record<SensorType, string> = {
       water_level: "Water Level Sensor",
@@ -2651,6 +2669,8 @@ export function CesiumDigitalTwinViewer({
   const clearAllNodes = () => {
     setMeshNodes([]);
     setDeployedSensors([]);
+    setActiveSlaveId(null);
+    setShowSlaveDataBox(false);
     logUserActivity("Cleared Network", "Removed all nodes from 3D terrain");
   };
 
@@ -3958,6 +3978,10 @@ export function CesiumDigitalTwinViewer({
             return;
           } else if (!isPickingLocation) {
             setSelectedNodeId(clickedNode.id);
+            if (clickedNode.type === "slave") {
+              setActiveSlaveId(clickedNode.id);
+              setShowSlaveDataBox(true);
+            }
             return;
           }
         }
@@ -5783,9 +5807,19 @@ export function CesiumDigitalTwinViewer({
                     return (
                       <div
                         key={node.id}
-                        className={`p-2 rounded-xl border flex items-center justify-between text-xs transition-all ${
-                          isMaster
-                            ? "bg-amber-950/40 border-amber-500/50"
+                        onClick={() => {
+                          setSelectedNodeId(node.id);
+                          focusOnNode(node);
+                          if (node.type === "slave") {
+                            setActiveSlaveId(node.id);
+                            setShowSlaveDataBox(true);
+                          }
+                        }}
+                        className={`p-2 rounded-xl border flex items-center justify-between text-xs transition-all cursor-pointer ${
+                          selectedNodeId === node.id
+                            ? "bg-cyan-950/70 border-cyan-400 ring-1 ring-cyan-400"
+                            : isMaster
+                            ? "bg-amber-950/40 border-amber-500/50 hover:border-amber-400"
                             : "bg-slate-950/80 border-slate-800 hover:border-cyan-500/40"
                         }`}
                       >
@@ -5805,7 +5839,10 @@ export function CesiumDigitalTwinViewer({
                           </div>
                         </div>
                         <button
-                          onClick={() => deleteNode(node.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteNode(node.id);
+                          }}
                           className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
                           title="Remove node"
                         >
@@ -6080,6 +6117,245 @@ export function CesiumDigitalTwinViewer({
                 <Trash2 className="size-3" />
                 <span>Click to Delete {selNode.type === "master" ? "Master" : "Slave"}</span>
               </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 📡 DEDICATED SLAVE DATA BOX ON THE RIGHT (Close with '<') */}
+      {(() => {
+        const activeSlave =
+          meshNodes.find((n) => n.id === activeSlaveId) ||
+          meshNodes.find((n) => n.type === "slave");
+        if (!activeSlave) return null;
+
+        // Minimized side tab when box is closed
+        if (!showSlaveDataBox) {
+          return (
+            <button
+              data-testid="open-slave-data-box-btn"
+              onClick={() => setShowSlaveDataBox(true)}
+              className="absolute top-24 right-0 z-30 flex items-center gap-1.5 bg-slate-900/95 hover:bg-slate-800 text-cyan-300 hover:text-white text-xs font-bold px-3 py-2 rounded-l-xl shadow-2xl border border-r-0 border-cyan-500/50 cursor-pointer transition-all hover:pr-4 group"
+              title="Open Slave Data Box (<)"
+            >
+              <span className="font-mono font-black text-sm text-cyan-400 group-hover:-translate-x-0.5 transition-transform">&lt;</span>
+              <span>{activeSlave.name.includes("Slave") ? activeSlave.name : `Slave 1 (${activeSlave.sensorId || stagedSensorId || "node1"})`} Data</span>
+            </button>
+          );
+        }
+
+        const calculatedWaterDepth = 0.24 + (simRainIntensity > 0 ? (simRainIntensity / 100) * 0.42 : 0);
+        const calculatedMoisture = Math.min(99.4, 72.4 + (simRainIntensity > 0 ? (simRainIntensity / 100) * 18.2 : 0));
+
+        return (
+          <div
+            data-testid="slave-data-box"
+            className="absolute top-16 right-3 sm:right-4 z-40 w-84 sm:w-96 max-h-[85vh] bg-slate-900/95 backdrop-blur-md border border-cyan-500/60 rounded-2xl p-4 shadow-2xl text-white flex flex-col gap-3 animate-in fade-in slide-in-from-right-3 duration-200 overflow-hidden"
+          >
+            {/* Header with '<' close button */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="size-8 rounded-lg bg-cyan-950 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shadow-sm">
+                  <Zap className="size-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="font-bold text-sm text-cyan-300 leading-none">
+                      {activeSlave.name}
+                    </h3>
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
+                      ● Online
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                    Sensor ID: <span className="text-cyan-300 font-bold">{activeSlave.sensorId || stagedSensorId || "node1"}</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Close with literal '<' as requested: "add< to close that" */}
+              <button
+                data-testid="close-slave-data-box-btn"
+                onClick={() => setShowSlaveDataBox(false)}
+                className="flex items-center justify-center h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-400 hover:text-white border border-slate-700 text-sm font-black cursor-pointer transition-all hover:scale-105 active:scale-95 shadow group"
+                title="Close (<)"
+                aria-label="Close"
+              >
+                <span className="font-mono font-black text-sm group-hover:-translate-x-0.5 transition-transform">&lt;</span>
+              </button>
+            </div>
+
+            {/* Scrollable telemetry body */}
+            <div className="overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700 text-xs">
+              {/* Node status / RF & Battery badges */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
+                  <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
+                    <Signal className="size-3 text-cyan-400" />
+                    <span>Signal</span>
+                  </div>
+                  <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
+                    {activeSlave.signalDbm} dBm
+                  </div>
+                </div>
+                <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
+                  <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
+                    <Zap className="size-3 text-amber-400" />
+                    <span>Battery</span>
+                  </div>
+                  <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
+                    {activeSlave.battery}%
+                  </div>
+                </div>
+                <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
+                  <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
+                    <Cpu className="size-3 text-indigo-400" />
+                    <span>Protocol</span>
+                  </div>
+                  <div className="font-mono font-bold text-indigo-300 text-[10px] mt-0.5">
+                    LoRaWAN
+                  </div>
+                </div>
+              </div>
+
+              {/* GPS Coordinates & Elevation */}
+              <div className="bg-slate-950/60 border border-slate-800/60 rounded-xl p-2.5 space-y-1">
+                <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center gap-1">
+                  <MapPin className="size-3 text-rose-400" />
+                  <span>Coordinates &amp; Location</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] font-mono">
+                  <span className="text-slate-400">Lat / Long:</span>
+                  <span className="text-cyan-300 font-semibold">
+                    {activeSlave.lat.toFixed(5)}° N, {activeSlave.lng.toFixed(5)}° E
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] font-mono">
+                  <span className="text-slate-400">Elevation:</span>
+                  <span className="text-emerald-300 font-semibold">
+                    {(activeSlave.elevationMeters ?? 14.8).toFixed(1)} m AMSL
+                  </span>
+                </div>
+              </div>
+
+              {/* Live Probe Telemetry Readings */}
+              <div className="space-y-1.5">
+                <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center justify-between">
+                  <span className="flex items-center gap-1">
+                    <Activity className="size-3 text-cyan-400" />
+                    <span>Live Probe Telemetry</span>
+                  </span>
+                  <span className="text-[9px] text-emerald-400 font-mono animate-pulse">● Live 1 Hz</span>
+                </div>
+
+                {/* 1. Submersible Water Level */}
+                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Waves className="size-3.5 text-blue-400" />
+                      <span className="font-semibold text-slate-200 text-xs">Submersible Water Level</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 font-mono border border-blue-800/50">
+                      Normal
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between mt-1.5">
+                    <span className="text-[10px] text-slate-400 font-mono">Current Depth:</span>
+                    <span className="font-mono font-bold text-cyan-300 text-sm">
+                      {calculatedWaterDepth.toFixed(2)} m
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, Math.max(12, (calculatedWaterDepth / 2.0) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 2. Capacitive Soil Moisture */}
+                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Droplets className="size-3.5 text-emerald-400" />
+                      <span className="font-semibold text-slate-200 text-xs">Capacitive Soil Moisture</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 font-mono border border-emerald-800/50">
+                      Saturated
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between mt-1.5">
+                    <span className="text-[10px] text-slate-400 font-mono">Volumetric Content:</span>
+                    <span className="font-mono font-bold text-emerald-300 text-sm">
+                      {calculatedMoisture.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, calculatedMoisture)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 3. Slope Inclinometer / Tilt */}
+                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Mountain className="size-3.5 text-amber-400" />
+                      <span className="font-semibold text-slate-200 text-xs">Slope Inclinometer (Tilt)</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 font-mono border border-amber-800/50">
+                      Stable &lt; 5°
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between mt-1.5">
+                    <span className="text-[10px] text-slate-400 font-mono">Axis Deviation:</span>
+                    <span className="font-mono font-bold text-amber-300 text-sm">
+                      1.42°
+                    </span>
+                  </div>
+                </div>
+
+                {/* 4. Optical Raindrop Sensor */}
+                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <CloudRain className="size-3.5 text-cyan-400" />
+                      <span className="font-semibold text-slate-200 text-xs">Optical Rain Sensor</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 font-mono border border-cyan-800/50">
+                      Active
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between mt-1.5">
+                    <span className="text-[10px] text-slate-400 font-mono">Precipitation:</span>
+                    <span className="font-mono font-bold text-cyan-300 text-sm">
+                      {(simRainIntensity || 45.0).toFixed(1)} mm/h
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={() => focusOnNode(activeSlave)}
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-cyan-700/80 hover:bg-cyan-600 text-white rounded-xl py-2 font-semibold text-xs transition-colors cursor-pointer"
+                >
+                  <Crosshair className="size-3.5" />
+                  <span>Focus in 3D</span>
+                </button>
+                <button
+                  onClick={() => {
+                    toast.success(`Pinged ${activeSlave.name}: Round-trip 18ms (Mesh 1-hop)`);
+                  }}
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl py-2 font-semibold text-xs border border-slate-700 transition-colors cursor-pointer"
+                >
+                  <Radio className="size-3.5 text-cyan-400" />
+                  <span>Ping Node</span>
+                </button>
+              </div>
             </div>
           </div>
         );

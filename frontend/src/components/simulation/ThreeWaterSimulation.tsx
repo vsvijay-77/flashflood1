@@ -647,7 +647,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
       const totalCells = cols * rows;
 
-      // Build Plane indices: create triangles for ALL cells strictly inside the polygon area so water can flow downhill
+      // Build Plane indices: include any triangle where AT LEAST ONE corner is inside
+      // or is a water body. The fragment shader discards fragments with vInside < 0.99,
+      // so boundary overdraw is invisible. This eliminates gaps at polygon boundaries
+      // and narrow river channel cells where only 1-2 corners are inside the mask.
       const indices: number[] = [];
       for (let r = 0; r < rows - 1; r++) {
         for (let c = 0; c < cols - 1; c++) {
@@ -656,13 +659,15 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const cIdx = (r + 1) * cols + c;
           const d = (r + 1) * cols + (c + 1);
 
-          // Triangle 1: inside boundary polygon
-          if (insideMask[a] && insideMask[b] && insideMask[cIdx]) {
+          // Triangle 1: any corner inside or water body
+          if (insideMask[a] || insideMask[b] || insideMask[cIdx] ||
+              waterBodyMask[a] || waterBodyMask[b] || waterBodyMask[cIdx]) {
             indices.push(a, cIdx, b);
           }
 
-          // Triangle 2: inside boundary polygon
-          if (insideMask[b] && insideMask[cIdx] && insideMask[d]) {
+          // Triangle 2: any corner inside or water body
+          if (insideMask[b] || insideMask[cIdx] || insideMask[d] ||
+              waterBodyMask[b] || waterBodyMask[cIdx] || waterBodyMask[d]) {
             indices.push(b, cIdx, d);
           }
         }
@@ -809,6 +814,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       let simulatedSinceTelemetry = 0;
       let telemetryStartedAt = performance.now();
       let frameCount = 0;
+      // Dirty flag: only call renderer.render() when water or camera actually changed.
+      // Skips redundant GPU draws during flat-view navigation (huge perf win).
+      let renderDirty = true;
+      let lastCamPosX = 0, lastCamPosY = 0, lastCamPosZ = 0;
+      let lastCamDirX = 0, lastCamDirY = 0;
 
       const onPostRender = () => {
         const now = performance.now();
@@ -855,17 +865,18 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const stormDurationSec = Math.max(120, currentParameters.durationMinutes * 60);
           const elapsedSec = physics.state.elapsedSeconds;
           const secondsUntilStormEnds = stormDurationSec - elapsedSec;
-          // Every playback option gets the requested 50% boost. The model and
-          // sequence are identical at each speed; only simulated time changes.
-          const playbackMultiplier = speedRef.current * 1.5;
+          // Every playback option gets a 30× speed boost relative to the original scale.
+          // 1× now delivers what previously required selecting 30× (30 × 1.5 = 45).
+          // Water expands visibly fast so zoom-level changes are immediately apparent.
+          const playbackMultiplier = speedRef.current * 45;
           // Advance exactly in display-time chunks so 1x evolves smoothly and
           // 60x reaches the extreme scenario within seconds.
           const safeDt = Math.min(1 / 35, physicsTime);
           const stepTime = secondsUntilStormEnds > 0 ? Math.min(safeDt, secondsUntilStormEnds / playbackMultiplier) : safeDt;
 
           const stormPhase = elapsedSec / stormDurationSec;
-          // Smooth-in factor: slow, gentle gradual ramp over first 30 seconds at 1x speed
-          const softStartFactor = Math.min(1.0, elapsedSec / 30.0);
+          // Smooth-in factor: 2-second ramp (at 45× multiplier, this equals 90 simulated seconds)
+          const softStartFactor = Math.min(1.0, elapsedSec / 2.0);
           const softStart = softStartFactor * softStartFactor * (3.0 - 2.0 * softStartFactor);
 
           let timeRiseFactor = 0.0;
@@ -937,6 +948,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           posAttr.needsUpdate = true;
           depthAttr.needsUpdate = true;
           velAttr.needsUpdate = true;
+          renderDirty = true; // physics changed water geometry — must redraw
 
           // Throttle React state telemetry to 2 Hz (every 500ms) — fewer re-renders
           if (now - lastTelemetryTime > 500) {
@@ -970,16 +982,34 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           telemetryStartedAt = now;
         }
 
+        // Check if camera moved since last frame — if so, must re-render
+        const cCam = cesiumViewer.camera;
+        const cp = cCam.position;
+        const cd = cCam.direction;
+        const camMoved = Math.abs(cp.x - lastCamPosX) + Math.abs(cp.y - lastCamPosY) + Math.abs(cp.z - lastCamPosZ) > 0.01
+          || Math.abs(cd.x - lastCamDirX) + Math.abs(cd.y - lastCamDirY) > 0.0001;
+        if (camMoved) {
+          lastCamPosX = cp.x; lastCamPosY = cp.y; lastCamPosZ = cp.z;
+          lastCamDirX = cd.x; lastCamDirY = cd.y;
+          renderDirty = true;
+        }
+        // Wave animation runs even when paused — mark dirty so water ripples stay alive
+        if (mat && (isRunningRef.current || showWaterRef.current)) renderDirty = true;
+
         // Toggle mesh visibility
         if (mesh) {
           mesh.visible = showWaterRef.current && Boolean(physics);
         }
 
         if (graphRef.current) graphRef.current.group.visible = showGraphRef.current;
-        if (!showWaterRef.current && !showGraphRef.current) { renderer.clear(); return; }
-        // Sync camera and render
-        syncCamera();
-        renderer.render(scene, camera);
+        if (!showWaterRef.current && !showGraphRef.current) { renderer.clear(); renderDirty = false; return; }
+
+        // Only pay GPU cost when something actually changed
+        if (renderDirty) {
+          syncCamera();
+          renderer.render(scene, camera);
+          renderDirty = false;
+        }
       };
 
       const removePostRenderListener = cesiumViewer.scene.postRender.addEventListener(onPostRender);

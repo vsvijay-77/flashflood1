@@ -286,6 +286,7 @@ export function CesiumDigitalTwinViewer({
   const roadEntitiesRef = useRef<any[]>([]);
   const riverEntitiesRef = useRef<any[]>([]);
   const riverPrimitivesRef = useRef<any[]>([]); // Batched GroundPolylinePrimitives (fast path)
+  const riverFlowPrimitivesRef = useRef<any[]>([]); // Animated flow-pulse overlay (shown when sim running)
   const buildingEntitiesRef = useRef<any[]>([]);
   const evacuationEntitiesRef = useRef<any[]>([]);
   const riskZoneEntitiesRef = useRef<any[]>([]);
@@ -1377,8 +1378,74 @@ export function CesiumDigitalTwinViewer({
       }
     }
 
+    // --- Animated flow-pulse overlay ---
+    // Destroy old flow primitives
+    riverFlowPrimitivesRef.current.forEach((prim) => {
+      try { if (!prim.isDestroyed()) viewer.scene.primitives.remove(prim); } catch (e) {}
+    });
+    riverFlowPrimitivesRef.current = [];
+
+    // Build fresh geometry instances for flow animation (same positions, thinner lines)
+    const flowAllInstances: any[] = [];
+    // Rebuild instances from already-collected segments by re-running just the instance builder.
+    // We reuse the same rivers array already processed above.
+    for (const river of rivers) {
+      const geom = river.geometry as any;
+      const props = (river.properties as any) || {};
+      const wType = ((props.waterway_type || props.waterway || "stream") as string).toLowerCase();
+      const isWaterBody = Boolean(props.is_water_body || ["water","lake","reservoir","pond","basin","riverbank","lagoon","oxbow"].includes(wType));
+      if (isWaterBody) continue; // polygons don't need flow pulse
+      const rawLines = geom?.type === "LineString" ? [geom.coordinates] : geom?.type === "MultiLineString" ? geom.coordinates : [];
+      for (const line of rawLines as [number, number][][]) {
+        if (!line || line.length < 2) continue;
+        const segs = clipPolylineToPolygon(line, activePoly);
+        for (const seg of segs) {
+          const flat = seg.flat();
+          if (flat.length < 4) continue;
+          const positions = Cesium.Cartesian3.fromDegreesArray(flat);
+          if (positions.length < 2) continue;
+          flowAllInstances.push(new Cesium.GeometryInstance({
+            geometry: new Cesium.GroundPolylineGeometry({ positions, width: 3.0 }),
+          }));
+        }
+      }
+    }
+
+    if (flowAllInstances.length > 0) {
+      try {
+        // Fabric material: bright cyan pulse that moves along the line using czm_frameNumber
+        const flowMaterial = new Cesium.Material({
+          fabric: {
+            type: "RiverFlowPulse",
+            uniforms: { color: new Cesium.Color(0.3, 0.95, 1.0, 1.0), speed: 2.0, pulseWidth: 0.25 },
+            source: `
+              czm_material czm_getMaterial(czm_materialInput materialInput) {
+                czm_material material = czm_getDefaultMaterial(materialInput);
+                float t = fract(materialInput.st.s - czm_frameNumber * 0.012 * speed);
+                float pulse = smoothstep(0.0, pulseWidth * 0.5, t) * (1.0 - smoothstep(pulseWidth * 0.5, pulseWidth, t));
+                float alpha = 0.55 + pulse * 0.45;
+                material.diffuse = color.rgb * (0.7 + pulse * 0.6);
+                material.alpha = alpha;
+                return material;
+              }`,
+          },
+          translucent: true,
+        });
+        const flowPrim = new Cesium.GroundPolylinePrimitive({
+          geometryInstances: flowAllInstances,
+          appearance: new Cesium.PolylineMaterialAppearance({ material: flowMaterial }),
+          show: false, // Hidden by default — shown when simulation runs
+          asynchronous: false,
+        });
+        viewer.scene.primitives.add(flowPrim);
+        riverFlowPrimitivesRef.current.push(flowPrim);
+      } catch (e) {
+        console.warn("[DT] Flow pulse primitive failed:", e);
+      }
+    }
+
     viewer.scene.requestRender();
-    console.log(`[DT] render3DRivers: ${riverEntitiesRef.current.length} polygon entities + ${mainInstances.length} main + ${tributaryInstances.length} tributary channel instances (2 primitives)`);
+    console.log(`[DT] render3DRivers: ${riverEntitiesRef.current.length} polygon entities + ${mainInstances.length} main + ${tributaryInstances.length} tributary channel instances (2 primitives) + ${flowAllInstances.length} flow-pulse instances`);
   };
 
   // ─── 🏢 MICROSOFT GLOBAL ML BUILDING FOOTPRINTS (3D EXTRUDED & RISK-COLORED) ───
@@ -3814,9 +3881,31 @@ export function CesiumDigitalTwinViewer({
     riverPrimitivesRef.current.forEach((prim) => {
       try { prim.show = showRivers; } catch (e) {}
     });
+    // Flow pulse follows river visibility
+    riverFlowPrimitivesRef.current.forEach((prim) => {
+      try { prim.show = showRivers && isFloodRunning; } catch (e) {}
+    });
     viewerRef.current?.scene?.requestRender();
-  }, [showRivers]);
+  }, [showRivers, isFloodRunning]);
 
+  // Show/hide animated flow pulse on river lines when simulation starts or stops.
+  // Also switch Cesium between requestRenderMode and continuous mode so czm_frameNumber
+  // advances continuously (needed for the flowing animation) when the simulation is active.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    // Show flow animation only when rivers are visible and simulation is running
+    const showFlow = isFloodRunning && showRivers;
+    riverFlowPrimitivesRef.current.forEach((prim) => {
+      try { prim.show = showFlow; } catch (e) {}
+    });
+    // Switch Cesium to continuous render mode so animation frames advance
+    viewer.scene.requestRenderMode = !isFloodRunning;
+    if (isFloodRunning) {
+      viewer.scene.maximumRenderTimeChange = Infinity;
+    }
+    viewer.scene.requestRender();
+  }, [isFloodRunning]);
 
   // Re-render Risk Hotspots when showRiskHotspots toggle changes
   useEffect(() => {

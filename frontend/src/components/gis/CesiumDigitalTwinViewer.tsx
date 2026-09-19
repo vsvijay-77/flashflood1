@@ -2834,13 +2834,9 @@ export function CesiumDigitalTwinViewer({
               toast.success(`🌊 ${triggerReason}: Simulating flood slowly (Water Level: ${calculatedSimWaterLevel.toFixed(2)}m, time -30%).`);
             }
           } else {
+            // User requirement: "now not stop the water level even if water level and soil moisture reaches 0"
+            // Water simulation continues running uninterrupted even when sensor readings drop to 0 or below 40
             lastAutoStartedFloodRef.current = false;
-            if (autoStartedBySensorRef.current || sensorAutoFlood) {
-              autoStartedBySensorRef.current = false;
-              setSensorAutoFlood(false);
-              setWaterSimActive(false);
-              flashFloodRef.current?.pauseSimulation();
-            }
           }
         } else {
           // "if no data display 0 in that tab"
@@ -2852,12 +2848,7 @@ export function CesiumDigitalTwinViewer({
             setShowVisibleRain(false);
             onToggleRain?.(false);
           }
-          if (autoStartedBySensorRef.current || sensorAutoFlood) {
-            autoStartedBySensorRef.current = false;
-            setSensorAutoFlood(false);
-            setWaterSimActive(false);
-            flashFloodRef.current?.pauseSimulation();
-          }
+          // User requirement: "now not stop the water level even if water level and soil moisture reaches 0"
           setSimRainIntensity(0);
         }
       } catch (err) {
@@ -2870,12 +2861,7 @@ export function CesiumDigitalTwinViewer({
             setShowVisibleRain(false);
             onToggleRain?.(false);
           }
-          if (autoStartedBySensorRef.current || sensorAutoFlood) {
-            autoStartedBySensorRef.current = false;
-            setSensorAutoFlood(false);
-            setWaterSimActive(false);
-            flashFloodRef.current?.pauseSimulation();
-          }
+          // User requirement: "now not stop the water level even if water level and soil moisture reaches 0"
           setSimRainIntensity(0);
         }
       }

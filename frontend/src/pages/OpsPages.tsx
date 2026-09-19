@@ -738,7 +738,7 @@ export function ReportsPage() {
     <div data-testid="reports-page">
       {selectedReport?.simulation_report && <FloodImpactReport buildings={selectedReport.simulation_report.buildings}
         scenario={selectedReport.simulation_report.scenario} completedReport={selectedReport.simulation_report}
-        saveStatus="Saved to Reports" onDismiss={() => setSelectedReport(null)} />}
+        saveStatus="Saved to Reports" isReportsPage={true} onDismiss={() => setSelectedReport(null)} />}
       <PageHeader title="Reports" description="Generated hazard, risk and compliance reports available for departmental export." />
 
       {canCreate ? (

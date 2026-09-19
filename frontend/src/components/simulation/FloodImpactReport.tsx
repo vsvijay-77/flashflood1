@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { Link, useLocation } from "react-router-dom";
 import {
   FileText,
   Download,
@@ -12,6 +13,7 @@ import {
   Search,
   ExternalLink,
   Info,
+  ArrowRight,
 } from "lucide-react";
 import type { SimulationReportData } from "./simulationReport";
 import type { BuildingExposure } from "./buildingExposure";
@@ -33,6 +35,7 @@ export interface FloodImpactReportProps {
   };
   completedReport?: SimulationReportData;
   saveStatus?: string;
+  isReportsPage?: boolean;
   onRetry?: () => void;
   onDismiss?: () => void;
 }
@@ -43,12 +46,22 @@ export function FloodImpactReport({
   graphCounts,
   completedReport,
   saveStatus,
+  isReportsPage,
   onRetry,
   onDismiss,
 }: FloodImpactReportProps) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"all" | "summary" | "hardware" | "met" | "impact" | "response" | "annexures">("all");
   const [searchQuery, setSearchQuery] = useState("");
+
+  let currentPath = "";
+  try {
+    const loc = useLocation();
+    currentPath = loc.pathname;
+  } catch {
+    currentPath = typeof window !== "undefined" ? window.location.pathname : "";
+  }
+  const isOnReportsPage = isReportsPage ?? currentPath.startsWith("/reports");
 
   const reportData: StandardFloodReportData = useMemo(() => {
     if (completedReport?.standardReport) {
@@ -163,23 +176,37 @@ export function FloodImpactReport({
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  data-testid="download-pdf-btn"
-                  onClick={handleDownloadPdf}
-                  className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-md hover:from-red-500 hover:to-rose-500 active:scale-95 transition-all cursor-pointer"
-                >
-                  <FileText className="size-3.5" />
-                  <span>Download PDF</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={downloadJson}
-                  className="hidden sm:flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition-all cursor-pointer"
-                >
-                  <Download className="size-3.5" />
-                  <span>JSON</span>
-                </button>
+                {isOnReportsPage ? (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="download-pdf-btn"
+                      onClick={handleDownloadPdf}
+                      className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-md hover:from-red-500 hover:to-rose-500 active:scale-95 transition-all cursor-pointer"
+                    >
+                      <FileText className="size-3.5" />
+                      <span>Download PDF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadJson}
+                      className="hidden sm:flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition-all cursor-pointer"
+                    >
+                      <Download className="size-3.5" />
+                      <span>JSON</span>
+                    </button>
+                  </>
+                ) : (
+                  <Link
+                    to="/reports"
+                    className="flex items-center gap-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 px-3.5 py-2 text-xs font-bold text-white shadow-md active:scale-95 transition-all cursor-pointer"
+                    title="Reports are available in the Reports page. Download from there."
+                  >
+                    <FileText className="size-3.5" />
+                    <span>Download in Reports Page</span>
+                    <ArrowRight className="size-3.5" />
+                  </Link>
+                )}
                 <button
                   autoFocus
                   type="button"
@@ -194,6 +221,25 @@ export function FloodImpactReport({
                 </button>
               </div>
             </header>
+
+            {/* Directive banner: reports available in Reports page */}
+            {!isOnReportsPage && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-cyan-800/60 bg-gradient-to-r from-cyan-950/90 via-slate-900 to-cyan-950/90 px-6 py-3 text-xs text-cyan-200">
+                <div className="flex items-center gap-2.5">
+                  <Info className="size-4 text-cyan-400 shrink-0" />
+                  <span>
+                    <strong>Official Flood Report Available:</strong> This simulation report is archived in the <strong>Reports page library</strong>. Official PDF and JSON downloads are available exclusively from the Reports page.
+                  </span>
+                </div>
+                <Link
+                  to="/reports"
+                  className="flex items-center gap-1 rounded-md bg-cyan-600 hover:bg-cyan-500 px-3 py-1.5 text-xs font-bold text-white shadow transition-all whitespace-nowrap"
+                >
+                  <span>Go to Reports Page to Download</span>
+                  <ArrowRight className="size-3" />
+                </Link>
+              </div>
+            )}
 
             {/* Status notification if completed */}
             {completedReport && (
@@ -828,27 +874,42 @@ export function FloodImpactReport({
             </div>
 
             {/* Footer controls */}
-            <footer className="flex shrink-0 items-center justify-between border-t border-slate-800 bg-slate-900/90 px-6 py-3">
+            <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-800 bg-slate-900/90 px-6 py-3">
               <div className="text-xs text-slate-400">
-                Departmental Standard Format · 12 Sections · Official Output
+                {isOnReportsPage
+                  ? "Departmental Standard Format · 12 Sections · Official Output"
+                  : "Reports available in Reports Page · Download official exports from there"}
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  data-testid="download-pdf-footer-btn"
-                  onClick={handleDownloadPdf}
-                  className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 px-4 py-2 text-xs font-bold text-white shadow-md hover:from-red-500 hover:to-rose-500 active:scale-95 transition-all cursor-pointer"
-                >
-                  <FileText className="size-3.5" />
-                  <span>Download Official PDF</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={downloadJson}
-                  className="rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 hover:text-white transition-all cursor-pointer"
-                >
-                  Download JSON
-                </button>
+                {isOnReportsPage ? (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="download-pdf-footer-btn"
+                      onClick={handleDownloadPdf}
+                      className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-red-600 to-rose-600 px-4 py-2 text-xs font-bold text-white shadow-md hover:from-red-500 hover:to-rose-500 active:scale-95 transition-all cursor-pointer"
+                    >
+                      <FileText className="size-3.5" />
+                      <span>Download Official PDF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadJson}
+                      className="rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 hover:text-white transition-all cursor-pointer"
+                    >
+                      Download JSON
+                    </button>
+                  </>
+                ) : (
+                  <Link
+                    to="/reports"
+                    className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 px-4 py-2 text-xs font-bold text-white shadow-md transition-all cursor-pointer"
+                  >
+                    <FileText className="size-3.5" />
+                    <span>Go to Reports Page to Download</span>
+                    <ArrowRight className="size-3.5" />
+                  </Link>
+                )}
                 <button
                   type="button"
                   onClick={() => {

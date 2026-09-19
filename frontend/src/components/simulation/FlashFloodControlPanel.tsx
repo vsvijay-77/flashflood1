@@ -229,7 +229,6 @@ export function FlashFloodControlPanel(props: Props) {
           )}
           <button type="button" disabled={!isReady} onClick={handleStartFromModal} className="flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold hover:bg-cyan-500 disabled:opacity-40">{isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}{playbackLabel}</button>
           <button type="button" onClick={props.onReset} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm hover:bg-slate-800">Reset</button>
-          <button type="button" disabled={!isReady} onClick={props.onRestart} className="rounded-lg border border-amber-600/80 text-amber-200 px-4 py-2.5 text-sm hover:bg-amber-950/40 disabled:opacity-40" title="Wipe current water and restart simulation from 0s">Restart from 0</button>
           <button type="button" onClick={() => props.onOpenChange(false)} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm hover:bg-slate-800">View terrain</button>
           <button type="button" onClick={props.onClose} className="ml-auto rounded-lg px-3 py-2.5 text-sm text-rose-300 hover:bg-rose-950">End simulation</button>
         </footer>

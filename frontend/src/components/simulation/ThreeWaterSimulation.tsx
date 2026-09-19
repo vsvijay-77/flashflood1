@@ -16,6 +16,7 @@ import { FloodImpactReport } from "./FloodImpactReport";
 import { buildStandardFloodReport } from "./standardFloodReport";
 import { buildSimulationReport, type SimulationReportData } from "./simulationReport";
 import { apiPost } from "@/lib/api";
+import { toast } from "sonner";
 import { BuildingArrivalLabels } from "./BuildingArrivalLabels";
 import { createArrivalForecast, advanceArrivalForecast, type ArrivalForecastInput, type ArrivalForecastResult } from "./arrivalForecast";
 import type { BuildingFeature } from "@/lib/routingApi";
@@ -1363,6 +1364,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
       setCompletedReport(simReport);
       setSaveStatus("Saving report...");
+      toast.success("Simulation complete! Official 12-section flood report is available in the Reports page for download.");
 
       // 1. Save locally to localStorage so it is immediately visible in Reports page
       try {

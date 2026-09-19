@@ -1602,11 +1602,11 @@ export function CesiumDigitalTwinViewer({
       name: `🚨 Evacuation Route (${route.route_status})`,
       polyline: {
         positions: Cesium.Cartesian3.fromDegreesArray(flatPositions),
-        width: 8.0,
-        material: new Cesium.PolylineGlowMaterialProperty({
-          glowPower: 0.4,
-          taperPower: 1.0,
+        width: 6.0,
+        material: new Cesium.PolylineOutlineMaterialProperty({
           color: Cesium.Color.fromCssColorString(routeColor),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2.0,
         }),
         clampToGround: true,
       },
@@ -2229,22 +2229,22 @@ export function CesiumDigitalTwinViewer({
       const masterMast = viewer.entities.add({
         id: `mesh-node-${master.id}`,
         name: `📡 MASTER GATEWAY: ${master.name}`,
-        position: Cesium.Cartesian3.fromDegrees(master.lng, master.lat, 20),
+        position: Cesium.Cartesian3.fromDegrees(master.lng, master.lat, 0),
         cylinder: {
-          length: 40.0,
-          topRadius: 2.5,
-          bottomRadius: 4.5,
+          length: 20.0,
+          topRadius: 1.8,
+          bottomRadius: 3.2,
           material: Cesium.Color.fromCssColorString("#f59e0b").withAlpha(0.95),
           outline: true,
           outlineColor: Cesium.Color.fromCssColorString("#fef08a"),
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         },
         point: {
-          pixelSize: 15,
+          pixelSize: 14,
           color: Cesium.Color.fromCssColorString("#f59e0b"),
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 3,
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         },
         label: {
           text: `${master.sensorId || "node1"} • Sensor connected successfully`,
@@ -2258,8 +2258,8 @@ export function CesiumDigitalTwinViewer({
           backgroundColor: Cesium.Color.fromCssColorString("#064e3b").withAlpha(0.94),
           backgroundPadding: new Cesium.Cartesian2(8, 4),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -32),
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          pixelOffset: new Cesium.Cartesian2(0, -28),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -2275,22 +2275,22 @@ export function CesiumDigitalTwinViewer({
       const slaveMast = viewer.entities.add({
         id: `mesh-node-${slave.id}`,
         name: `⚡ SLAVE NODE #${idx + 1}: ${slave.name}`,
-        position: Cesium.Cartesian3.fromDegrees(slave.lng, slave.lat, 12),
+        position: Cesium.Cartesian3.fromDegrees(slave.lng, slave.lat, 0),
         cylinder: {
-          length: 24.0,
-          topRadius: 1.8,
-          bottomRadius: 3.0,
+          length: 16.0,
+          topRadius: 1.4,
+          bottomRadius: 2.4,
           material: Cesium.Color.fromCssColorString("#06b6d4").withAlpha(0.95),
           outline: true,
           outlineColor: Cesium.Color.fromCssColorString("#67e8f9"),
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         },
         point: {
-          pixelSize: 12,
+          pixelSize: 11,
           color: Cesium.Color.fromCssColorString("#06b6d4"),
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 2,
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         },
         label: {
           text: `${slave.sensorId || `node${idx + 2}`} • Sensor connected successfully`,
@@ -2304,15 +2304,15 @@ export function CesiumDigitalTwinViewer({
           backgroundColor: Cesium.Color.fromCssColorString("#083344").withAlpha(0.94),
           backgroundPadding: new Cesium.Cartesian2(8, 4),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -26),
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          pixelOffset: new Cesium.Cartesian2(0, -24),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
       (slaveMast as any)._nodeId = slave.id;
       meshNodeEntitiesRef.current.push(slaveMast);
 
-      // ALWAYS-ON 3D CONNECTION LINK (MASTER ↔ SLAVE) if Master exists
+      // ALWAYS-ON 3D CONNECTION LINK (MASTER ↔ SLAVE) clamped directly to terrain surface
       if (master) {
         const linkLine = viewer.entities.add({
           id: `link-${master.id}-${slave.id}`,
@@ -2324,10 +2324,10 @@ export function CesiumDigitalTwinViewer({
             ]),
             width: 3.5,
             clampToGround: true,
-            material: new Cesium.PolylineGlowMaterialProperty({
-              glowPower: 0.35,
-              taperPower: 0.8,
-              color: Cesium.Color.fromCssColorString("#22c55e"), // Vibrant RF link green (Master ↔ Slave)
+            material: new Cesium.PolylineOutlineMaterialProperty({
+              color: Cesium.Color.fromCssColorString("#22c55e"), // Vibrant RF link green
+              outlineColor: Cesium.Color.fromCssColorString("#14532d"),
+              outlineWidth: 1.5,
             }),
           },
         });
@@ -2341,7 +2341,7 @@ export function CesiumDigitalTwinViewer({
         const midBadge = viewer.entities.add({
           id: `badge-${slave.id}`,
           name: `Link Status: ${master.name} ↔ ${slave.name}`,
-          position: Cesium.Cartesian3.fromDegrees(midLng, midLat),
+          position: Cesium.Cartesian3.fromDegrees(midLng, midLat, 0),
           label: {
             text: `Connected • ${distKm.toFixed(2)} km`,
             font: "bold 22px monospace",
@@ -2378,26 +2378,26 @@ export function CesiumDigitalTwinViewer({
       };
       const hexColor = sensorColorMap[sensor.type] || "#38bdf8";
 
-      // 3D Sensor Node Marker
+      // 3D Sensor Node Marker clamped to ground
       const sensorEntity = viewer.entities.add({
         id: `mesh-sensor-${sensor.id}`,
         name: `📡 ${sensor.name} (Slave: ${parentSlave.name})`,
-        position: Cesium.Cartesian3.fromDegrees(sensor.lng, sensor.lat, 8),
+        position: Cesium.Cartesian3.fromDegrees(sensor.lng, sensor.lat, 0),
         cylinder: {
-          length: 14.0,
-          topRadius: 1.2,
-          bottomRadius: 2.0,
+          length: 12.0,
+          topRadius: 1.0,
+          bottomRadius: 1.8,
           material: Cesium.Color.fromCssColorString(hexColor).withAlpha(0.95),
           outline: true,
           outlineColor: Cesium.Color.WHITE,
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         },
         point: {
           pixelSize: 10,
           color: Cesium.Color.fromCssColorString(hexColor),
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 2,
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         },
         label: {
           text: `${sensor.name} • Connected`,
@@ -2412,14 +2412,14 @@ export function CesiumDigitalTwinViewer({
           backgroundPadding: new Cesium.Cartesian2(6, 3),
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
           pixelOffset: new Cesium.Cartesian2(0, -20),
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
       (sensorEntity as any)._sensorId = sensor.id;
       meshNodeEntitiesRef.current.push(sensorEntity);
 
-      // Clamped glow polyline connecting Sensor to its parent Slave node
+      // Clamped polyline connecting Sensor to its parent Slave node (follows terrain surface)
       const sensorLinkLine = viewer.entities.add({
         id: `sensor-link-${sensor.id}`,
         name: `Sensor Link: ${sensor.name} ↔ ${parentSlave.name}`,
@@ -2428,12 +2428,12 @@ export function CesiumDigitalTwinViewer({
             sensor.lng, sensor.lat,
             parentSlave.lng, parentSlave.lat,
           ]),
-          width: 2.5,
+          width: 3.0,
           clampToGround: true,
-          material: new Cesium.PolylineGlowMaterialProperty({
-            glowPower: 0.3,
-            taperPower: 0.8,
-            color: Cesium.Color.fromCssColorString("#f97316"), // Vibrant sensor link orange (Sensor ↔ Slave)
+          material: new Cesium.PolylineOutlineMaterialProperty({
+            color: Cesium.Color.fromCssColorString("#f97316"), // Vibrant sensor link orange
+            outlineColor: Cesium.Color.fromCssColorString("#7c2d12"),
+            outlineWidth: 1.5,
           }),
         },
       });
@@ -3033,7 +3033,7 @@ export function CesiumDigitalTwinViewer({
         // Configure High-Performance Photorealistic Atmosphere & 3D Terrain
         const scene = viewer.scene;
         scene.globe.show = true;
-        scene.globe.depthTestAgainstTerrain = false;
+        scene.globe.depthTestAgainstTerrain = true; // Enables true 3D terrain depth testing so objects sit on ground
         scene.globe.enableLighting = false; // Disabled dynamic terrain vertex lighting calculation for 60 FPS
         scene.globe.showGroundAtmosphere = false; // Disabled to prevent dark horizon shading
         scene.globe.terrainExaggeration = 1.0;

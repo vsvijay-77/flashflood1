@@ -3889,14 +3889,14 @@ export function CesiumDigitalTwinViewer({
           viewer.bottomContainer.style.display = "none";
         }
 
-        // Add Target Area Ground Marker (High-DPI text & prominent big blue circle)
+        // Add Target Area Ground Marker (High-DPI text & blue circle +20% from original 10px)
         markerRef.current = viewer.entities.add({
           position: Cesium.Cartesian3.fromDegrees(longitude, latitude),
           point: {
-            pixelSize: 32,
+            pixelSize: 12,
             color: Cesium.Color.fromCssColorString("#0284c7"),
             outlineColor: Cesium.Color.WHITE,
-            outlineWidth: 4,
+            outlineWidth: 2.5,
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
@@ -3912,7 +3912,7 @@ export function CesiumDigitalTwinViewer({
             backgroundColor: Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.85),
             backgroundPadding: new Cesium.Cartesian2(8, 4),
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            pixelOffset: new Cesium.Cartesian2(0, -28),
+            pixelOffset: new Cesium.Cartesian2(0, -20),
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
@@ -4308,11 +4308,11 @@ export function CesiumDigitalTwinViewer({
       markerRef.current.position = Cesium.Cartesian3.fromDegrees(longitude, latitude);
       if (markerRef.current.label) {
         markerRef.current.label.text = areaName;
-        markerRef.current.label.pixelOffset = new Cesium.Cartesian2(0, -28);
+        markerRef.current.label.pixelOffset = new Cesium.Cartesian2(0, -20);
       }
       if (markerRef.current.point) {
-        markerRef.current.point.pixelSize = 32;
-        markerRef.current.point.outlineWidth = 4;
+        markerRef.current.point.pixelSize = 12;
+        markerRef.current.point.outlineWidth = 2.5;
         markerRef.current.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
       }
     }

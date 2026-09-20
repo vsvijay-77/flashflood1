@@ -3364,9 +3364,15 @@ export function CesiumDigitalTwinViewer({
                 : `Soil moisture reached 40% threshold (${telemetry.soilMoisture.toFixed(0)}%)`;
               toast.success(`🌊 ${triggerReason}: Simulation started with water!`);
             }
-          } else if (autoStartedBySensorRef.current) {
-            // User requirement: "when soil moisture or water level flood simulation st but even values reach 0 not stop simulation justinue only user can stop it"
-            setWaterSimActive(true);
+          } else {
+            // User requirement: "otherwise no"
+            if (autoStartedBySensorRef.current || sensorAutoFlood) {
+              autoStartedBySensorRef.current = false;
+              setSensorAutoFlood(false);
+              setWaterSimActive(false);
+              lastAutoStartedFloodRef.current = false;
+              flashFloodRef.current?.closeSimulation?.();
+            }
           }
         } else {
           // "if no data display 0 in that tab"
@@ -3383,9 +3389,13 @@ export function CesiumDigitalTwinViewer({
           }
           setSimRainIntensity(0);
 
-          // User requirement: "even values reach 0 not stop simulation justinue only user can stop it"
-          if (autoStartedBySensorRef.current) {
-            setWaterSimActive(true);
+          // User requirement: "otherwise no"
+          if (autoStartedBySensorRef.current || sensorAutoFlood) {
+            autoStartedBySensorRef.current = false;
+            setSensorAutoFlood(false);
+            setWaterSimActive(false);
+            lastAutoStartedFloodRef.current = false;
+            flashFloodRef.current?.closeSimulation?.();
           }
         }
       } catch (err) {
@@ -3403,9 +3413,13 @@ export function CesiumDigitalTwinViewer({
           }
           setSimRainIntensity(0);
 
-          // User requirement: "even values reach 0 not stop simulation justinue only user can stop it"
-          if (autoStartedBySensorRef.current) {
-            setWaterSimActive(true);
+          // User requirement: "otherwise no"
+          if (autoStartedBySensorRef.current || sensorAutoFlood) {
+            autoStartedBySensorRef.current = false;
+            setSensorAutoFlood(false);
+            setWaterSimActive(false);
+            lastAutoStartedFloodRef.current = false;
+            flashFloodRef.current?.closeSimulation?.();
           }
         }
       }
@@ -4703,28 +4717,28 @@ export function CesiumDigitalTwinViewer({
   }, [showRoads]);
 
   // Toggle Rivers visibility without re-creating entities/primitives.
+  // When 3D water simulation is active or running, hide 2D vector primitives and flow pulses
+  // so only the 3D fluid simulation is visible, eliminating multi-layer mismatch and z-fighting upon zoom.
   useEffect(() => {
+    const isWaterSimActive = waterSimActive || isFloodRunning;
+    const shouldShow2DRivers = showRivers && !isWaterSimActive;
+
     riverEntitiesRef.current.forEach((ent) => {
-      try { ent.show = showRivers; } catch (e) {}
+      try { ent.show = shouldShow2DRivers; } catch (e) {}
     });
     riverPrimitivesRef.current.forEach((prim) => {
-      try { prim.show = showRivers; } catch (e) {}
+      try { prim.show = shouldShow2DRivers; } catch (e) {}
     });
-    // Flow pulse is disabled under 3D simulation to eliminate overlapping multi-layer visual conflict
     riverFlowPrimitivesRef.current.forEach((prim) => {
       try { prim.show = false; } catch (e) {}
     });
-    viewerRef.current?.scene?.requestRender();
-  }, [showRivers, isFloodRunning, waterSimActive]);
 
-  // Keep Cesium requestRenderMode active so frames render smoothly without GPU thread contention or lag
-  useEffect(() => {
     const viewer = viewerRef.current;
-    if (!viewer || viewer.isDestroyed()) return;
-    viewer.scene.requestRenderMode = true;
-    viewer.scene.maximumRenderTimeChange = 1.0;
-    viewer.scene.requestRender();
-  }, [isFloodRunning]);
+    if (viewer && !viewer.isDestroyed()) {
+      viewer.scene.requestRenderMode = true;
+      viewer.scene.requestRender();
+    }
+  }, [showRivers, waterSimActive, isFloodRunning]);
 
   // Re-render Risk Hotspots when showRiskHotspots toggle changes
   useEffect(() => {

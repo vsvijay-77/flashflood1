@@ -280,6 +280,7 @@ export const WaterFragmentShader = /* glsl */ `
     depthColor += vec3(caustics * 0.14) * vec3(0.08, 0.62, 1.0);
 
     // Natural fluid surface: Fresnel reflections and sun glints over depth-based body color
+    // Underlying Cesium 3D terrain naturally shows through without duplicate screen-space re-projection (prevents multi-layer mismatch upon zoom)
     vec3 waterSurface = mix(depthColor, reflectedColor, fresnel * 0.35) + specHighlight;
 
     // ─── SURFACE WAVES & SUBTLE FOAM ──────────────────────────────────────────
@@ -295,10 +296,9 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 foamColor = vec3(0.46, 0.84, 0.96);
     vec3 finalColor = mix(waterSurface, foamColor, max(crestFoam, rapidFoam));
 
-    // Opacity: smooth alpha transition — underlying Cesium 3D terrain naturally shows through
-    // without duplicate screen-space re-projection (prevents multi-layer mismatch upon zoom)
+    // Opacity: smooth alpha transition — water gently swells into view instead of popping in abruptly
     float marginBlend = smoothstep(wetThreshold, floodThreshold + 0.045, vDepth);
-    float depthAlpha = mix(0.45, 0.92, smoothstep(wetThreshold, 0.80, vDepth));
+    float depthAlpha = mix(0.40, 0.90, smoothstep(wetThreshold, 0.80, vDepth));
     float alpha = marginBlend * depthAlpha;
 
     gl_FragColor = vec4(finalColor, alpha);
@@ -334,7 +334,7 @@ export function createWaterShaderMaterial(
     transparent: true,
     depthTest: true,
     depthWrite: false,
-    side: THREE.FrontSide, // FrontSide only: eliminates double-sheet backface rendering on zoom
+    side: THREE.FrontSide, // FrontSide only: eliminates double-sheet backface rendering and z-fighting on zoom
   });
 
   return material;

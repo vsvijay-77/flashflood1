@@ -320,8 +320,8 @@ def _fetch_terrarium_tile(z: int, x: int, y: int) -> Image.Image:
         return Image.open(io.BytesIO(resp.read())).convert("RGB")
 
 _last_radar_check = 0.0
-_cached_radar_url = "https://tilecache.rainviewer.com/v2/radar/622600060d16/512/{z}/{x}/{y}/2/1_1.png"
-_cached_radar_ts = "2026-09-18 10:20 UTC"
+_cached_radar_url = "https://tilecache.rainviewer.com/v2/radar/4e9d49e675b0/256/{z}/{x}/{y}/2/1_1.png"
+_cached_radar_ts = "2026-09-20 15:30 UTC"
 
 def _get_live_rainfall_info() -> tuple[str, str]:
     global _last_radar_check, _cached_radar_url, _cached_radar_ts
@@ -337,7 +337,7 @@ def _get_live_rainfall_info() -> tuple[str, str]:
             past = data.get("radar", {}).get("past", [])
             if past:
                 latest = past[-1]
-                _cached_radar_url = f"{host}{latest['path']}/512/{{z}}/{{x}}/{{y}}/2/1_1.png"
+                _cached_radar_url = f"{host}{latest['path']}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
                 dt = datetime.datetime.fromtimestamp(latest["time"], datetime.timezone.utc)
                 _cached_radar_ts = dt.strftime("%Y-%m-%d %H:%M UTC")
                 _last_radar_check = now
@@ -523,6 +523,34 @@ async def get_custom_tile(layer: str, z: int, x: int, y: int):
             data = buf.getvalue()
             _store_tile(cache_key, data)
             return Response(content=data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+        elif layer == "rainfall":
+            # Native zoom is capped at z=7 on RainViewer public maps to prevent "Zoom Level Not Supported"
+            radar_base_url, _ = _get_live_rainfall_info()
+            native_z = min(z, 7)
+            shift = z - native_z
+            px = x >> shift
+            py = y >> shift
+            native_url = radar_base_url.format(z=native_z, x=px, y=py)
+            try:
+                req = urllib.request.Request(native_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=3.5) as resp:
+                    tile_bytes = resp.read()
+                    img = Image.open(io.BytesIO(tile_bytes)).convert("RGBA")
+                    if shift > 0:
+                        step = 256 >> shift
+                        if step > 0:
+                            sub_x = (x - (px << shift)) * step
+                            sub_y = (y - (py << shift)) * step
+                            img = img.crop((sub_x, sub_y, sub_x + step, sub_y + step)).resize((256, 256), Image.Resampling.BILINEAR)
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    data = buf.getvalue()
+                    _store_tile(cache_key, data)
+                    return Response(content=data, media_type="image/png", headers={"Cache-Control": "public, max-age=1800"})
+            except Exception:
+                blank = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+                return Response(content=blank, media_type="image/png")
 
         raise HTTPException(status_code=404, detail="Layer not found")
     except Exception:

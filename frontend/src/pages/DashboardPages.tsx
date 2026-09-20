@@ -481,6 +481,12 @@ export function GISMonitoringPage() {
   const navigate = useNavigate();
   const [creatingTwin, setCreatingTwin] = useState(false);
 
+  useEffect(() => {
+    if (customAreas.length > 0 && !selectedArea) {
+      setSelectedArea(customAreas[0]);
+    }
+  }, [customAreas, selectedArea]);
+
   const handleCreateDigitalTwin = async (areaToTwin: CustomArea | null) => {
     if (!areaToTwin) {
       toast.error("Please select a monitored area on the map first.");
@@ -1530,10 +1536,15 @@ function GisMapPanel({
         if (geeLayerRef.current && mapRef.current) {
           mapRef.current.removeLayer(geeLayerRef.current);
         }
+        const isRainViewer = data.tileUrl.includes("rainviewer.com") || layer.id === "rainfall";
+        const is512 = data.tileUrl.includes("/512/");
         const geeLayer = L.tileLayer(data.tileUrl, {
           maxZoom: 19,
+          maxNativeZoom: isRainViewer ? 7 : 19,
+          tileSize: is512 ? 512 : 256,
+          zoomOffset: is512 ? -1 : 0,
           opacity: layer.opacity,
-          attribution: "Satellite Environmental Analysis",
+          attribution: isRainViewer ? "Live Radar © RainViewer" : "Satellite Environmental Analysis",
           keepBuffer: 8,
           updateWhenIdle: false,
         });

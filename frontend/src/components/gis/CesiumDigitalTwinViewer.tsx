@@ -3889,15 +3889,16 @@ export function CesiumDigitalTwinViewer({
           viewer.bottomContainer.style.display = "none";
         }
 
-        // Add Target Area Ground Marker (High-DPI text)
+        // Add Target Area Ground Marker (High-DPI text & prominent big blue circle)
         markerRef.current = viewer.entities.add({
           position: Cesium.Cartesian3.fromDegrees(longitude, latitude),
           point: {
-            pixelSize: 10,
-            color: Cesium.Color.fromCssColorString("#38bdf8"),
+            pixelSize: 32,
+            color: Cesium.Color.fromCssColorString("#0284c7"),
             outlineColor: Cesium.Color.WHITE,
-            outlineWidth: 2,
+            outlineWidth: 4,
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
           label: {
             text: areaName,
@@ -3911,7 +3912,7 @@ export function CesiumDigitalTwinViewer({
             backgroundColor: Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.85),
             backgroundPadding: new Cesium.Cartesian2(8, 4),
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            pixelOffset: new Cesium.Cartesian2(0, -18),
+            pixelOffset: new Cesium.Cartesian2(0, -28),
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
@@ -4307,6 +4308,12 @@ export function CesiumDigitalTwinViewer({
       markerRef.current.position = Cesium.Cartesian3.fromDegrees(longitude, latitude);
       if (markerRef.current.label) {
         markerRef.current.label.text = areaName;
+        markerRef.current.label.pixelOffset = new Cesium.Cartesian2(0, -28);
+      }
+      if (markerRef.current.point) {
+        markerRef.current.point.pixelSize = 32;
+        markerRef.current.point.outlineWidth = 4;
+        markerRef.current.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
       }
     }
 

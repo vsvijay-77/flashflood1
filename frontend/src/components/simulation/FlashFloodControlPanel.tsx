@@ -190,7 +190,7 @@ export function FlashFloodControlPanel(props: Props) {
               <Parameter name="Surface waves" unit="×" value={props.waveIntensity} min={0} max={2} step={0.1} onChange={props.onWaveIntensityChange} hint="Changes surface detail without changing the amount of water." />
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="mr-2 text-slate-300">Playback speed</span>{[1, 2, 5, 10, 30, 60].map(speed =>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="mr-2 text-slate-300">Playback speed</span>{[0.5, 1, 2, 5, 10, 30, 60].map(speed =>
             <button key={speed} type="button" aria-pressed={props.speed === speed} onClick={() => props.onSpeedChange(speed)} className={`rounded-lg border px-3 py-2 ${props.speed === speed ? "border-cyan-400 bg-cyan-700" : "border-slate-700 bg-slate-900"}`}>{speed}×</button>)}
             <div className="ml-auto flex items-center gap-2">
               {props.onToggleRain && (

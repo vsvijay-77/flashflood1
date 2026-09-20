@@ -427,6 +427,7 @@ export function CesiumDigitalTwinViewer({
   const lastAutoStartedRainRef = useRef<boolean>(false);
   const lastAutoStartedFloodRef = useRef<boolean>(false);
   const autoStartedBySensorRef = useRef<boolean>(false);
+  const manuallyStoppedFloodRef = useRef<boolean>(false);
   const [sensorAutoFlood, setSensorAutoFlood] = useState<boolean>(false);
   const [sensorSimWaterLevel, setSensorSimWaterLevel] = useState<number>(0.8);
 
@@ -588,16 +589,11 @@ export function CesiumDigitalTwinViewer({
     onToggleRain?.(next);
     // User requested: "no simultaion page no water incresase nothing"
     // Atmospheric rain operates purely independently without triggering water simulation
-    setWaterSimActive(false);
   };
 
   useEffect(() => {
     if (isRaining !== undefined) {
       setShowVisibleRain(isRaining);
-      // User requested: "no simultaion page no water incresase nothing"
-      if (!isRaining) {
-        setWaterSimActive(false);
-      }
     }
   }, [isRaining]);
 
@@ -3340,39 +3336,37 @@ export function CesiumDigitalTwinViewer({
           const isFloodRiskTriggered = telemetry.hasData && (isWaterLevelOver40 || isSoilMoistureOver40);
 
           if (isFloodRiskTriggered) {
-            const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
-              ? Number(telemetry.waterLevelM.toFixed(2))
-              : telemetry.waterLevelMm > 0
-              ? Number(Math.max(0.4, telemetry.waterLevelMm >= 10 ? telemetry.waterLevelMm / 100.0 : telemetry.waterLevelMm).toFixed(2))
-              : 0.8;
+            if (!manuallyStoppedFloodRef.current) {
+              const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
+                ? Number(telemetry.waterLevelM.toFixed(2))
+                : telemetry.waterLevelMm > 0
+                ? Number(Math.max(0.4, telemetry.waterLevelMm >= 10 ? telemetry.waterLevelMm / 100.0 : telemetry.waterLevelMm).toFixed(2))
+                : 0.8;
 
-            setSensorSimWaterLevel(calculatedSimWaterLevel);
-            setSensorAutoFlood(true);
-            autoStartedBySensorRef.current = true;
-            setWaterSimActive(true);
-            flashFloodRef.current?.setSpeed(1.0);
-            flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
-            flashFloodRef.current?.closeControls?.();
-            flashFloodRef.current?.startSimulation();
+              setSensorSimWaterLevel(calculatedSimWaterLevel);
+              setSensorAutoFlood(true);
+              autoStartedBySensorRef.current = true;
+              setWaterSimActive(true);
+              flashFloodRef.current?.setSpeed(1.0);
+              flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
+              flashFloodRef.current?.closeControls?.();
+              flashFloodRef.current?.startSimulation();
 
-            if (!lastAutoStartedFloodRef.current) {
-              lastAutoStartedFloodRef.current = true;
-              const triggerReason = isWaterLevelOver40 && isSoilMoistureOver40
-                ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) & Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) ≥ 40%`
-                : isWaterLevelOver40
-                ? `Water level reached 40% threshold (${telemetry.waterLevelMm.toFixed(0)} mm)`
-                : `Soil moisture reached 40% threshold (${telemetry.soilMoisture.toFixed(0)}%)`;
-              toast.success(`🌊 ${triggerReason}: Simulation started with water!`);
+              if (!lastAutoStartedFloodRef.current) {
+                lastAutoStartedFloodRef.current = true;
+                const triggerReason = isWaterLevelOver40 && isSoilMoistureOver40
+                  ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) & Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) ≥ 40%`
+                  : isWaterLevelOver40
+                  ? `Water level reached 40% threshold (${telemetry.waterLevelMm.toFixed(0)} mm)`
+                  : `Soil moisture reached 40% threshold (${telemetry.soilMoisture.toFixed(0)}%)`;
+                toast.success(`🌊 ${triggerReason}: Simulation started with water!`);
+              }
             }
           } else {
-            // User requirement: "otherwise no"
-            if (autoStartedBySensorRef.current || sensorAutoFlood) {
-              autoStartedBySensorRef.current = false;
-              setSensorAutoFlood(false);
-              setWaterSimActive(false);
-              lastAutoStartedFloodRef.current = false;
-              flashFloodRef.current?.closeSimulation?.();
-            }
+            // Values are below 40% or 0. Reset manual stop flag so a future surge will re-trigger
+            manuallyStoppedFloodRef.current = false;
+            // User requirement: "ok when flood triggered by sensor not stop it evn values 0 user should manually stop it"
+            // Intentionally do NOT stop the flood simulation here; it continues running until user manually stops it.
           }
         } else {
           // "if no data display 0 in that tab"
@@ -3388,15 +3382,9 @@ export function CesiumDigitalTwinViewer({
             onToggleRain?.(false);
           }
           setSimRainIntensity(0);
-
-          // User requirement: "otherwise no"
-          if (autoStartedBySensorRef.current || sensorAutoFlood) {
-            autoStartedBySensorRef.current = false;
-            setSensorAutoFlood(false);
-            setWaterSimActive(false);
-            lastAutoStartedFloodRef.current = false;
-            flashFloodRef.current?.closeSimulation?.();
-          }
+          manuallyStoppedFloodRef.current = false;
+          // User requirement: "ok when flood triggered by sensor not stop it evn values 0 user should manually stop it"
+          // Intentionally do NOT stop the flood simulation here.
         }
       } catch (err) {
         if (isMounted) {
@@ -3412,15 +3400,9 @@ export function CesiumDigitalTwinViewer({
             onToggleRain?.(false);
           }
           setSimRainIntensity(0);
-
-          // User requirement: "otherwise no"
-          if (autoStartedBySensorRef.current || sensorAutoFlood) {
-            autoStartedBySensorRef.current = false;
-            setSensorAutoFlood(false);
-            setWaterSimActive(false);
-            lastAutoStartedFloodRef.current = false;
-            flashFloodRef.current?.closeSimulation?.();
-          }
+          manuallyStoppedFloodRef.current = false;
+          // User requirement: "ok when flood triggered by sensor not stop it evn values 0 user should manually stop it"
+          // Intentionally do NOT stop the flood simulation here.
         }
       }
     };
@@ -5555,8 +5537,10 @@ export function CesiumDigitalTwinViewer({
         showVisibleRain={showVisibleRain}
         onToggleVisibleRain={setShowVisibleRain}
         onClose={() => {
+          manuallyStoppedFloodRef.current = true;
           setSensorAutoFlood(false);
           autoStartedBySensorRef.current = false;
+          lastAutoStartedFloodRef.current = false;
           setWaterSimActive(false);
           setIsFloodRunning(false);
           setIsFloodPaused(false);
@@ -5816,9 +5800,15 @@ export function CesiumDigitalTwinViewer({
             setShowEvacPanel(false);
             setShowMeshPanel(false);
             if (waterSimActive) {
+              manuallyStoppedFloodRef.current = true;
+              autoStartedBySensorRef.current = false;
+              setSensorAutoFlood(false);
+              lastAutoStartedFloodRef.current = false;
               flashFloodRef.current?.closeSimulation();
+              setWaterSimActive(false);
               setIsFloodReady(false);
             } else {
+              manuallyStoppedFloodRef.current = false;
               setWaterSimActive(true);
               setIsFloodPaused(false);
               // openControls() will be called by the component itself on mount (controlsOpen starts true)
@@ -6473,7 +6463,21 @@ export function CesiumDigitalTwinViewer({
               signal_dbm: node.signalDbm,
             }))}
             onToggleRain={handleToggleRain}
-            onToggleWaterSim={() => setWaterSimActive((prev) => !prev)}
+            onToggleWaterSim={() => {
+              setWaterSimActive((prev) => {
+                const next = !prev;
+                if (!next) {
+                  manuallyStoppedFloodRef.current = true;
+                  autoStartedBySensorRef.current = false;
+                  setSensorAutoFlood(false);
+                  lastAutoStartedFloodRef.current = false;
+                  flashFloodRef.current?.closeSimulation();
+                } else {
+                  manuallyStoppedFloodRef.current = false;
+                }
+                return next;
+              });
+            }}
             onViewGIS={onViewInGIS}
             onClose={() => setShowAIChat(false)}
             containerClassName="bg-white border-0 shadow-none flex flex-col h-[520px]"

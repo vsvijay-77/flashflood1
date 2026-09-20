@@ -17,6 +17,36 @@ export function shouldTriggerWaterSimulation(telemetry: {
   return isWaterLevelOver40 || isSoilMoistureOver40;
 }
 
+export function computeSimulationRunningState(
+  currentState: { isRunning: boolean; triggeredBySensor: boolean },
+  telemetry: {
+    hasData: boolean;
+    waterLevelMm: number;
+    waterLevelM: number;
+    soilMoisture: number;
+  },
+  manuallyStoppedByUser: boolean
+): { isRunning: boolean; triggeredBySensor: boolean } {
+  // If user manually stopped the simulation, it must stop immediately
+  if (manuallyStoppedByUser) {
+    return { isRunning: false, triggeredBySensor: false };
+  }
+
+  const triggered = shouldTriggerWaterSimulation(telemetry);
+  if (triggered) {
+    return { isRunning: true, triggeredBySensor: true };
+  }
+
+  // CRITICAL USER REQUIREMENT:
+  // "when flood triggered by sensor not stop it evn values 0 user should manually stop it"
+  // If it was already running (triggered by sensor), dropping values to 0 does NOT stop it!
+  if (currentState.isRunning && currentState.triggeredBySensor) {
+    return { isRunning: true, triggeredBySensor: true };
+  }
+
+  return { isRunning: false, triggeredBySensor: false };
+}
+
 describe("Sensor Simulation Triggers", () => {
   describe("Atmospheric Rain Trigger (> 50% only)", () => {
     it("does NOT trigger rain when rainfall is 50 or below", () => {
@@ -60,6 +90,50 @@ describe("Sensor Simulation Triggers", () => {
 
     it("does NOT trigger water simulation when telemetry has no data ('otherwise no')", () => {
       expect(shouldTriggerWaterSimulation({ hasData: false, waterLevelMm: 80, waterLevelM: 0.8, soilMoisture: 90 })).toBe(false);
+    });
+  });
+
+  describe("Sensor Trigger Persistence & Manual Stop Rule", () => {
+    it("keeps simulation running even if water level and soil moisture drop to 0", () => {
+      // Step 1: Start with sensor trigger (water level 45%)
+      const state1 = computeSimulationRunningState(
+        { isRunning: false, triggeredBySensor: false },
+        { hasData: true, waterLevelMm: 45, waterLevelM: 0.45, soilMoisture: 20 },
+        false
+      );
+      expect(state1.isRunning).toBe(true);
+      expect(state1.triggeredBySensor).toBe(true);
+
+      // Step 2: Telemetry drops to 0!
+      const state2 = computeSimulationRunningState(
+        state1,
+        { hasData: true, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 0 },
+        false
+      );
+      expect(state2.isRunning).toBe(true);
+      expect(state2.triggeredBySensor).toBe(true);
+
+      // Step 3: Telemetry disconnected / no data!
+      const state3 = computeSimulationRunningState(
+        state2,
+        { hasData: false, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 0 },
+        false
+      );
+      expect(state3.isRunning).toBe(true);
+      expect(state3.triggeredBySensor).toBe(true);
+    });
+
+    it("stops simulation ONLY when user manually stops it", () => {
+      const runningState = { isRunning: true, triggeredBySensor: true };
+
+      // User manually clicks 'End simulation'
+      const stoppedState = computeSimulationRunningState(
+        runningState,
+        { hasData: true, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 0 },
+        true // manuallyStoppedByUser = true
+      );
+      expect(stoppedState.isRunning).toBe(false);
+      expect(stoppedState.triggeredBySensor).toBe(false);
     });
   });
 });

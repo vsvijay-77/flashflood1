@@ -924,12 +924,13 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const stormDurationSec = Math.max(120, currentParameters.durationMinutes * 60);
           const elapsedSec = physics.state.elapsedSeconds;
           const secondsUntilStormEnds = stormDurationSec - elapsedSec;
-          // Every playback option gets a 30× speed boost relative to the original scale.
-          // 1× now delivers what previously required selecting 30× (30 × 1.5 = 45).
-          // Water expands visibly fast so zoom-level changes are immediately apparent.
-          const playbackMultiplier = speedRef.current * 45;
+          // Playback speed scaled to slow, observable realistic pace:
+          // User requirement: "make the simulation slow its very fast"
+          // Previously: speedRef.current * 45 made 1x = 45x speed, rushing through the entire flood in seconds.
+          // Now: speedRef.current * 2.0 (1x advances at a realistic, visible ~2x real-time pace).
+          const playbackMultiplier = speedRef.current * 2.0;
           // Advance exactly in display-time chunks so 1x evolves smoothly and
-          // 60x reaches the extreme scenario within seconds.
+          // higher speeds allow fast-forwarding when desired.
           const safeDt = Math.min(1 / 35, physicsTime);
           const stepTime = secondsUntilStormEnds > 0 ? Math.min(safeDt, secondsUntilStormEnds / playbackMultiplier) : safeDt;
 

@@ -65,6 +65,7 @@ import { toast } from "sonner";
 import { generateCirclePolygon } from "@/lib/gisUtils";
 import { buildingTouchesArea, buildingCenter, prepareBuildingFootprints } from "./buildingGeometry";
 import { loadSelectedAreaBuildings } from "@/services/selectedAreaBuildings";
+import { saveDigitalTwinEvacPoint, removeDigitalTwinEvacPoint } from "@/lib/digitalTwinEvacuation";
 import {
   extractNetworks,
   extractBuildings,
@@ -179,6 +180,7 @@ export interface CesiumDigitalTwinViewerProps {
   rainfallIntensity?: number;
   windSpeed?: number;
   onToggleRain?: (active: boolean) => void;
+  autoOpenEvacuation?: boolean;
 }
 
 const CESIUM_ION_TOKEN =
@@ -270,6 +272,7 @@ export function CesiumDigitalTwinViewer({
   rainfallIntensity = 65,
   windSpeed = 24,
   onToggleRain,
+  autoOpenEvacuation = false,
 }: CesiumDigitalTwinViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cesiumContainerRef = useRef<HTMLDivElement | null>(null);
@@ -463,6 +466,15 @@ export function CesiumDigitalTwinViewer({
   const [pendingEvacPoint, setPendingEvacPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [evacPointNameInput, setEvacPointNameInput] = useState<string>("");
   const evacWaypointsEntitiesRef = useRef<any[]>([]);
+
+  useEffect(() => {
+    if (autoOpenEvacuation) {
+      setShowEvacPanel(true);
+      setEvacDestMode("point_by_point");
+      setIsMarkingEvacPoints(true);
+      toast.info("📍 Evacuation mode active: Click anywhere on 3D terrain to add an evacuation shelter point.");
+    }
+  }, [autoOpenEvacuation]);
 
   // Sensor ID prompt modal state for adding master and slave nodes
   const [sensorPromptModal, setSensorPromptModal] = useState<{
@@ -2029,12 +2041,16 @@ export function CesiumDigitalTwinViewer({
       name,
       lat: pendingEvacPoint.lat,
       lng: pendingEvacPoint.lng,
+      elev: groundHeightMeters || 310,
+      areaName: areaName || "Digital Twin",
+      instructions: `Proceed along safe high-ground route to evacuation refuge: ${name}.`,
     };
     const updated = [...evacWaypoints, newPoint];
     setEvacWaypoints(updated);
     try {
       localStorage.setItem(evacStorageKey, JSON.stringify(updated));
     } catch (e) {}
+    saveDigitalTwinEvacPoint(newPoint);
     renderEvacWaypointsInCesium(updated);
     setPendingEvacPoint(null);
     toast.success(`📍 Marked "${name}" on evacuation route!`);
@@ -2046,10 +2062,12 @@ export function CesiumDigitalTwinViewer({
     try {
       localStorage.setItem(evacStorageKey, JSON.stringify(updated));
     } catch (e) {}
+    removeDigitalTwinEvacPoint(id);
     renderEvacWaypointsInCesium(updated);
   };
 
   const clearAllEvacPoints = () => {
+    evacWaypoints.forEach((p) => removeDigitalTwinEvacPoint(p.id));
     setEvacWaypoints([]);
     try {
       localStorage.removeItem(evacStorageKey);

@@ -2,11 +2,12 @@ import { deleteArea } from "@/services/deleteArea";
 import { FloodImpactReport } from "@/components/simulation/FloodImpactReport";
 import { downloadFloodReportPdf } from "@/lib/generateFloodReportPdf";
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useLocation, Link } from "react-router-dom";
+import { useLocation, useSearchParams, useNavigate, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { useDigitalTwinEvacuationPoints, type DigitalTwinEvacPoint } from "@/lib/digitalTwinEvacuation";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   Brain, Download, FileText, Info, Play, Sparkles, Box, Boxes, RefreshCw,
@@ -66,6 +67,10 @@ const SCENARIO_LABELS: Record<string, string> = Object.fromEntries(SCENARIOS.map
 
 export function DigitalTwinPage() {
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const autoOpenEvacuation = Boolean(
+    location.state?.openEvacuation || searchParams.get("tab") === "evacuation"
+  );
   const rainfall = 100;
   const wind = 20;
   const [isRainActive, setIsRainActive] = useState<boolean>(false);
@@ -409,6 +414,7 @@ export function DigitalTwinPage() {
                 rainfallIntensity={isRainActive ? rainfall : 0}
                 windSpeed={wind}
                 onToggleRain={(val) => setIsRainActive(val)}
+                autoOpenEvacuation={autoOpenEvacuation}
               />
             </div>
           ) : (
@@ -927,9 +933,11 @@ export const SHELTER_PRESETS = [
 
 function EvacuationMapPicker({
   value,
+  digitalTwinPoints = [],
   onChange,
 }: {
   value: MobUserEvacuationPayload;
+  digitalTwinPoints?: DigitalTwinEvacPoint[];
   onChange: (updated: MobUserEvacuationPayload) => void;
 }) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -944,8 +952,8 @@ function EvacuationMapPicker({
       mapInstanceRef.current = null;
     }
 
-    const initialLat = value.latitude || 10.6695;
-    const initialLng = value.longitude || 77.0190;
+    const initialLat = value.latitude || (digitalTwinPoints[0]?.lat ?? 10.6695);
+    const initialLng = value.longitude || (digitalTwinPoints[0]?.lng ?? 77.0190);
 
     const map = L.map(mapContainerRef.current, {
       center: [initialLat, initialLng],
@@ -959,13 +967,13 @@ function EvacuationMapPicker({
       maxZoom: 18,
     }).addTo(map);
 
-    // Preset shelter pins
-    SHELTER_PRESETS.forEach((s) => {
+    // Digital Twin shelter pins
+    digitalTwinPoints.forEach((s) => {
       const presetIcon = L.divIcon({
         className: "custom-shelter-pin",
-        html: `<div style="background-color: #0284c7; color: white; padding: 2px 6px; border-radius: 9999px; font-size: 10px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap; cursor: pointer;">🏕️ ${s.name.split(" ")[0]}</div>`,
-        iconSize: [80, 24],
-        iconAnchor: [40, 12],
+        html: `<div style="background-color: #059669; color: white; padding: 2px 6px; border-radius: 9999px; font-size: 10px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap; cursor: pointer;">🏕️ ${s.name.slice(0, 16)}</div>`,
+        iconSize: [90, 24],
+        iconAnchor: [45, 12],
       });
       const m = L.marker([s.lat, s.lng], { icon: presetIcon }).addTo(map);
       m.on("click", (e) => {
@@ -974,8 +982,8 @@ function EvacuationMapPicker({
           shelter_name: s.name,
           latitude: s.lat,
           longitude: s.lng,
-          elevation_m: s.elev,
-          instructions: s.instructions,
+          elevation_m: s.elev || 310,
+          instructions: s.instructions || `Proceed along safe high-ground route to Digital Twin shelter: ${s.name}`,
         });
       });
     });
@@ -1072,6 +1080,9 @@ function EvacuationMapPicker({
 
 export function UserManagementPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const { points: dtEvacPoints, count: dtEvacCount, hasPoints: hasDtEvacPoints } =
+    useDigitalTwinEvacuationPoints();
   const [activeTab, setActiveTab] = useState<"mob_users" | "mob_alerts" | "officers">("mob_users");
 
   // 1. Supabase mob_users Query
@@ -1127,12 +1138,33 @@ export function UserManagementPage() {
   });
 
   const [evacForm, setEvacForm] = useState<MobUserEvacuationPayload>({
-    shelter_name: "Pollachi High Ground Relief Camp Alpha",
-    latitude: 10.6695,
-    longitude: 77.0190,
-    elevation_m: 310.5,
-    instructions: "Follow north high-ground corridor away from riverbed. Drinking water, dry rations, and medical aid available.",
+    shelter_name: "",
+    latitude: 0,
+    longitude: 0,
+    elevation_m: 310,
+    instructions: "",
   });
+
+  useEffect(() => {
+    if (dtEvacPoints.length > 0 && !evacForm.shelter_name) {
+      const pt = dtEvacPoints[0];
+      setEvacForm({
+        shelter_name: pt.name,
+        latitude: pt.lat,
+        longitude: pt.lng,
+        elevation_m: pt.elev || 310,
+        instructions: pt.instructions || `Proceed along safe high-ground route to Digital Twin shelter: ${pt.name}`,
+      });
+    } else if (dtEvacPoints.length === 0 && evacForm.shelter_name) {
+      setEvacForm({
+        shelter_name: "",
+        latitude: 0,
+        longitude: 0,
+        elevation_m: 0,
+        instructions: "",
+      });
+    }
+  }, [dtEvacPoints]);
 
   const sendAlertMutation = useMutation({
     mutationFn: ({ userId, payload }: { userId: string; payload: MobUserAlertPayload }) =>
@@ -1514,13 +1546,24 @@ export function UserManagementPage() {
                                 className="w-28 justify-center border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold"
                                 onClick={() => {
                                   setEvacTargetUser(user);
-                                  setEvacForm({
-                                    shelter_name: "Pollachi High Ground Relief Camp Alpha",
-                                    latitude: 10.6695,
-                                    longitude: 77.0190,
-                                    elevation_m: 310.5,
-                                    instructions: `Proceed immediately to designated high-ground relief camp from ${user.location_name || "current coordinates"}. Food, medical aid, and shelter available.`,
-                                  });
+                                  if (dtEvacPoints.length > 0) {
+                                    const pt = dtEvacPoints[0];
+                                    setEvacForm({
+                                      shelter_name: pt.name,
+                                      latitude: pt.lat,
+                                      longitude: pt.lng,
+                                      elevation_m: pt.elev || 310,
+                                      instructions: pt.instructions || `Proceed immediately to designated safe Digital Twin shelter: ${pt.name}.`,
+                                    });
+                                  } else {
+                                    setEvacForm({
+                                      shelter_name: "",
+                                      latitude: 0,
+                                      longitude: 0,
+                                      elevation_m: 0,
+                                      instructions: "",
+                                    });
+                                  }
                                 }}
                               >
                                 <Navigation className="size-3 mr-1" />
@@ -1993,116 +2036,148 @@ export function UserManagementPage() {
 
                   {includeEvacuation && (
                     <div className="space-y-3 pt-2 border-t border-blue-200 text-xs animate-in fade-in duration-150">
-                      {/* Interactive Map Picker & Shelter Quick Buttons */}
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-blue-950 font-bold flex items-center gap-1 text-xs">
-                            <MapPin className="size-3.5 text-blue-600" />
-                            Evacuation Shelter Location (Map Picker &amp; Safe Presets)
-                          </Label>
-                          <span className="text-[10px] text-blue-700 bg-blue-100 px-2 py-0.5 rounded font-mono font-bold">
-                            {evacForm.latitude.toFixed(4)}°N, {evacForm.longitude.toFixed(4)}°E ({evacForm.elevation_m || 310}m)
-                          </span>
+                      {!hasDtEvacPoints ? (
+                        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3.5 text-amber-900 space-y-2.5" data-testid="no-dt-evac-points-alert-modal">
+                          <div className="flex items-start gap-2.5">
+                            <ShieldAlert className="size-4 text-amber-700 mt-0.5 shrink-0" />
+                            <div className="space-y-0.5">
+                              <p className="font-bold text-xs text-amber-950">No Evacuation Points Found in Digital Twin</p>
+                              <p className="text-[11px] text-amber-800 leading-relaxed">
+                                Evacuation points must be created and verified on the 3D Digital Twin map before attaching them to emergency alerts.
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="w-full bg-amber-800 hover:bg-amber-900 text-white font-bold cursor-pointer text-xs"
+                            onClick={() => {
+                              setIsAlertModalOpen(false);
+                              navigate("/digital-twin", { state: { openEvacuation: true } });
+                            }}
+                          >
+                            <Compass className="size-3.5 mr-1.5" />
+                            Create Evacuation Point on Digital Twin
+                          </Button>
                         </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-blue-950 font-bold flex items-center gap-1 text-xs">
+                              <Compass className="size-3.5 text-blue-600" />
+                              Select Evacuation Point (From Digital Twin)
+                            </Label>
+                            <span className="text-[10px] text-blue-700 bg-blue-100 px-2 py-0.5 rounded font-mono font-bold">
+                              {evacForm.latitude ? `${evacForm.latitude.toFixed(4)}°N, ${evacForm.longitude.toFixed(4)}°E (${evacForm.elevation_m || 310}m)` : "No point selected"}
+                            </span>
+                          </div>
 
-                        {/* Quick Shelter Presets */}
-                        <div className="flex flex-wrap gap-1">
-                          {SHELTER_PRESETS.map((p) => (
-                            <button
-                              key={p.name}
-                              type="button"
-                              data-testid={`preset-shelter-${p.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`}
-                              onClick={() => {
-                                setEvacForm({
-                                  shelter_name: p.name,
-                                  latitude: p.lat,
-                                  longitude: p.lng,
-                                  elevation_m: p.elev,
-                                  instructions: p.instructions,
-                                });
-                              }}
-                              className={`px-2 py-0.5 rounded text-[10px] font-medium border transition cursor-pointer ${
-                                evacForm.shelter_name === p.name
-                                  ? "bg-blue-600 text-white border-blue-600 font-bold shadow-xs"
-                                  : "bg-white text-blue-900 border-blue-200 hover:bg-blue-100/50"
-                              }`}
-                            >
-                              🏕️ {p.name.split(" ")[0]} ({p.elev}m)
-                            </button>
-                          ))}
-                        </div>
+                          {/* Digital Twin Points Quick Selection */}
+                          <div className="flex flex-wrap gap-1">
+                            {dtEvacPoints.map((p) => {
+                              const isSelected = evacForm.shelter_name === p.name && Math.abs(evacForm.latitude - p.lat) < 0.0001;
+                              return (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  data-testid={`dt-evac-point-${p.id}`}
+                                  onClick={() => {
+                                    setEvacForm({
+                                      shelter_name: p.name,
+                                      latitude: p.lat,
+                                      longitude: p.lng,
+                                      elevation_m: p.elev || 310,
+                                      instructions: p.instructions || `Proceed along safe high-ground route to Digital Twin shelter: ${p.name}`,
+                                    });
+                                  }}
+                                  className={`px-2.5 py-1 rounded text-xs font-medium border transition cursor-pointer flex items-center gap-1.5 ${
+                                    isSelected
+                                      ? "bg-blue-600 text-white border-blue-600 font-bold shadow-xs"
+                                      : "bg-white text-blue-900 border-blue-200 hover:bg-blue-100/60"
+                                  }`}
+                                >
+                                  <span>🏕️ {p.name}</span>
+                                  <span className="opacity-80">({p.elev || 310}m)</span>
+                                </button>
+                              );
+                            })}
+                          </div>
 
-                        {/* Interactive Leaflet Map for pinpointing shelter location */}
-                        <EvacuationMapPicker
-                          value={evacForm}
-                          onChange={(updated) => setEvacForm(updated)}
-                        />
-                      </div>
+                          {/* Interactive Leaflet Map showing Digital Twin shelter pins */}
+                          <EvacuationMapPicker
+                            value={evacForm}
+                            digitalTwinPoints={dtEvacPoints}
+                            onChange={(updated) => setEvacForm(updated)}
+                          />
 
-                      <div>
-                        <Label htmlFor="evac-shelter" className="text-blue-950 font-semibold">
-                          Designated Shelter Name
-                        </Label>
-                        <Input
-                          id="evac-shelter"
-                          data-testid="evac-shelter-input"
-                          value={evacForm.shelter_name}
-                          onChange={(e) => setEvacForm((p) => ({ ...p, shelter_name: e.target.value }))}
-                          className="mt-1 text-xs bg-white"
-                          placeholder="e.g. Pollachi High Ground Relief Camp Alpha"
-                        />
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div>
-                          <Label htmlFor="evac-lat" className="text-blue-950 font-semibold">Latitude</Label>
-                          <Input
-                            id="evac-lat"
-                            data-testid="evac-lat-input"
-                            type="number"
-                            step="0.0001"
-                            value={evacForm.latitude}
-                            onChange={(e) => setEvacForm((p) => ({ ...p, latitude: parseFloat(e.target.value) || 0 }))}
-                            className="mt-1 text-xs bg-white font-mono"
-                          />
+                          <div className="space-y-2.5 pt-1">
+                            <div>
+                              <Label htmlFor="evac-shelter" className="text-blue-950 font-semibold">
+                                Selected Digital Twin Shelter
+                              </Label>
+                              <Input
+                                id="evac-shelter"
+                                data-testid="evac-shelter-input"
+                                value={evacForm.shelter_name}
+                                readOnly
+                                className="mt-1 text-xs bg-slate-50 font-medium cursor-not-allowed"
+                                placeholder="Select a Digital Twin shelter point above"
+                              />
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                              <div>
+                                <Label htmlFor="evac-lat" className="text-blue-950 font-semibold">Latitude</Label>
+                                <Input
+                                  id="evac-lat"
+                                  data-testid="evac-lat-input"
+                                  type="number"
+                                  readOnly
+                                  step="0.0001"
+                                  value={evacForm.latitude}
+                                  className="mt-1 text-xs bg-slate-50 font-mono cursor-not-allowed"
+                                />
+                              </div>
+                              <div>
+                                <Label htmlFor="evac-lng" className="text-blue-950 font-semibold">Longitude</Label>
+                                <Input
+                                  id="evac-lng"
+                                  data-testid="evac-lng-input"
+                                  type="number"
+                                  readOnly
+                                  step="0.0001"
+                                  value={evacForm.longitude}
+                                  className="mt-1 text-xs bg-slate-50 font-mono cursor-not-allowed"
+                                />
+                              </div>
+                              <div>
+                                <Label htmlFor="evac-elev" className="text-blue-950 font-semibold">Safe Elevation (m)</Label>
+                                <Input
+                                  id="evac-elev"
+                                  data-testid="evac-elev-input"
+                                  type="number"
+                                  readOnly
+                                  step="1"
+                                  value={evacForm.elevation_m || 310}
+                                  className="mt-1 text-xs bg-slate-50 font-mono cursor-not-allowed"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <Label htmlFor="evac-instructions" className="text-blue-950 font-semibold">
+                                Evacuation Route Instructions
+                              </Label>
+                              <Input
+                                id="evac-instructions"
+                                data-testid="evac-instructions-input"
+                                value={evacForm.instructions || ""}
+                                onChange={(e) => setEvacForm((p) => ({ ...p, instructions: e.target.value }))}
+                                className="mt-1 text-xs bg-white"
+                                placeholder="Follow north high-ground corridor away from river."
+                              />
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <Label htmlFor="evac-lng" className="text-blue-950 font-semibold">Longitude</Label>
-                          <Input
-                            id="evac-lng"
-                            data-testid="evac-lng-input"
-                            type="number"
-                            step="0.0001"
-                            value={evacForm.longitude}
-                            onChange={(e) => setEvacForm((p) => ({ ...p, longitude: parseFloat(e.target.value) || 0 }))}
-                            className="mt-1 text-xs bg-white font-mono"
-                          />
-                        </div>
-                        <div>
-                          <Label htmlFor="evac-elev" className="text-blue-950 font-semibold">Safe Elevation (m)</Label>
-                          <Input
-                            id="evac-elev"
-                            data-testid="evac-elev-input"
-                            type="number"
-                            step="1"
-                            value={evacForm.elevation_m || 310}
-                            onChange={(e) => setEvacForm((p) => ({ ...p, elevation_m: parseFloat(e.target.value) || 0 }))}
-                            className="mt-1 text-xs bg-white font-mono"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <Label htmlFor="evac-instructions" className="text-blue-950 font-semibold">
-                          Evacuation Route Instructions
-                        </Label>
-                        <Input
-                          id="evac-instructions"
-                          data-testid="evac-instructions-input"
-                          value={evacForm.instructions || ""}
-                          onChange={(e) => setEvacForm((p) => ({ ...p, instructions: e.target.value }))}
-                          className="mt-1 text-xs bg-white"
-                          placeholder="Follow north high-ground corridor away from river."
-                        />
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2176,6 +2251,7 @@ export function UserManagementPage() {
                         !alertForm.detail ||
                         channels.length === 0 ||
                         (alertTarget === "selected" && !selectedUserId) ||
+                        (includeEvacuation && (!hasDtEvacPoints || !evacForm.shelter_name)) ||
                         sendAlertMutation.isPending ||
                         broadcastAlertMutation.isPending
                       }
@@ -2246,155 +2322,192 @@ export function UserManagementPage() {
                   </span>
                 </div>
 
-                {/* Preset Safe Shelters */}
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">
-                    Designated Safe Relief Shelters (Pollachi Basin)
-                  </Label>
-                  <div className="mt-1.5 space-y-1.5">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEvacForm({
-                          shelter_name: "Pollachi High Ground Relief Camp Alpha",
-                          latitude: 10.6695,
-                          longitude: 77.0190,
-                          elevation_m: 310.5,
-                          instructions: "Proceed north along Main High Ground Road. Medical camp, drinking water, and dry rations available.",
-                        })
-                      }
-                      className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-blue-300 hover:bg-blue-50/50"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-slate-900">🏫 Pollachi High Ground Relief Camp Alpha</span>
-                        <span className="font-mono text-emerald-700 font-bold">310.5m Elev</span>
+                {!hasDtEvacPoints ? (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900 space-y-3" data-testid="no-dt-evac-points-modal">
+                    <div className="flex items-start gap-2.5">
+                      <ShieldAlert className="size-5 text-amber-700 mt-0.5 shrink-0" />
+                      <div className="space-y-1">
+                        <p className="font-bold text-sm text-amber-950">No Evacuation Points Found in Digital Twin</p>
+                        <p className="text-xs text-amber-800 leading-relaxed">
+                          Evacuation points must be marked and verified on the 3D Digital Twin map before dispatching to citizens. None have been created yet.
+                        </p>
                       </div>
-                      <p className="text-[11px] text-slate-500">Coords: 10.6695° N, 77.0190° E • 350m from river corridor</p>
-                    </button>
-
-                    <button
+                    </div>
+                    <Button
                       type="button"
-                      onClick={() =>
-                        setEvacForm({
-                          shelter_name: "Govt Higher Secondary School Safe Shelter",
-                          latitude: 10.6620,
-                          longitude: 77.0110,
-                          elevation_m: 298.0,
-                          instructions: "Evacuate south-west to concrete multi-story school building. Shelter ground floor is elevated.",
-                        })
-                      }
-                      className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-blue-300 hover:bg-blue-50/50"
+                      size="sm"
+                      className="w-full bg-amber-800 hover:bg-amber-900 text-white font-bold cursor-pointer text-xs"
+                      onClick={() => {
+                        setEvacTargetUser(null);
+                        navigate("/digital-twin", { state: { openEvacuation: true } });
+                      }}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-slate-900">🏛️ Govt Higher Secondary School Safe Shelter</span>
-                        <span className="font-mono text-emerald-700 font-bold">298.0m Elev</span>
-                      </div>
-                      <p className="text-[11px] text-slate-500">Coords: 10.6620° N, 77.0110° E • Multi-story safe refuge</p>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEvacForm({
-                          shelter_name: "Municipal Community Flood Center Beta",
-                          latitude: 10.6720,
-                          longitude: 77.0250,
-                          elevation_m: 325.0,
-                          instructions: "Proceed east toward hilltop civic center. Elevated helicopter pad and ambulance access available.",
-                        })
-                      }
-                      className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2 text-xs hover:border-blue-300 hover:bg-blue-50/50"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-slate-900">⛰️ Municipal Community Flood Center Beta</span>
-                        <span className="font-mono text-emerald-700 font-bold">325.0m Elev</span>
-                      </div>
-                      <p className="text-[11px] text-slate-500">Coords: 10.6720° N, 77.0250° E • High hill refuge</p>
-                    </button>
+                      <Compass className="size-4 mr-1.5" />
+                      Open Digital Twin & Create Evacuation Point
+                    </Button>
                   </div>
-                </div>
-
-                <div className="space-y-3 text-xs">
-                  <div>
-                    <Label htmlFor="shelter-name">Shelter Facility Name</Label>
-                    <Input
-                      id="shelter-name"
-                      value={evacForm.shelter_name}
-                      onChange={(e) => setEvacForm((p) => ({ ...p, shelter_name: e.target.value }))}
-                      className="mt-1 text-xs"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
+                ) : (
+                  <>
                     <div>
-                      <Label htmlFor="shelter-lat">Latitude</Label>
-                      <Input
-                        id="shelter-lat"
-                        type="number"
-                        step="0.00001"
-                        value={evacForm.latitude}
-                        onChange={(e) =>
-                          setEvacForm((p) => ({ ...p, latitude: parseFloat(e.target.value) || 0 }))
-                        }
-                        className="mt-1 text-xs font-mono"
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
+                          <Compass className="size-3.5 text-blue-600" />
+                          Evacuation Points (Created in Digital Twin)
+                        </Label>
+                        <span className="text-[10px] text-blue-700 bg-blue-100 px-2 py-0.5 rounded font-mono font-bold">
+                          {dtEvacCount} available
+                        </span>
+                      </div>
+                      <div className="mt-1.5 space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                        {dtEvacPoints.map((pt) => {
+                          const isSelected = evacForm.shelter_name === pt.name && Math.abs(evacForm.latitude - pt.lat) < 0.0001;
+                          return (
+                            <button
+                              key={pt.id}
+                              type="button"
+                              data-testid={`single-user-dt-evac-${pt.id}`}
+                              onClick={() =>
+                                setEvacForm({
+                                  shelter_name: pt.name,
+                                  latitude: pt.lat,
+                                  longitude: pt.lng,
+                                  elevation_m: pt.elev || 310.0,
+                                  instructions: pt.instructions || `Proceed along designated safe high-ground route to Digital Twin shelter: ${pt.name}.`,
+                                })
+                              }
+                              className={`w-full text-left rounded-md border p-2.5 text-xs transition cursor-pointer ${
+                                isSelected
+                                  ? "border-blue-500 bg-blue-50/90 shadow-xs ring-1 ring-blue-400"
+                                  : "border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50/50"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                                  <span>🏕️</span>
+                                  <span>{pt.name}</span>
+                                </span>
+                                <span className="font-mono text-emerald-700 font-bold">{pt.elev || 310}m Elev</span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                GPS: {pt.lat.toFixed(5)}° N, {pt.lng.toFixed(5)}° E
+                                {pt.areaName ? ` • Area: ${pt.areaName}` : ""}
+                              </p>
+                              {pt.instructions && (
+                                <p className="text-[10px] text-blue-800 italic mt-1 bg-blue-100/50 p-1 rounded">
+                                  {pt.instructions}
+                                </p>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Interactive Leaflet Map showing Digital Twin shelter pins */}
+                    <div>
+                      <EvacuationMapPicker
+                        value={evacForm}
+                        digitalTwinPoints={dtEvacPoints}
+                        onChange={(updated) => setEvacForm(updated)}
                       />
                     </div>
-                    <div>
-                      <Label htmlFor="shelter-lng">Longitude</Label>
-                      <Input
-                        id="shelter-lng"
-                        type="number"
-                        step="0.00001"
-                        value={evacForm.longitude}
-                        onChange={(e) =>
-                          setEvacForm((p) => ({ ...p, longitude: parseFloat(e.target.value) || 0 }))
-                        }
-                        className="mt-1 text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="shelter-elev">Elevation (m)</Label>
-                      <Input
-                        id="shelter-elev"
-                        type="number"
-                        value={evacForm.elevation_m || 300}
-                        onChange={(e) =>
-                          setEvacForm((p) => ({ ...p, elevation_m: parseFloat(e.target.value) || 0 }))
-                        }
-                        className="mt-1 text-xs font-mono"
-                      />
-                    </div>
-                  </div>
 
-                  <div>
-                    <Label htmlFor="shelter-inst">Evacuation Route Instructions</Label>
-                    <textarea
-                      id="shelter-inst"
-                      rows={3}
-                      value={evacForm.instructions}
-                      onChange={(e) => setEvacForm((p) => ({ ...p, instructions: e.target.value }))}
-                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                    />
-                  </div>
-                </div>
+                    <div className="space-y-3 text-xs">
+                      <div>
+                        <Label htmlFor="shelter-name" className="text-slate-700 font-semibold">
+                          Selected Digital Twin Shelter
+                        </Label>
+                        <Input
+                          id="shelter-name"
+                          value={evacForm.shelter_name}
+                          readOnly
+                          placeholder="Choose an evacuation point above"
+                          className="mt-1 text-xs bg-slate-50 font-medium cursor-not-allowed"
+                        />
+                      </div>
 
-                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
-                  <Button variant="outline" size="sm" onClick={() => setEvacTargetUser(null)}>
-                    Cancel
-                  </Button>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label htmlFor="shelter-lat">Latitude</Label>
+                          <Input
+                            id="shelter-lat"
+                            type="number"
+                            readOnly
+                            step="0.00001"
+                            value={evacForm.latitude}
+                            className="mt-1 text-xs font-mono bg-slate-50 cursor-not-allowed"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="shelter-lng">Longitude</Label>
+                          <Input
+                            id="shelter-lng"
+                            type="number"
+                            readOnly
+                            step="0.00001"
+                            value={evacForm.longitude}
+                            className="mt-1 text-xs font-mono bg-slate-50 cursor-not-allowed"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="shelter-elev">Elevation (m)</Label>
+                          <Input
+                            id="shelter-elev"
+                            type="number"
+                            readOnly
+                            value={evacForm.elevation_m || 300}
+                            className="mt-1 text-xs font-mono bg-slate-50 cursor-not-allowed"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <Label htmlFor="shelter-inst">Evacuation Route Instructions</Label>
+                        <textarea
+                          id="shelter-inst"
+                          rows={3}
+                          value={evacForm.instructions}
+                          onChange={(e) => setEvacForm((p) => ({ ...p, instructions: e.target.value }))}
+                          className="mt-1 w-full rounded-md border border-slate-300 p-2 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                          placeholder="Route or instructions for citizen..."
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div className="flex items-center justify-between border-t border-slate-100 pt-3">
                   <Button
+                    type="button"
+                    variant="ghost"
                     size="sm"
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
-                    disabled={!evacForm.shelter_name || sendEvacMutation.isPending}
-                    onClick={() =>
-                      sendEvacMutation.mutate({
-                        userId: evacTargetUser.id,
-                        payload: evacForm,
-                      })
-                    }
+                    className="text-xs text-blue-700 hover:text-blue-800 hover:bg-blue-50 gap-1 px-2"
+                    onClick={() => {
+                      setEvacTargetUser(null);
+                      navigate("/digital-twin", { state: { openEvacuation: true } });
+                    }}
                   >
-                    {sendEvacMutation.isPending ? "Assigning…" : "Assign & Dispatch Evacuation Point"}
+                    <Compass className="size-3.5" />
+                    Manage in Digital Twin
                   </Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setEvacTargetUser(null)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                      disabled={!hasDtEvacPoints || !evacForm.shelter_name || sendEvacMutation.isPending}
+                      onClick={() =>
+                        sendEvacMutation.mutate({
+                          userId: evacTargetUser.id,
+                          payload: evacForm,
+                        })
+                      }
+                    >
+                      {sendEvacMutation.isPending ? "Assigning…" : "Assign & Dispatch Evacuation Point"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

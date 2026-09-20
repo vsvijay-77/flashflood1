@@ -933,3 +933,87 @@ def arrival_times(payload: ArrivalGraphRequest, user: dict = Depends(require_rol
     return {"arrivals": arrivals, "model": "gnn_transformer", "source": status.get("source"),
             "revision": status.get("revision"), "horizon": payload.elapsed + payload.horizonSeconds,
             "throughSeconds": payload.elapsed + payload.horizonSeconds, "complete": True}
+
+
+# ─── 🛡️ DIGITAL TWIN EVACUATION POINTS CRUD ───
+import time
+from datetime import datetime, timezone
+from lib.auth import current_user, optional_user
+from lib.db import db, get_mongo_fallback
+
+
+class DigitalTwinEvacPointPayload(BaseModel):
+    id: Optional[str] = None
+    name: str
+    lat: float
+    lng: float
+    elev: Optional[float] = 310.0
+    instructions: Optional[str] = "Proceed to designated safe high-ground shelter."
+    areaName: Optional[str] = None
+
+
+@router.get("/evacuation-points")
+async def list_digital_twin_evacuation_points(user: Optional[dict] = Depends(optional_user)):
+    """Fetch all evacuation points created in Digital Twin."""
+    try:
+        docs = await db.evacuation_points.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+        if docs:
+            return docs
+    except Exception:
+        pass
+    try:
+        mongo = get_mongo_fallback()
+        docs = await mongo["evacuation_points"].find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+        return docs
+    except Exception:
+        return []
+
+
+@router.post("/evacuation-points")
+async def save_digital_twin_evacuation_point(
+    payload: DigitalTwinEvacPointPayload,
+    user: dict = Depends(require_roles("admin", "gov_officer")),
+):
+    """Save an evacuation point created on Digital Twin."""
+    point_id = payload.id or f"wp-{int(time.time() * 1000)}"
+    doc = {
+        "id": point_id,
+        "name": payload.name,
+        "lat": payload.lat,
+        "lng": payload.lng,
+        "elev": payload.elev if payload.elev is not None else 310.0,
+        "instructions": payload.instructions or "Proceed to designated safe high-ground shelter.",
+        "areaName": payload.areaName or "Digital Twin",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db.evacuation_points.update_one({"id": point_id}, {"$set": doc}, upsert=True)
+    except Exception as e:
+        print(f"Notice: db.evacuation_points upsert error: {e}")
+    try:
+        mongo = get_mongo_fallback()
+        await mongo["evacuation_points"].update_one({"id": point_id}, {"$set": doc}, upsert=True)
+    except Exception as e:
+        print(f"Notice: mongo evacuation_points error: {e}")
+    return {"status": "ok", "point": doc}
+
+
+@router.delete("/evacuation-points/{point_id}")
+async def delete_digital_twin_evacuation_point(
+    point_id: str,
+    user: dict = Depends(require_roles("admin", "gov_officer")),
+):
+    """Delete an evacuation point by ID."""
+    deleted_count = 0
+    try:
+        res = await db.evacuation_points.delete_many({"id": point_id})
+        deleted_count += res.deleted_count
+    except Exception:
+        pass
+    try:
+        mongo = get_mongo_fallback()
+        res2 = await mongo["evacuation_points"].delete_many({"id": point_id})
+        deleted_count += res2.deleted_count
+    except Exception:
+        pass
+    return {"status": "ok", "deleted_count": deleted_count, "id": point_id}

@@ -567,11 +567,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         setIsFallbackSource(raster.featureCount === 0);
         setOsmFeatureCount(waterFeatureCount);
 
-        // The precise Cesium river vectors remain the resting-water view.  The
-        // hydraulic mesh starts dry so its coarse cells never paint a broad cyan
-        // sheet over mapped channels before there is a real flood depth.
+        // Establish initial water depth in rivers and waterways so the channel has visible water immediately
         for (let i = 0; i < totalCells; i++) {
-          initialDepths[i] = 0.0;
+          initialDepths[i] = insideMask[i] && sourceMask[i] ? 0.45 : 0.0;
         }
 
         // 5. Initialize Physics Simulation Engine with High-to-Low Momentum
@@ -653,7 +651,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           isPausedRef.current = false;
           setIsRunning(false);
           setIsPaused(false);
-          setControlsOpen(false);   // show quick toolbar
+          setControlsOpen(true);   // keep controls open so user can configure parameters and start flood
           onRunningChange?.(false);
           onPauseChange?.(false);
 
@@ -758,15 +756,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         terrainGeometry,
         new THREE.MeshBasicMaterial({
           colorWrite: false,
-          side: THREE.FrontSide,
-          depthWrite: true,
-          polygonOffset: true,
-          polygonOffsetFactor: 3.0,
-          polygonOffsetUnits: 3.0,
+          side: THREE.DoubleSide,
+          depthWrite: false,
         })
       );
-      terrainMesh.frustumCulled = false;
-      scene.add(terrainMesh);
+      terrainMesh.visible = false;
       terrainMeshRef.current = terrainMesh;
 
       const container = canvasContainerRef.current;
@@ -940,20 +934,17 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const stepTime = secondsUntilStormEnds > 0 ? Math.min(safeDt, secondsUntilStormEnds / playbackMultiplier) : safeDt;
 
           const stormPhase = elapsedSec / stormDurationSec;
-          // Smooth-in factor: 2-second ramp (at 45× multiplier, this equals 90 simulated seconds)
-          const softStartFactor = Math.min(1.0, elapsedSec / 2.0);
-          const softStart = softStartFactor * softStartFactor * (3.0 - 2.0 * softStartFactor);
-
-          let timeRiseFactor = 0.0;
+          // Active flood surge: starts immediately at >= 0.50 factor so water rises without dry delay
+          let timeRiseFactor = 0.50;
           if (stormPhase < 0.40) {
-            timeRiseFactor = Math.sin((stormPhase / 0.40) * (Math.PI / 2)) * softStart;
+            timeRiseFactor = Math.max(0.50, Math.sin((stormPhase / 0.40) * (Math.PI / 2)));
           } else if (stormPhase < 0.80) {
             timeRiseFactor = 1.0;
           } else if (stormPhase < 1.0) {
-            timeRiseFactor = Math.cos(((stormPhase - 0.80) / 0.20) * (Math.PI / 2));
+            timeRiseFactor = Math.max(0.50, Math.cos(((stormPhase - 0.80) / 0.20) * (Math.PI / 2)));
           } else {
             // User requirement: "simulation not stop water evoving" - keep active evolving
-            timeRiseFactor = 0.5;
+            timeRiseFactor = 0.50;
           }
 
           // If changes were applied live to an existing scenario, ramp in the new environment change immediately:
@@ -978,7 +969,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const windMultiplier = 1 + Math.min(1, windMs / 20) * 0.25;
           const effectiveRunoff = runoff * windMultiplier;
           const intensityScale = Math.max(0, (currentParameters.floodIntensity ?? 100)) / 100;
-          const effectiveSourceRise = sourceRiseRef.current * intensityScale * timeRiseFactor;
+          const effectiveSourceRise = Math.max(0.6, sourceRiseRef.current) * intensityScale * timeRiseFactor;
 
           // The controls' extreme corner represents a basin-wide cloudburst,
           // not merely a stronger river source. This intentionally inundates
@@ -1022,7 +1013,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
               const isInside = insideMask ? insideMask[i] : 1;
               const d = isInside ? depths[i] : 0.0;
               if (d > peaks[i]) peaks[i] = d;
-              posArr[i * 3 + 1] = basePositions[i * 3 + 1] + d;
+              posArr[i * 3 + 1] = basePositions[i * 3 + 1] + Math.min(d, 2.5);
               depthArr[i] = d;
               velArr[i * 2 + 0] = isInside ? velX[i] : 0;
               velArr[i * 2 + 1] = isInside ? velY[i] : 0;

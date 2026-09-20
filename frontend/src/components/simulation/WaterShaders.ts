@@ -164,8 +164,8 @@ export const WaterFragmentShader = /* glsl */ `
   void main() {
     #include <logdepthbuf_fragment>
 
-    // ⛔ Strictly discard any fragments outside the selected polygon area
-    if (vInside < 0.99) discard;
+    // ⛔ Discard fragments outside the selected polygon area with smooth margin blend
+    if (vInside < 0.20) discard;
 
     // Resting rivers are rendered by their exact Cesium vectors. The hydraulic
     // mesh appears only once floodwater has a visible physical depth, avoiding
@@ -296,10 +296,11 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 foamColor = vec3(0.46, 0.84, 0.96);
     vec3 finalColor = mix(waterSurface, foamColor, max(crestFoam, rapidFoam));
 
-    // Opacity: smooth alpha transition — water gently swells into view instead of popping in abruptly
-    float marginBlend = smoothstep(wetThreshold, floodThreshold + 0.045, vDepth);
-    float depthAlpha = mix(0.40, 0.90, smoothstep(wetThreshold, 0.80, vDepth));
-    float alpha = marginBlend * depthAlpha;
+    // Opacity: high-contrast vivid water surface with smooth boundary blending
+    float boundaryBlend = smoothstep(0.20, 0.80, vInside);
+    float marginBlend = smoothstep(wetThreshold, 0.04, vDepth);
+    float depthAlpha = mix(0.65, 0.95, clamp(vDepth / 0.35, 0.0, 1.0));
+    float alpha = marginBlend * depthAlpha * boundaryBlend;
 
     gl_FragColor = vec4(finalColor, alpha);
     #include <tonemapping_fragment>
@@ -332,9 +333,9 @@ export function createWaterShaderMaterial(
       uHasSceneColor: { value: 0.0 },
     },
     transparent: true,
-    depthTest: true,
+    depthTest: false,
     depthWrite: false,
-    side: THREE.FrontSide, // FrontSide only: eliminates double-sheet backface rendering and z-fighting on zoom
+    side: THREE.DoubleSide, // DoubleSide: ensures water is never culled by camera view angle or winding order
   });
 
   return material;

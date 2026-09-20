@@ -512,6 +512,50 @@ async def list_mob_alerts(user: dict = Depends(current_user)):
             return []
 
 
+@router.delete("/mob-alerts/{alert_identifier}")
+async def delete_mob_alert(
+    alert_identifier: str,
+    admin: dict = Depends(require_roles("admin", "gov_officer")),
+):
+    """Delete a dispatched mobile alert record by id or alert_code from Supabase and MongoDB."""
+    deleted_count = 0
+    # 1. Supabase (check alert_code first, or id if valid UUID)
+    try:
+        sb_res = supabase.table("mob_alerts").delete().eq("alert_code", alert_identifier).execute()
+        if sb_res.data:
+            deleted_count += len(sb_res.data)
+        elif len(alert_identifier) == 36 and "-" in alert_identifier:
+            sb_res2 = supabase.table("mob_alerts").delete().eq("id", alert_identifier).execute()
+            if sb_res2.data:
+                deleted_count += len(sb_res2.data)
+    except Exception as e:
+        print(f"Notice: delete_mob_alert supabase error: {e}")
+
+    # 2. MongoDB
+    try:
+        mongo = get_mongo_fallback()
+        mg_res = await mongo["mob_alerts"].delete_many({
+            "$or": [{"id": alert_identifier}, {"alert_code": alert_identifier}]
+        })
+        deleted_count += mg_res.deleted_count
+    except Exception as e:
+        print(f"Notice: delete_mob_alert mongo error: {e}")
+
+    try:
+        db_res = await db.mob_alerts.delete_many({
+            "$or": [{"id": alert_identifier}, {"alert_code": alert_identifier}]
+        })
+        deleted_count += db_res.deleted_count
+    except Exception as e:
+        print(f"Notice: delete_mob_alert db error: {e}")
+
+    return {
+        "status": "ok",
+        "message": f"Alert {alert_identifier} deleted successfully",
+        "deleted_count": deleted_count,
+    }
+
+
 @router.post("/mob-users/{user_id}/evacuation-point")
 async def send_mob_user_evacuation(
     user_id: str,

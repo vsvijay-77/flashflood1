@@ -1188,6 +1188,16 @@ export function UserManagementPage() {
     onError: (err) => toast.error(apiErrorMessage(err)),
   });
 
+  // Delete Dispatched Mob Alert Record Mutation
+  const deleteMobAlertMutation = useMutation({
+    mutationFn: (alertIdOrCode: string) => apiDelete(`/mob-alerts/${alertIdOrCode}`),
+    onSuccess: (res: any) => {
+      toast.success(res?.message || "Alert record deleted");
+      qc.invalidateQueries({ queryKey: ["mob-alerts"] });
+    },
+    onError: (err) => toast.error(apiErrorMessage(err, "Failed to delete alert record")),
+  });
+
   const mobUsersList = mobUsersQuery.data ?? [];
   const mobAlertsList = mobAlertsQuery.data ?? [];
   const officersList = officersQuery.data ?? [];
@@ -2430,7 +2440,7 @@ export function UserManagementPage() {
                     <TableHead>Hazard &amp; Severity</TableHead>
                     <TableHead>Channels &amp; Mode</TableHead>
                     <TableHead>Evacuation Shelter</TableHead>
-                    <TableHead className="text-right">Status</TableHead>
+                    <TableHead className="text-right">Status &amp; Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -2508,10 +2518,28 @@ export function UserManagementPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
-                          <CheckCircle2 className="size-3" />
-                          {alert.status || "Delivered"}
-                        </span>
+                        <div className="flex items-center justify-end gap-2">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                            <CheckCircle2 className="size-3" />
+                            {alert.status || "Delivered"}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="size-7 p-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                            title="Delete Alert Record"
+                            data-testid={`delete-alert-${alert.alert_code || alert.id}`}
+                            onClick={() => {
+                              const idToDel = alert.id || alert.alert_code;
+                              if (window.confirm(`Delete alert record ${alert.alert_code || idToDel}?`)) {
+                                deleteMobAlertMutation.mutate(idToDel);
+                              }
+                            }}
+                            disabled={deleteMobAlertMutation.isPending}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

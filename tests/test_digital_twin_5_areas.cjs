@@ -1,7 +1,7 @@
 const { chromium } = require("./node_modules/playwright");
 const path = require("path");
 
-const ARTIFACTS_DIR = "/Users/vijay/.gemini/antigravity/brain/230933b3-7d16-4574-99a8-be5f96f74a06";
+const ARTIFACTS_DIR = process.env.ARTIFACTS_DIR || "/Users/vijay/.gemini/antigravity/brain/4d3fbe4f-3b85-4fda-b67d-1b2e94907dad";
 
 const AREAS_TO_TEST = [
   {

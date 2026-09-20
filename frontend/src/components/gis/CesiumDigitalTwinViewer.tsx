@@ -332,10 +332,13 @@ export function CesiumDigitalTwinViewer({
  
   // ─── 🛣️ REAL ROAD NETWORK, 🌊 RIVERS & 🚨 EVACUATION ROUTING ───
   const roadEntitiesRef = useRef<any[]>([]);
+  const roadPrimitivesRef = useRef<any[]>([]); // Batched GroundPolylinePrimitives (fast 60 FPS path)
   const riverEntitiesRef = useRef<any[]>([]);
   const riverPrimitivesRef = useRef<any[]>([]); // Batched GroundPolylinePrimitives (fast path)
   const riverFlowPrimitivesRef = useRef<any[]>([]); // Animated flow-pulse overlay (shown when sim running)
   const buildingEntitiesRef = useRef<any[]>([]);
+  const buildingPrimitiveRef = useRef<any>(null); // Batched GroundPrimitive for footprints (fast 60 FPS path)
+  const buildingOutlinePrimitiveRef = useRef<any>(null); // Batched GroundPolylinePrimitive for outlines
   const evacuationEntitiesRef = useRef<any[]>([]);
   const riskZoneEntitiesRef = useRef<any[]>([]);
   // Viewport-based dynamic loading & camera flight guards
@@ -851,6 +854,83 @@ export function CesiumDigitalTwinViewer({
     return segments;
   };
 
+  /**
+   * Clips a polygon ring (array of [lng, lat]) strictly inside a polygon boundary (array of [lat, lng]).
+   * Uses Sutherland-Hodgman clipping to ensure lake/reservoir polygons never bleed past the area border.
+   */
+  const clipPolygonToPolygon = (
+    subjectRing: [number, number][],
+    clipPoly: [number, number][]
+  ): [number, number][] => {
+    if (!clipPoly || clipPoly.length < 3) return subjectRing;
+    const clip = clipPoly.map(([lat, lng]) => [lng, lat] as [number, number]);
+    if (
+      clip.length > 3 &&
+      clip[0][0] === clip[clip.length - 1][0] &&
+      clip[0][1] === clip[clip.length - 1][1]
+    ) {
+      clip.pop();
+    }
+    let area = 0;
+    for (let i = 0; i < clip.length; i++) {
+      const j = (i + 1) % clip.length;
+      area += clip[i][0] * clip[j][1] - clip[j][0] * clip[i][1];
+    }
+    const ccw = area > 0;
+
+    let outputList = [...subjectRing];
+    if (
+      outputList.length > 3 &&
+      outputList[0][0] === outputList[outputList.length - 1][0] &&
+      outputList[0][1] === outputList[outputList.length - 1][1]
+    ) {
+      outputList.pop();
+    }
+
+    for (let i = 0; i < clip.length; i++) {
+      const cp1 = clip[i];
+      const cp2 = clip[(i + 1) % clip.length];
+      const inputList = outputList;
+      outputList = [];
+      if (inputList.length === 0) break;
+
+      const isInside = (p: [number, number]) => {
+        const cross = (cp2[0] - cp1[0]) * (p[1] - cp1[1]) - (cp2[1] - cp1[1]) * (p[0] - cp1[0]);
+        return ccw ? cross >= -1e-10 : cross <= 1e-10;
+      };
+
+      const computeInter = (p1: [number, number], p2: [number, number]): [number, number] => {
+        const inter = lineSegmentIntersection(p1[0], p1[1], p2[0], p2[1], cp1[0], cp1[1], cp2[0], cp2[1]);
+        if (inter) return inter;
+        const dcx = cp1[0] - cp2[0], dcy = cp1[1] - cp2[1];
+        const dpx = p1[0] - p2[0], dpy = p1[1] - p2[1];
+        const n1 = cp1[0] * cp2[1] - cp1[1] * cp2[0];
+        const n2 = p1[0] * p2[1] - p1[1] * p2[1];
+        const denom = dcx * dpy - dcy * dpx;
+        if (Math.abs(denom) < 1e-12) return p1;
+        return [(n1 * dpx - dcx * n2) / denom, (n1 * dpy - dcy * n2) / denom];
+      };
+
+      let s = inputList[inputList.length - 1];
+      for (const e of inputList) {
+        if (isInside(e)) {
+          if (!isInside(s)) {
+            outputList.push(computeInter(s, e));
+          }
+          outputList.push(e);
+        } else if (isInside(s)) {
+          outputList.push(computeInter(s, e));
+        }
+        s = e;
+      }
+    }
+
+    if (outputList.length >= 3) {
+      outputList.push([...outputList[0]]);
+    }
+    return outputList.length >= 4 ? outputList : [];
+  };
+
   // Ensure 3D engine script & stylesheet are loaded
   useEffect(() => {
     if (typeof Cesium !== "undefined") {
@@ -1148,115 +1228,118 @@ export function CesiumDigitalTwinViewer({
     return R * c;
   };
 
-  // ─── 🛣️ 3D ROAD NETWORK RENDERING ───
+  // ─── 🛣️ 3D ROAD NETWORK RENDERING (BATCHED GROUND POLYLINE PRIMITIVES) ───
   const render3DRoads = (roads: RoadFeature[], visible: boolean) => {
     visible = layerVisibilityRef.current.roads;
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
 
+    // 1. Remove previous road primitives
+    roadPrimitivesRef.current.forEach((prim) => {
+      try {
+        if (!prim.isDestroyed()) viewer.scene.primitives.remove(prim);
+      } catch (e) {}
+    });
+    roadPrimitivesRef.current = [];
+
+    // 2. Cleanup legacy road entities
     viewer.entities.suspendEvents();
     try {
       roadEntitiesRef.current.forEach((ent) => {
         try { viewer.entities.remove(ent); } catch (e) {}
       });
       roadEntitiesRef.current = [];
-
-      if (!roads || roads.length === 0) {
-        return;
-      }
-
-      const activePoly = getActivePolygon();
-      let minPolyLat = Infinity, maxPolyLat = -Infinity;
-      let minPolyLng = Infinity, maxPolyLng = -Infinity;
-      if (activePoly && activePoly.length >= 3) {
-        for (const [pLat, pLng] of activePoly) {
-          if (pLat < minPolyLat) minPolyLat = pLat;
-          if (pLat > maxPolyLat) maxPolyLat = pLat;
-          if (pLng < minPolyLng) minPolyLng = pLng;
-          if (pLng > maxPolyLng) maxPolyLng = pLng;
-        }
-      }
-      const padLat = Math.max(0.015, (maxPolyLat - minPolyLat) * 0.5);
-      const padLng = Math.max(0.015, (maxPolyLng - minPolyLng) * 0.5);
-
-      roads.forEach((road) => {
-        const coords = road.geometry?.coordinates;
-        if (!coords || coords.length < 2) return;
-
-        const clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
-        if (clippedSegments.length === 0) return;
-
-        const rType = road.properties?.road_type || "residential";
-        const isMajor = road.properties?.is_major ?? ["motorway", "trunk", "primary", "secondary"].includes(rType);
-        const access = road.properties?.accessibility || "open";
-        const risk = road.properties?.flood_risk || 0;
-        const widthPx = road.properties?.width_px;
-
-        // Cartographic hierarchy with dark casing:
-        // Ensures roads/paths never mix with rivers (zIndex: 30 > 15) or house boundaries
-        let strokeColor: string;
-        let outlineColor: string;
-        let lineWidth: number;
-        let outlineWidth: number;
-
-        if (access === "flooded" || risk >= 0.7) {
-          strokeColor = "#ef4444";   // Danger red — flooded road
-          outlineColor = "#7f1d1d";  // Deep crimson outline
-          lineWidth = widthPx ?? 6.0;
-          outlineWidth = 2.0;
-        } else if (rType === "motorway" || rType === "trunk") {
-          strokeColor = "#f59e0b";   // Amber-500 — arterial highways
-          outlineColor = "#0f172a";  // Slate-900 border
-          lineWidth = widthPx ?? 6.5;
-          outlineWidth = 2.0;
-        } else if (rType === "primary") {
-          strokeColor = "#fbbf24";   // Amber-400 — primary connectors
-          outlineColor = "#1e293b";  // Slate-800 border
-          lineWidth = widthPx ?? 5.0;
-          outlineWidth = 1.5;
-        } else if (rType === "secondary" || rType === "tertiary") {
-          strokeColor = "#fef08a";   // Warm cream/yellow-200 — secondary streets
-          outlineColor = "#334155";  // Slate-700 border
-          lineWidth = widthPx ?? 4.0;
-          outlineWidth = 1.5;
-        } else if (rType === "residential" || rType === "living_street" || rType === "unclassified") {
-          strokeColor = "#ffffff";   // Crisp white — residential streets
-          outlineColor = "#334155";  // Slate-700 border
-          lineWidth = widthPx ?? 3.0;
-          outlineWidth = 1.0;
-        } else {
-          strokeColor = "#cbd5e1";   // Light slate — footpaths, trails, service paths
-          outlineColor = "#475569";  // Slate-600 border
-          lineWidth = widthPx ?? 2.0;
-          outlineWidth = 1.0;
-        }
-
-        clippedSegments.forEach((seg) => {
-          const flatPositions = seg.flat();
-          if (flatPositions.length < 4) return;
-
-          const ent = viewer.entities.add({
-            name: `🛣️ ${isMajor ? "Road" : "Path"}: ${road.properties?.name || rType}`,
-            show: visible,
-            polyline: {
-              positions: Cesium.Cartesian3.fromDegreesArray(flatPositions),
-              width: lineWidth,
-              material: new Cesium.PolylineOutlineMaterialProperty({
-                color: Cesium.Color.fromCssColorString(strokeColor),
-                outlineColor: Cesium.Color.fromCssColorString(outlineColor),
-                outlineWidth: outlineWidth,
-              }),
-              clampToGround: true,
-            },
-          });
-          roadEntitiesRef.current.push(ent);
-        });
-      });
     } finally {
       viewer.entities.resumeEvents();
-      viewer.scene.requestRender();
-      console.log(`[DT] render3DRoads: added ${roadEntitiesRef.current.length} entities to viewer`);
     }
+
+    if (!roads || roads.length === 0) {
+      viewer.scene.requestRender();
+      return;
+    }
+
+    const activePoly = getActivePolygon();
+
+    // Group segments into 6 appearance tiers for batching
+    const tiers: Record<string, { instances: any[]; color: string; width: number }> = {
+      flooded: { instances: [], color: "#ef4444", width: 5.5 },
+      highway: { instances: [], color: "#f59e0b", width: 5.0 },
+      primary: { instances: [], color: "#fbbf24", width: 4.2 },
+      secondary: { instances: [], color: "#fef08a", width: 3.5 },
+      residential: { instances: [], color: "#ffffff", width: 2.8 },
+      service: { instances: [], color: "#cbd5e1", width: 2.0 },
+    };
+
+    roads.forEach((road) => {
+      const coords = road.geometry?.coordinates;
+      if (!coords || coords.length < 2) return;
+
+      const clippedSegments = clipPolylineToPolygon(coords as [number, number][], activePoly);
+      if (clippedSegments.length === 0) return;
+
+      const rType = road.properties?.road_type || "residential";
+      const access = road.properties?.accessibility || "open";
+      const risk = road.properties?.flood_risk || 0;
+
+      let tierKey = "residential";
+      if (access === "flooded" || risk >= 0.7) {
+        tierKey = "flooded";
+      } else if (rType === "motorway" || rType === "trunk") {
+        tierKey = "highway";
+      } else if (rType === "primary") {
+        tierKey = "primary";
+      } else if (rType === "secondary" || rType === "tertiary") {
+        tierKey = "secondary";
+      } else if (rType === "residential" || rType === "living_street" || rType === "unclassified") {
+        tierKey = "residential";
+      } else {
+        tierKey = "service";
+      }
+
+      const targetTier = tiers[tierKey];
+
+      clippedSegments.forEach((seg) => {
+        const flatPositions = seg.flat();
+        if (flatPositions.length < 4) return;
+        const positions = Cesium.Cartesian3.fromDegreesArray(flatPositions);
+        if (positions.length < 2) return;
+
+        targetTier.instances.push(
+          new Cesium.GeometryInstance({
+            geometry: new Cesium.GroundPolylineGeometry({
+              positions,
+              width: targetTier.width,
+            }),
+          })
+        );
+      });
+    });
+
+    // Create 1 GroundPolylinePrimitive per tier — replaces 1,000+ entity draw calls with just 3-5 primitives!
+    let totalSegments = 0;
+    Object.entries(tiers).forEach(([, tier]) => {
+      if (tier.instances.length === 0) return;
+      totalSegments += tier.instances.length;
+      try {
+        const prim = new Cesium.GroundPolylinePrimitive({
+          geometryInstances: tier.instances,
+          appearance: new Cesium.PolylineMaterialAppearance({
+            material: Cesium.Material.fromType("Color", {
+              color: Cesium.Color.fromCssColorString(tier.color).withAlpha(0.92),
+            }),
+          }),
+          show: visible,
+          asynchronous: false,
+        });
+        viewer.scene.primitives.add(prim);
+        roadPrimitivesRef.current.push(prim);
+      } catch (err) {
+        console.warn("[DT] GroundPolylinePrimitive for roads failed:", err);
+      }
+    });
+
+    viewer.scene.requestRender();
+    console.log(`[DT] render3DRoads: batched ${totalSegments} road segments into ${roadPrimitivesRef.current.length} primitives (60 FPS)`);
   };
 
   // ─── 🌊 3D RIVER & WATER BODY RENDERING ───
@@ -1341,9 +1424,16 @@ export function CesiumDigitalTwinViewer({
             }
           }
 
-          const outerRing = rings[0].flat();
+          // Clip lake/reservoir boundary strictly to active area polygon so water never bleeds into void
+          const clippedRing = clipPolygonToPolygon(rings[0] as [number, number][], activePoly);
+          if (clippedRing.length < 4) continue;
+          const outerRing = clippedRing.flat();
           if (outerRing.length < 6) continue;
-          const holes = rings.slice(1).map((ring: number[][]) => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flat())));
+          const holes = rings.slice(1).map((ring: number[][]) => {
+            const clippedHole = clipPolygonToPolygon(ring as [number, number][], activePoly);
+            return new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(clippedHole.flat()));
+          }).filter(h => h.positions.length >= 3);
+
           const ent = viewer.entities.add({
             name: `💧 ${props.name || (wType === "reservoir" ? "Reservoir" : wType === "lake" ? "Lake" : "Water Body")}`,
             show: visible,
@@ -1353,6 +1443,7 @@ export function CesiumDigitalTwinViewer({
               height: 0,
               heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
               classificationType: Cesium.ClassificationType.TERRAIN,
+              zIndex: 10,
             },
             label: props.name ? {
               text: `💧 ${props.name}`,
@@ -1373,7 +1464,7 @@ export function CesiumDigitalTwinViewer({
         for (const line of rawLines as [number, number][][]) {
           if (!line || line.length < 2) continue;
 
-          // If line is closed and represents a water body, render as polygon surface
+          // If line is closed and represents a water body, render as clipped polygon surface
           const isClosed = line.length >= 4 && (
             (line[0][0] === line[line.length - 1][0] && line[0][1] === line[line.length - 1][1]) ||
             (Math.abs(line[0][0] - line[line.length - 1][0]) < 1e-4 && Math.abs(line[0][1] - line[line.length - 1][1]) < 1e-4)
@@ -1383,7 +1474,9 @@ export function CesiumDigitalTwinViewer({
               const hasPointInside = line.some(([lng, lat]) => isPointInPolygon(lat, lng, activePoly));
               if (!hasPointInside) continue;
             }
-            const flatRing = line.flat();
+            const clippedLine = clipPolygonToPolygon(line, activePoly);
+            if (clippedLine.length < 4) continue;
+            const flatRing = clippedLine.flat();
             if (flatRing.length >= 6) {
               const ent = viewer.entities.add({
                 name: `💧 ${props.name || (wType === "reservoir" ? "Reservoir" : wType === "lake" ? "Lake" : "Water Body")}`,
@@ -1394,6 +1487,7 @@ export function CesiumDigitalTwinViewer({
                   height: 0,
                   heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                   classificationType: Cesium.ClassificationType.TERRAIN,
+                  zIndex: 10,
                 },
               });
               riverEntitiesRef.current.push(ent);
@@ -1539,27 +1633,58 @@ export function CesiumDigitalTwinViewer({
     console.log(`[DT] render3DRivers: ${riverEntitiesRef.current.length} polygon entities + ${mainInstances.length} main + ${tributaryInstances.length} tributary channel instances (2 primitives) + ${flowAllInstances.length} flow-pulse instances`);
   };
 
-  // ─── 🏢 MICROSOFT GLOBAL ML BUILDING FOOTPRINTS (3D EXTRUDED & RISK-COLORED) ───
+  // ─── 🏢 MICROSOFT GLOBAL ML BUILDING FOOTPRINTS (BATCHED GROUND PRIMITIVES) ───
   const render3DBuildings = async (buildings: BuildingFeature[]) => {
     const generation = ++buildingRenderRef.current;
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
+
+    // 1. Remove previous building primitives
+    if (buildingPrimitiveRef.current) {
+      try {
+        if (!buildingPrimitiveRef.current.isDestroyed()) {
+          viewer.scene.primitives.remove(buildingPrimitiveRef.current);
+        }
+      } catch (e) {}
+      buildingPrimitiveRef.current = null;
+    }
+    if (buildingOutlinePrimitiveRef.current) {
+      try {
+        if (!buildingOutlinePrimitiveRef.current.isDestroyed()) {
+          viewer.scene.primitives.remove(buildingOutlinePrimitiveRef.current);
+        }
+      } catch (e) {}
+      buildingOutlinePrimitiveRef.current = null;
+    }
+
+    // 2. Clean up legacy entities
+    viewer.entities.suspendEvents();
+    try {
       buildingEntitiesRef.current.forEach((entity) => {
         try { viewer.entities.remove(entity); } catch (e) {}
       });
       buildingEntitiesRef.current = [];
+    } finally {
+      viewer.entities.resumeEvents();
+    }
 
-      const activePoly = getActivePolygon();
-      let failed = 0;
-      for (let offset = 0; offset < buildings.length; offset += 40) {
-        if (generation !== buildingRenderRef.current || viewer.isDestroyed()) return;
-        viewer.entities.suspendEvents();
-        try {
-      buildings.slice(offset, offset + 40).forEach((building, batchIndex) => {
-        const idx = offset + batchIndex;
-        try {
+    if (!buildings || buildings.length === 0) {
+      setBuildingLoadStatus("0 building footprints");
+      viewer.scene.requestRender();
+      return;
+    }
+
+    const activePoly = getActivePolygon();
+    const footprintInstances: any[] = [];
+    const outlineInstances: any[] = [];
+    let failed = 0;
+
+    for (let idx = 0; idx < buildings.length; idx++) {
+      if (generation !== buildingRenderRef.current || viewer.isDestroyed()) return;
+      const building = buildings[idx];
+      try {
         const source = building.geometry?.coordinates;
-        if (!source) return;
+        if (!source) continue;
         const polygons = building.geometry.type === "Polygon"
           ? [source as number[][][]]
           : source as number[][][][];
@@ -1568,7 +1693,6 @@ export function CesiumDigitalTwinViewer({
           const outer = rings[0];
           if (!outer || outer.length < 4) return;
 
-          // Compute exact centroid [lat, lon]
           const center = buildingCenter(outer);
           const cLat = center.lat;
           const cLon = center.lon;
@@ -1576,11 +1700,6 @@ export function CesiumDigitalTwinViewer({
           // STRICT FILTER: Only render houses strictly inside the marked area
           if (activePoly && !buildingTouchesArea(rings, activePoly)) return;
 
-          const holes = rings.slice(1).map((ring) => new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ring.flatMap(point => point.slice(0, 2)))));
-
-
-          // User Requirement: Extrusion height logic
-          // small=4–6m, medium=6–10m, large=10–15m based on footprint size
           const rawHeight = Number(
             building.properties?.estimated_height ||
             building.properties?.height ||
@@ -1589,86 +1708,120 @@ export function CesiumDigitalTwinViewer({
           );
           const height = Math.max(3.5, Number.isFinite(rawHeight) ? rawHeight : 6.0);
 
-          // User Requirement: Keep ALL houses uniform radiant orange (#f97316)
-          const risk = "MONITORED";
-          const riskColor = "#f97316";
-
           const enrichedProps = {
             ...building.properties,
             id: building.properties?.id || `MS-BLDG-${idx + 1}`,
             name: building.properties?.name || `Building ${building.properties?.id || `#${idx + 1}`}`,
             lat: cLat,
             lon: cLon,
-
             estimated_height: height,
             height: height,
             elevation: building.properties?.elevation || building.properties?.elevation_m || 298.0,
-            flood_risk: risk,
-            risk_color: riskColor,
+            flood_risk: "MONITORED",
+            risk_color: "#f97316",
             landslide_risk: building.properties?.landslide_risk || "LOW",
             distance_from_river: building.properties?.distance_from_river || `${building.properties?.distance_to_river_m || 350} m`,
             evacuation_zone: building.properties?.evacuation_zone || "Zone B (Monitored Area)",
+            _buildingData: true,
           };
 
-          // Ground-clamped building footprint:
-          // Uses CLAMP_TO_GROUND + ClassificationType.TERRAIN so the footprint drapes
-          // seamlessly onto the 3D terrain surface without floating in the air.
-          // Extrusion with flat base causes floating boxes on mountain slopes;
-          // terrain-classified polygons hug the ground 100% at any elevation.
-          const entity = viewer.entities.add({
-            name: `🏢 ${enrichedProps.name}`,
-            show: layerVisibilityRef.current.buildings,
-            polygon: {
-              hierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(outer.flatMap(point => point.slice(0, 2))), holes),
-              material: Cesium.Color.fromCssColorString("#f97316").withAlpha(0.88),
-              height: 0,
-              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-              classificationType: Cesium.ClassificationType.TERRAIN,
-              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 60000),
-            },
-          });
+          const flatOuter = outer.flatMap((p) => p.slice(0, 2));
+          if (flatOuter.length < 6) return;
+          const positions = Cesium.Cartesian3.fromDegreesArray(flatOuter);
+          if (positions.length < 3) return;
 
-          // Separate outline polyline clamped to ground for clear boundary visibility
-          const rawCoords = outer.flatMap(point => point.slice(0, 2));
-          const isClosed = outer.length >= 2 &&
-            outer[0][0] === outer[outer.length - 1][0] &&
-            outer[0][1] === outer[outer.length - 1][1];
-          const outlineCoords = isClosed ? rawCoords : [...rawCoords, outer[0][0], outer[0][1]];
+          const holes = rings.slice(1).map((ring) =>
+            new Cesium.PolygonHierarchy(
+              Cesium.Cartesian3.fromDegreesArray(ring.flatMap((p) => p.slice(0, 2)))
+            )
+          );
 
-          const outlineEntity = viewer.entities.add({
-            show: layerVisibilityRef.current.buildings,
-            polyline: {
-              positions: Cesium.Cartesian3.fromDegreesArray(outlineCoords),
-              width: 2.5,
-              material: Cesium.Color.fromCssColorString("#ea580c").withAlpha(0.95),
-              clampToGround: true,
-              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 45000),
-            },
-          });
-          (outlineEntity as any)._buildingOutline = true;
-          buildingEntitiesRef.current.push(outlineEntity);
+          try {
+            const polyGeom = new Cesium.PolygonGeometry({
+              polygonHierarchy: new Cesium.PolygonHierarchy(positions, holes),
+            });
+            footprintInstances.push(
+              new Cesium.GeometryInstance({
+                geometry: polyGeom,
+                id: enrichedProps,
+                attributes: {
+                  color: Cesium.ColorGeometryInstanceAttribute.fromColor(
+                    Cesium.Color.fromCssColorString("#f97316").withAlpha(0.88)
+                  ),
+                },
+              })
+            );
+          } catch (geomErr) {
+            failed++;
+          }
 
-          // Attach picking metadata for click popup
-          (entity as any)._buildingData = enrichedProps;
-          (entity as any)._buildingId = enrichedProps.id;
-          buildingEntitiesRef.current.push(entity);
+          // Separate outline clamped to ground for crisp visual definition
+          try {
+            const isClosed =
+              outer.length >= 2 &&
+              outer[0][0] === outer[outer.length - 1][0] &&
+              outer[0][1] === outer[outer.length - 1][1];
+            const outlineCoords = isClosed ? flatOuter : [...flatOuter, outer[0][0], outer[0][1]];
+            const outlinePositions = Cesium.Cartesian3.fromDegreesArray(outlineCoords);
+            if (outlinePositions.length >= 2) {
+              outlineInstances.push(
+                new Cesium.GeometryInstance({
+                  geometry: new Cesium.GroundPolylineGeometry({
+                    positions: outlinePositions,
+                    width: 2.0,
+                  }),
+                })
+              );
+            }
+          } catch (outlineErr) {}
         });
-        } catch (error) {
-          failed++;
-          console.warn("Building footprint could not be rendered", building.properties?.id, error);
-        }
-      });
-        } finally {
-      viewer.entities.resumeEvents();
-      viewer.scene.requestRender();
-        }
-        setBuildingLoadStatus(`Placing buildings on terrain · ${Math.min(offset + 40, buildings.length)} / ${buildings.length}`);
-        await new Promise(resolve => setTimeout(resolve, 16));
+      } catch (err) {
+        failed++;
       }
-      if (generation !== buildingRenderRef.current || viewer.isDestroyed()) return;
-      setBuildingLoadStatus(failed ? `${failed} building footprints could not be rendered.` : `${buildings.length} building footprints loaded`);
-      console.log(`[DT] render3DBuildings: added ${buildingEntitiesRef.current.length} entities to viewer`);
-      viewer.scene.requestRender();
+    }
+
+    if (generation !== buildingRenderRef.current || viewer.isDestroyed()) return;
+
+    // Batched GPU draw calls: 1 call for ALL footprints, 1 call for ALL outlines
+    if (footprintInstances.length > 0) {
+      try {
+        const footprintPrimitive = new Cesium.GroundPrimitive({
+          geometryInstances: footprintInstances,
+          show: layerVisibilityRef.current.buildings,
+          asynchronous: false,
+        });
+        viewer.scene.primitives.add(footprintPrimitive);
+        buildingPrimitiveRef.current = footprintPrimitive;
+      } catch (e) {
+        console.warn("[DT] GroundPrimitive for buildings failed:", e);
+      }
+    }
+
+    if (outlineInstances.length > 0) {
+      try {
+        const outlineColor = Cesium.Color.fromCssColorString("#ea580c").withAlpha(0.95);
+        const outlinePrimitive = new Cesium.GroundPolylinePrimitive({
+          geometryInstances: outlineInstances,
+          appearance: new Cesium.PolylineMaterialAppearance({
+            material: Cesium.Material.fromType("Color", { color: outlineColor }),
+          }),
+          show: layerVisibilityRef.current.buildings,
+          asynchronous: false,
+        });
+        viewer.scene.primitives.add(outlinePrimitive);
+        buildingOutlinePrimitiveRef.current = outlinePrimitive;
+      } catch (e) {
+        console.warn("[DT] GroundPolylinePrimitive for building outlines failed:", e);
+      }
+    }
+
+    setBuildingLoadStatus(
+      failed
+        ? `${buildings.length - failed} building footprints loaded`
+        : `${buildings.length} building footprints loaded`
+    );
+    console.log(`[DT] render3DBuildings: loaded ${footprintInstances.length} building footprints into batched primitives (60 FPS)`);
+    viewer.scene.requestRender();
   };
 
 
@@ -2203,17 +2356,18 @@ export function CesiumDigitalTwinViewer({
 
 
         if (res.buildings) {
-          // Buildings already available from DB cache — render immediately, no separate fetch needed
-          setBuildingFeatures(cachedDbBuildings);
-          setOsmTileStatus(prev => ({ ...prev, buildings: cachedDbBuildings.length }));
-          void render3DBuildings(cachedDbBuildings);
+          // Buildings already available from DB cache — ensure path clearance and boundary conformance
+          const preparedDbBuildings = prepareBuildingFootprints(cachedDbBuildings, activePoly, roads, rivers);
+          setBuildingFeatures(preparedDbBuildings);
+          setOsmTileStatus(prev => ({ ...prev, buildings: preparedDbBuildings.length }));
+          void render3DBuildings(preparedDbBuildings);
           const entry = networkAreaCache[areaCacheKey];
           if (entry) {
-            entry.buildings = cachedDbBuildings;
+            entry.buildings = preparedDbBuildings;
             entry.buildingsLoadedAt = Date.now();
           }
           // If the cached layer was empty, still try loading fresh buildings from OSM
-          if (cachedDbBuildings.length === 0) {
+          if (preparedDbBuildings.length === 0) {
             void loadBuildings(params, roads, rivers, res.bbox, areaCacheKey);
           }
         } else {
@@ -3289,6 +3443,22 @@ export function CesiumDigitalTwinViewer({
   showSrtm30Ref.current = showSrtm30;
   const srtmLoadingRef = useRef(false);
 
+  const syncImageryLayersOrder = (viewer: any) => {
+    if (!viewer || viewer.isDestroyed() || !viewer.imageryLayers) return;
+    try {
+      const layers = viewer.imageryLayers;
+      if (srtmLayerRef.current && layers.contains(srtmLayerRef.current)) {
+        const srtmIdx = layers.indexOf(srtmLayerRef.current);
+        if (srtmIdx > 1) {
+          layers.lowerToBottom(srtmLayerRef.current);
+          if (layers.length > 1) {
+            layers.raise(srtmLayerRef.current);
+          }
+        }
+      }
+    } catch (e) {}
+  };
+
   const loadSrtmLayer = async (viewer: any, opacity: number = 0.65, visible: boolean = true) => {
     if (!viewer || viewer.isDestroyed()) return;
 
@@ -3298,7 +3468,7 @@ export function CesiumDigitalTwinViewer({
         srtmLayerRef.current.show = visible;
         srtmLayerRef.current.alpha = opacity;
         if (visible) {
-          viewer.imageryLayers?.raiseToTop(srtmLayerRef.current);
+          syncImageryLayersOrder(viewer);
         }
         viewer.scene?.requestRender();
       } catch (e) {}
@@ -3319,7 +3489,7 @@ export function CesiumDigitalTwinViewer({
         srtmLayerRef.current.show = showSrtm30Ref.current;
         srtmLayerRef.current.alpha = opacity;
         if (showSrtm30Ref.current) {
-          viewer.imageryLayers?.raiseToTop(srtmLayerRef.current);
+          syncImageryLayersOrder(viewer);
         }
         viewer.scene?.requestRender();
         srtmLoadingRef.current = false;
@@ -3340,8 +3510,8 @@ export function CesiumDigitalTwinViewer({
       const layer = viewer.imageryLayers.addImageryProvider(srtmProvider);
       layer.alpha = opacity;
       layer.show = showSrtm30Ref.current;
-      viewer.imageryLayers.raiseToTop(layer);
       srtmLayerRef.current = layer;
+      syncImageryLayersOrder(viewer);
       viewer.scene?.requestRender();
     } catch (err) {
       console.warn("Failed to load SRTM 30m DEM layer onto 3D terrain:", err);
@@ -3359,8 +3529,8 @@ export function CesiumDigitalTwinViewer({
       // Layer already preloaded / loaded — flip visibility in 0 ms!
       srtmLayerRef.current.show = nextState;
       srtmLayerRef.current.alpha = srtmOpacity;
-      if (nextState) {
-        viewerRef.current?.imageryLayers?.raiseToTop(srtmLayerRef.current);
+      if (nextState && viewerRef.current) {
+        syncImageryLayersOrder(viewerRef.current);
       }
       viewerRef.current?.scene?.requestRender();
     } else if (viewerRef.current) {
@@ -3783,10 +3953,12 @@ export function CesiumDigitalTwinViewer({
             const cam = viewerRef.current.camera;
             const carto = cam.positionCartographic;
             if (carto) {
-              setCamAltitude(Math.round(carto.height));
+              const h = Math.round(carto.height);
+              setCamAltitude((prev) => (Math.abs(prev - h) >= 3 ? h : prev));
             }
             if (cam.heading !== undefined) {
-              setCamHeading(Math.round(Cesium.Math.toDegrees(cam.heading)));
+              const head = Math.round(Cesium.Math.toDegrees(cam.heading));
+              setCamHeading((prev) => (Math.abs(prev - head) >= 2 ? head : prev));
             }
           }
         });
@@ -4099,11 +4271,6 @@ export function CesiumDigitalTwinViewer({
       }
     };
   }, [cesiumReady]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (viewer && !viewer.isDestroyed()) viewer.scene.requestRender();
-  });
 
   // React to Latitude / Longitude / Polygon changes
   useEffect(() => {
@@ -4494,13 +4661,19 @@ export function CesiumDigitalTwinViewer({
     }
   }, [loading, latitude, longitude, areaName]);
 
-  // Toggle Roads visibility without re-creating entities
+  // Toggle Roads visibility without re-creating entities/primitives
   useEffect(() => {
     if (roadEntitiesRef.current.length > 0) {
       roadEntitiesRef.current.forEach((ent) => {
         try { ent.show = showRoads; } catch (e) {}
       });
     }
+    roadPrimitivesRef.current.forEach((prim) => {
+      try {
+        if (!prim.isDestroyed()) prim.show = showRoads;
+      } catch (e) {}
+    });
+    viewerRef.current?.scene?.requestRender();
   }, [showRoads]);
 
   // Toggle Rivers visibility without re-creating entities/primitives
@@ -4542,7 +4715,7 @@ export function CesiumDigitalTwinViewer({
     render3DRiskZones(highRiskZones, showRiskHotspots);
   }, [showRiskHotspots, highRiskZones]);
 
-  // Toggle Buildings visibility without re-creating entities
+  // Toggle Buildings visibility without re-creating entities/primitives
   useEffect(() => {
     if (buildingEntitiesRef.current.length > 0) {
       buildingEntitiesRef.current.forEach((ent) => {
@@ -4551,6 +4724,17 @@ export function CesiumDigitalTwinViewer({
         } catch (e) {}
       });
     }
+    if (buildingPrimitiveRef.current && !buildingPrimitiveRef.current.isDestroyed()) {
+      try {
+        buildingPrimitiveRef.current.show = showBuildings;
+      } catch (e) {}
+    }
+    if (buildingOutlinePrimitiveRef.current && !buildingOutlinePrimitiveRef.current.isDestroyed()) {
+      try {
+        buildingOutlinePrimitiveRef.current.show = showBuildings;
+      } catch (e) {}
+    }
+    viewerRef.current?.scene?.requestRender();
   }, [showBuildings]);
 
   // Interactive 3D Terrain & Entity Click Handler (Buildings, Mesh Nodes, Place, Delete)
@@ -4568,8 +4752,13 @@ export function CesiumDigitalTwinViewer({
         const entity = picked.id;
 
         // User Requirement: Check if 3D building footprint was clicked
-        if ((entity as any)?._buildingData) {
-          setSelectedBuilding((entity as any)._buildingData);
+        const bData =
+          (entity as any)?._buildingData === true
+            ? entity
+            : (entity as any)?._buildingData ||
+              (entity?.id && (entity?.flood_risk || entity?.estimated_height) ? entity : null);
+        if (bData) {
+          setSelectedBuilding(bData);
           setSelectedNodeId(null);
           return;
         }

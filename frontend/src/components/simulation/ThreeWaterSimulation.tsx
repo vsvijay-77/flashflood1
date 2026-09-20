@@ -634,8 +634,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         });
         setIsReady(true);
 
-        // "while rain not load siluaion just start it"
-        const shouldAutoStart = autoStart || (showVisibleRain && active);
+        // User requirement: "only wtaer level or soil moisture either one of them 40 percent trigger water simu otherwise no"
+        // Rain alone does NOT trigger water simulation. Only autoStart triggers water simulation.
+        const shouldAutoStart = Boolean(autoStart);
         if (shouldAutoStart) {
           if (!simulationStartedAtRef.current) {
             simulationStartedAtRef.current = new Date().toISOString();

@@ -3309,9 +3309,10 @@ export function CesiumDigitalTwinViewer({
             } catch (e) {}
           }
 
-          // ─── 1. ATMOSPHERIC RAIN (Strictly sensor rainfall, no simulation) ───
-          const isRainOver20 = telemetry.rainfall > 20 || telemetry.rainfallPct > 20;
-          if (isRainOver20) {
+          // ─── 1. ATMOSPHERIC RAIN (Strictly sensor rainfall > 50%, no simulation) ───
+          // User requirement: "make rain only 50 percent above in simulation"
+          const isRainOver50 = telemetry.hasData && (telemetry.rainfall > 50 || telemetry.rainfallPct > 50);
+          if (isRainOver50) {
             if (!rainActive) {
               setInternalRain(true);
               setShowVisibleRain(true);
@@ -3320,7 +3321,7 @@ export function CesiumDigitalTwinViewer({
             setSimRainIntensity(telemetry.rainfall);
             if (!lastAutoStartedRainRef.current) {
               lastAutoStartedRainRef.current = true;
-              toast.success(`🌧️ Sensor rainfall detected (${telemetry.rainfall.toFixed(1)} mm/h)! Atmospheric rain active.`);
+              toast.success(`🌧️ Sensor rainfall detected (${telemetry.rainfall.toFixed(1)} mm/h > 50%)! Atmospheric rain active.`);
             }
           } else {
             lastAutoStartedRainRef.current = false;
@@ -3332,9 +3333,12 @@ export function CesiumDigitalTwinViewer({
             setSimRainIntensity(0);
           }
 
-          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Soil moisture or water level detected) ───
-          // "also when soil or water level deteced start simu with water even no value in sensors continue simulation simulation not stop water evoving"
-          const isFloodRiskTriggered = telemetry.hasData && (telemetry.waterLevelMm > 0 || telemetry.soilMoisture > 0 || telemetry.waterLevelMm > 40 || telemetry.soilMoisture > 40);
+          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Water level or soil moisture >= 40%, otherwise NO) ───
+          // User requirement: "only wtaer level or soil moisture either one of them 40 percent trigger water simu otherwise no"
+          const isWaterLevelOver40 = telemetry.waterLevelMm >= 40 || (telemetry.waterLevelM * 100) >= 40;
+          const isSoilMoistureOver40 = telemetry.soilMoisture >= 40;
+          const isFloodRiskTriggered = telemetry.hasData && (isWaterLevelOver40 || isSoilMoistureOver40);
+
           if (isFloodRiskTriggered) {
             const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
               ? Number(telemetry.waterLevelM.toFixed(2))
@@ -3353,17 +3357,22 @@ export function CesiumDigitalTwinViewer({
 
             if (!lastAutoStartedFloodRef.current) {
               lastAutoStartedFloodRef.current = true;
-              const triggerReason = telemetry.waterLevelMm > 40 && telemetry.soilMoisture > 40
-                ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) & Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) > 40`
-                : telemetry.waterLevelMm > 0
-                ? `Water level detected (${telemetry.waterLevelMm.toFixed(0)} mm)`
-                : `Soil moisture detected (${telemetry.soilMoisture.toFixed(0)}%)`;
-              toast.success(`🌊 ${triggerReason}: Simulation started with water! Water continues evolving.`);
+              const triggerReason = isWaterLevelOver40 && isSoilMoistureOver40
+                ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) & Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) ≥ 40%`
+                : isWaterLevelOver40
+                ? `Water level reached 40% threshold (${telemetry.waterLevelMm.toFixed(0)} mm)`
+                : `Soil moisture reached 40% threshold (${telemetry.soilMoisture.toFixed(0)}%)`;
+              toast.success(`🌊 ${triggerReason}: Simulation started with water!`);
             }
-          } else if (autoStartedBySensorRef.current) {
-            // User requirement: "even no value in sensors continue simulation simulation not stop water evoving"
-            setWaterSimActive(true);
-            flashFloodRef.current?.startSimulation();
+          } else {
+            // User requirement: "otherwise no"
+            if (autoStartedBySensorRef.current || sensorAutoFlood) {
+              autoStartedBySensorRef.current = false;
+              setSensorAutoFlood(false);
+              setWaterSimActive(false);
+              lastAutoStartedFloodRef.current = false;
+              flashFloodRef.current?.closeSimulation?.();
+            }
           }
         } else {
           // "if no data display 0 in that tab"
@@ -3380,10 +3389,13 @@ export function CesiumDigitalTwinViewer({
           }
           setSimRainIntensity(0);
 
-          // User requirement: "even no value in sensors continue simulation simulation not stop water evoving"
-          if (autoStartedBySensorRef.current) {
-            setWaterSimActive(true);
-            flashFloodRef.current?.startSimulation();
+          // User requirement: "otherwise no"
+          if (autoStartedBySensorRef.current || sensorAutoFlood) {
+            autoStartedBySensorRef.current = false;
+            setSensorAutoFlood(false);
+            setWaterSimActive(false);
+            lastAutoStartedFloodRef.current = false;
+            flashFloodRef.current?.closeSimulation?.();
           }
         }
       } catch (err) {
@@ -3401,10 +3413,13 @@ export function CesiumDigitalTwinViewer({
           }
           setSimRainIntensity(0);
 
-          // User requirement: "even no value in sensors continue simulation simulation not stop water evoving"
-          if (autoStartedBySensorRef.current) {
-            setWaterSimActive(true);
-            flashFloodRef.current?.startSimulation();
+          // User requirement: "otherwise no"
+          if (autoStartedBySensorRef.current || sensorAutoFlood) {
+            autoStartedBySensorRef.current = false;
+            setSensorAutoFlood(false);
+            setWaterSimActive(false);
+            lastAutoStartedFloodRef.current = false;
+            flashFloodRef.current?.closeSimulation?.();
           }
         }
       }
@@ -5520,6 +5535,7 @@ export function CesiumDigitalTwinViewer({
         windSpeedKmh={simWindSpeed}
         groundHeight={groundHeightMeters}
         isFlatView={viewMode === "flat"}
+        thresholdMmH={50}
         forceActive={(rainActive || showVisibleRain) && simRainIntensity > 0}
       />
 

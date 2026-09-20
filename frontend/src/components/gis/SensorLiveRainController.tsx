@@ -8,7 +8,7 @@ export interface SensorLiveRainControllerProps {
   windSpeedKmh?: number;
   groundHeight?: number;
   isFlatView?: boolean;
-  thresholdMmH?: number; // Threshold to trigger rain (default: 20 mm/h / 20%)
+  thresholdMmH?: number; // Threshold to trigger rain (default: 50 mm/h / 50%)
   forceActive?: boolean; // Optional manual override
 }
 
@@ -18,7 +18,7 @@ export interface SensorLiveRainControllerProps {
  * Standalone, lightweight atmospheric rain controller driven strictly by live sensor telemetry.
  * 
  * Specification:
- * - If sensor rainfall is detected (> threshold), make the rain fall based on that exact intensity.
+ * - If sensor rainfall is detected (> threshold, e.g. 50%), make the rain fall based on that exact intensity.
  * - No simulation page / sheet opened.
  * - No flood water increase, no Three.js water mesh, no river flooding physics.
  * - Just atmospheric rainfall visualization rendered on top of the Cesium monitored zone.
@@ -30,7 +30,7 @@ export function SensorLiveRainController({
   windSpeedKmh = 20,
   groundHeight = 293,
   isFlatView = false,
-  thresholdMmH = 20,
+  thresholdMmH = 50,
   forceActive = false,
 }: SensorLiveRainControllerProps) {
   // Rain is active if detected sensor rainfall exceeds threshold, or forced active

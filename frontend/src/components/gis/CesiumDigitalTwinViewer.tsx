@@ -4703,14 +4703,12 @@ export function CesiumDigitalTwinViewer({
   }, [showRoads]);
 
   // Toggle Rivers visibility without re-creating entities/primitives.
-  // When 3D water simulation is running, hide 2D vector primitives and flow pulses to prevent multi-layer mismatch upon zoom.
   useEffect(() => {
-    const isWaterSimActive = waterSimActive || isFloodRunning;
     riverEntitiesRef.current.forEach((ent) => {
-      try { ent.show = showRivers && !isWaterSimActive; } catch (e) {}
+      try { ent.show = showRivers; } catch (e) {}
     });
     riverPrimitivesRef.current.forEach((prim) => {
-      try { prim.show = showRivers && !isWaterSimActive; } catch (e) {}
+      try { prim.show = showRivers; } catch (e) {}
     });
     // Flow pulse is disabled under 3D simulation to eliminate overlapping multi-layer visual conflict
     riverFlowPrimitivesRef.current.forEach((prim) => {

@@ -3364,15 +3364,9 @@ export function CesiumDigitalTwinViewer({
                 : `Soil moisture reached 40% threshold (${telemetry.soilMoisture.toFixed(0)}%)`;
               toast.success(`🌊 ${triggerReason}: Simulation started with water!`);
             }
-          } else {
-            // User requirement: "otherwise no"
-            if (autoStartedBySensorRef.current || sensorAutoFlood) {
-              autoStartedBySensorRef.current = false;
-              setSensorAutoFlood(false);
-              setWaterSimActive(false);
-              lastAutoStartedFloodRef.current = false;
-              flashFloodRef.current?.closeSimulation?.();
-            }
+          } else if (autoStartedBySensorRef.current) {
+            // User requirement: "when soil moisture or water level flood simulation st but even values reach 0 not stop simulation justinue only user can stop it"
+            setWaterSimActive(true);
           }
         } else {
           // "if no data display 0 in that tab"
@@ -3389,13 +3383,9 @@ export function CesiumDigitalTwinViewer({
           }
           setSimRainIntensity(0);
 
-          // User requirement: "otherwise no"
-          if (autoStartedBySensorRef.current || sensorAutoFlood) {
-            autoStartedBySensorRef.current = false;
-            setSensorAutoFlood(false);
-            setWaterSimActive(false);
-            lastAutoStartedFloodRef.current = false;
-            flashFloodRef.current?.closeSimulation?.();
+          // User requirement: "even values reach 0 not stop simulation justinue only user can stop it"
+          if (autoStartedBySensorRef.current) {
+            setWaterSimActive(true);
           }
         }
       } catch (err) {
@@ -3413,13 +3403,9 @@ export function CesiumDigitalTwinViewer({
           }
           setSimRainIntensity(0);
 
-          // User requirement: "otherwise no"
-          if (autoStartedBySensorRef.current || sensorAutoFlood) {
-            autoStartedBySensorRef.current = false;
-            setSensorAutoFlood(false);
-            setWaterSimActive(false);
-            lastAutoStartedFloodRef.current = false;
-            flashFloodRef.current?.closeSimulation?.();
+          // User requirement: "even values reach 0 not stop simulation justinue only user can stop it"
+          if (autoStartedBySensorRef.current) {
+            setWaterSimActive(true);
           }
         }
       }
@@ -4716,37 +4702,29 @@ export function CesiumDigitalTwinViewer({
     viewerRef.current?.scene?.requestRender();
   }, [showRoads]);
 
-  // Toggle Rivers visibility without re-creating entities/primitives
+  // Toggle Rivers visibility without re-creating entities/primitives.
+  // When 3D water simulation is running, hide 2D vector primitives and flow pulses to prevent multi-layer mismatch upon zoom.
   useEffect(() => {
+    const isWaterSimActive = waterSimActive || isFloodRunning;
     riverEntitiesRef.current.forEach((ent) => {
-      try { ent.show = showRivers; } catch (e) {}
+      try { ent.show = showRivers && !isWaterSimActive; } catch (e) {}
     });
     riverPrimitivesRef.current.forEach((prim) => {
-      try { prim.show = showRivers; } catch (e) {}
+      try { prim.show = showRivers && !isWaterSimActive; } catch (e) {}
     });
-    // Flow pulse follows river visibility
+    // Flow pulse is disabled under 3D simulation to eliminate overlapping multi-layer visual conflict
     riverFlowPrimitivesRef.current.forEach((prim) => {
-      try { prim.show = showRivers && isFloodRunning; } catch (e) {}
+      try { prim.show = false; } catch (e) {}
     });
     viewerRef.current?.scene?.requestRender();
-  }, [showRivers, isFloodRunning]);
+  }, [showRivers, isFloodRunning, waterSimActive]);
 
-  // Show/hide animated flow pulse on river lines when simulation starts or stops.
-  // Also switch Cesium between requestRenderMode and continuous mode so czm_frameNumber
-  // advances continuously (needed for the flowing animation) when the simulation is active.
+  // Keep Cesium requestRenderMode active so frames render smoothly without GPU thread contention or lag
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
-    // Show flow animation only when rivers are visible and simulation is running
-    const showFlow = isFloodRunning && showRivers;
-    riverFlowPrimitivesRef.current.forEach((prim) => {
-      try { prim.show = showFlow; } catch (e) {}
-    });
-    // Switch Cesium to continuous render mode so animation frames advance
-    viewer.scene.requestRenderMode = !isFloodRunning;
-    if (isFloodRunning) {
-      viewer.scene.maximumRenderTimeChange = Infinity;
-    }
+    viewer.scene.requestRenderMode = true;
+    viewer.scene.maximumRenderTimeChange = 1.0;
     viewer.scene.requestRender();
   }, [isFloodRunning]);
 

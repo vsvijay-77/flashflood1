@@ -279,13 +279,8 @@ export const WaterFragmentShader = /* glsl */ `
     // Blue-tinted caustics sparkle on shallower, moving water.
     depthColor += vec3(caustics * 0.14) * vec3(0.08, 0.62, 1.0);
 
-    // Shallow water is translucent enough to retain terrain texture and relief.
-    vec3 transmitted = refractedGround * absorption + depthColor * (1.0 - absorption);
-    float terrainVisibility = mix(0.58, 0.14, smoothstep(0.12, 1.50, vDepth));
-    vec3 terrainBlend = mix(depthColor, transmitted, terrainVisibility);
-
-    // Reflections strengthen naturally at grazing angles without flattening the terrain.
-    vec3 waterSurface = mix(terrainBlend, reflectedColor, fresnel * 0.25) + specHighlight;
+    // Natural fluid surface: Fresnel reflections and sun glints over depth-based body color
+    vec3 waterSurface = mix(depthColor, reflectedColor, fresnel * 0.35) + specHighlight;
 
     // ─── SURFACE WAVES & SUBTLE FOAM ──────────────────────────────────────────
     vec2 rc = p * 0.40;
@@ -300,9 +295,10 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 foamColor = vec3(0.46, 0.84, 0.96);
     vec3 finalColor = mix(waterSurface, foamColor, max(crestFoam, rapidFoam));
 
-    // Opacity: smooth alpha transition — water gently swells into view instead of popping in abruptly
+    // Opacity: smooth alpha transition — underlying Cesium 3D terrain naturally shows through
+    // without duplicate screen-space re-projection (prevents multi-layer mismatch upon zoom)
     float marginBlend = smoothstep(wetThreshold, floodThreshold + 0.045, vDepth);
-    float depthAlpha = mix(0.24, 0.86, smoothstep(wetThreshold, 0.80, vDepth));
+    float depthAlpha = mix(0.45, 0.92, smoothstep(wetThreshold, 0.80, vDepth));
     float alpha = marginBlend * depthAlpha;
 
     gl_FragColor = vec4(finalColor, alpha);
@@ -326,19 +322,19 @@ export function createWaterShaderMaterial(
       uWaveHeight: { value: 0.8 },
       uWindSpeed: { value: 15.0 },
       uResolution: { value: resolution },
-      uSceneColor: { value: sceneColorTexture },
+      uSceneColor: { value: null },
       uTerrainHeight: { value: terrainHeightTexture },
       uSunDirection: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
       uSunColor: { value: new THREE.Color(1.0, 1.0, 0.95) },
       uWaterColorDeep: { value: new THREE.Color(0.012, 0.412, 0.631) },    // #0369a1
       uWaterColorShallow: { value: new THREE.Color(0.008, 0.518, 0.780) }, // #0284c7
       uSkyColor: { value: new THREE.Color(0.055, 0.647, 0.914) },          // #0ea5e9
-      uHasSceneColor: { value: sceneColorTexture ? 1.0 : 0.0 },
+      uHasSceneColor: { value: 0.0 },
     },
     transparent: true,
     depthTest: true,
     depthWrite: false,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide, // FrontSide only: eliminates double-sheet backface rendering on zoom
   });
 
   return material;

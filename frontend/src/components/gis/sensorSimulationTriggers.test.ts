@@ -58,8 +58,47 @@ describe("Sensor Simulation Triggers", () => {
       expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 45, waterLevelM: 0.45, soilMoisture: 55 })).toBe(true);
     });
 
-    it("does NOT trigger water simulation when telemetry has no data ('otherwise no')", () => {
+    it("does NOT trigger water simulation when telemetry has no data initially", () => {
       expect(shouldTriggerWaterSimulation({ hasData: false, waterLevelMm: 80, waterLevelM: 0.8, soilMoisture: 90 })).toBe(false);
+    });
+  });
+
+  describe("Simulation Persistence ('even values reach 0 not stop simulation just continue only user can stop it')", () => {
+    it("keeps water simulation running when values drop to 0 after being auto-started", () => {
+      let isSimActive = false;
+      let autoStartedBySensor = false;
+
+      // 1. Telemetry reaches 45% soil moisture -> triggers simulation
+      const telemetry1 = { hasData: true, waterLevelMm: 10, waterLevelM: 0.1, soilMoisture: 45 };
+      if (shouldTriggerWaterSimulation(telemetry1)) {
+        isSimActive = true;
+        autoStartedBySensor = true;
+      }
+      expect(isSimActive).toBe(true);
+      expect(autoStartedBySensor).toBe(true);
+
+      // 2. Sensor values drop to 0
+      const telemetry2 = { hasData: true, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 0 };
+      const triggered = shouldTriggerWaterSimulation(telemetry2);
+      expect(triggered).toBe(false);
+
+      // In CesiumDigitalTwinViewer:
+      if (triggered) {
+        isSimActive = true;
+        autoStartedBySensor = true;
+      } else if (autoStartedBySensor) {
+        // User rule: even values reach 0 not stop simulation, just continue
+        isSimActive = true;
+      }
+      expect(isSimActive).toBe(true); // Still running!
+
+      // 3. User manually stops simulation
+      function onUserStop() {
+        autoStartedBySensor = false;
+        isSimActive = false;
+      }
+      onUserStop();
+      expect(isSimActive).toBe(false);
     });
   });
 });

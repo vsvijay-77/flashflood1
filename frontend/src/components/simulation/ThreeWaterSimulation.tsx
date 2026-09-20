@@ -105,7 +105,6 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const terrainMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
-    const sceneColorTextureRef = useRef<THREE.CanvasTexture | null>(null);
 
     // Physics Engine Ref
     const physicsSimRef = useRef<WaterPhysicsSimulation | null>(null);
@@ -755,7 +754,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         terrainIndices.push(a, d, b, b, d, d + 1);
       }
       terrainGeometry.setIndex(terrainIndices);
-      const terrainMesh = new THREE.Mesh(terrainGeometry, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }));
+      const terrainMesh = new THREE.Mesh(terrainGeometry, new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.FrontSide }));
       terrainMesh.frustumCulled = false;
       scene.add(terrainMesh);
       terrainMeshRef.current = terrainMesh;
@@ -763,14 +762,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       const container = canvasContainerRef.current;
       const res = new THREE.Vector2(container?.clientWidth || 800, container?.clientHeight || 600);
 
-      sceneColorTextureRef.current?.dispose();
-      const sceneTexture = new THREE.CanvasTexture(cesiumViewer.scene.canvas);
-      sceneTexture.colorSpace = THREE.SRGBColorSpace;
-      sceneTexture.minFilter = THREE.LinearFilter;
-      sceneTexture.magFilter = THREE.LinearFilter;
-      sceneColorTextureRef.current = sceneTexture;
-
-      const material = createWaterShaderMaterial(sceneTexture, null, res);
+      const material = createWaterShaderMaterial(null, null, res);
       waterMaterialRef.current = material;
 
       const mesh = new THREE.Mesh(geometry, material);
@@ -896,7 +888,6 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
         const mat = waterMaterialRef.current;
         if (mat) {
-          if (sceneColorTextureRef.current) sceneColorTextureRef.current.needsUpdate = true;
           // Wave animation: base rate=1.0 so water always looks alive at 1x
           // Scales with speed when simulation is running (faster spread = faster waves)
           const waveRate = isRunningRef.current && !isPausedRef.current
@@ -1127,8 +1118,6 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           waterMaterialRef.current.dispose();
           waterMaterialRef.current = null;
         }
-        sceneColorTextureRef.current?.dispose();
-        sceneColorTextureRef.current = null;
         if (rendererRef.current) {
           try {
             rendererRef.current.dispose();

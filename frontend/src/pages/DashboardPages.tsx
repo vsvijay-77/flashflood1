@@ -481,12 +481,6 @@ export function GISMonitoringPage() {
   const navigate = useNavigate();
   const [creatingTwin, setCreatingTwin] = useState(false);
 
-  useEffect(() => {
-    if (customAreas.length > 0 && !selectedArea) {
-      setSelectedArea(customAreas[0]);
-    }
-  }, [customAreas, selectedArea]);
-
   const handleCreateDigitalTwin = async (areaToTwin: CustomArea | null) => {
     if (!areaToTwin) {
       toast.error("Please select a monitored area on the map first.");
@@ -561,6 +555,12 @@ export function GISMonitoringPage() {
     }
     return [];
   });
+
+  useEffect(() => {
+    if (customAreas.length > 0 && !selectedArea) {
+      setSelectedArea(customAreas[0]);
+    }
+  }, [customAreas, selectedArea]);
 
   useEffect(() => {
     supabase

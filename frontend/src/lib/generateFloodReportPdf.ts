@@ -50,7 +50,7 @@ export function generateFloodReportPdf(options: FloodReportPdfOptions): jsPDF {
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.text("ENVIRONMENTAL INTELLIGENCE NETWORK (EIN) • 3D DIGITAL TWIN", margin, 9);
+    doc.text("NEXGI • ENVIRONMENTAL INTELLIGENCE NETWORK (EIN) • 3D DIGITAL TWIN", margin, 9);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);

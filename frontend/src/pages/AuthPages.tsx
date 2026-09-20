@@ -22,8 +22,8 @@ function AuthVisual({ heading, sub }: { heading: string; sub: string }) {
           <ShieldCheck className="size-5" />
         </span>
         <span>
-          <span className="block text-[11px] font-bold uppercase tracking-[0.2em] text-sky-300">Environmental</span>
-          <span className="block text-[13px] font-bold uppercase tracking-[0.14em] text-white">Intelligence Network</span>
+          <span className="block text-[16px] font-black tracking-wider text-white">NEXGI</span>
+          <span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-sky-300">Intelligence Network</span>
         </span>
       </div>
 
@@ -206,7 +206,7 @@ export function LoginPage() {
     <AuthFrame visual={<AuthVisual heading="Environmental intelligence, one operational picture" sub="Live LoRaWAN telemetry, GIS hazard mapping and AI risk scoring for authorized government officials." />}>
       <Card className="border-slate-200/80 p-8 shadow-sm" data-testid="login-card">
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Welcome Back</h1>
-        <p className="mt-1.5 text-sm text-slate-600">Sign in to access the Environmental Intelligence Platform.</p>
+        <p className="mt-1.5 text-sm text-slate-600">Sign in to access the NEXGI Environmental Intelligence Platform.</p>
 
         {errors.form ? (
           <div className="mt-5 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" data-testid="login-error-alert">

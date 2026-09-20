@@ -61,10 +61,10 @@ export function AboutPlatform() {
             ABOUT THE PLATFORM
           </span>
           <h1 className="mt-8 text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl text-white">
-            A National Environmental Intelligence and <span className="text-emerald-400">Disaster Monitoring Platform</span>
+            NEXGI: National Environmental Intelligence &amp; <span className="text-emerald-400">Disaster Monitoring</span>
           </h1>
           <p className="mt-8 text-xl leading-relaxed text-slate-300 max-w-3xl mx-auto font-light">
-            The Environmental Intelligence Network consolidates IoT telemetry, satellite intelligence, historical hazard datasets, and machine learning into a unified decision-support system for Indian government authorities responsible for environmental monitoring and hazard response.
+            NEXGI consolidates IoT telemetry, satellite intelligence, historical hazard datasets, and machine learning into a unified decision-support system for Indian government authorities responsible for environmental monitoring and hazard response.
           </p>
         </div>
       </section>

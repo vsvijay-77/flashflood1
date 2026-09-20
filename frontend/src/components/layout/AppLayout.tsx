@@ -221,8 +221,8 @@ export default function AppLayout() {
             </Link>
             {!collapsed ? (
               <span className="min-w-0 leading-none">
-                <span className="block text-[10px] font-bold uppercase tracking-[0.18em] text-sky-300">Environmental</span>
-                <span className="block truncate text-[12px] font-bold uppercase tracking-[0.12em] text-white">Intelligence</span>
+                <span className="block text-[15px] font-black tracking-wider text-white">NEXGI</span>
+                <span className="block truncate text-[9px] font-bold uppercase tracking-[0.16em] text-sky-300">Intelligence</span>
               </span>
             ) : null}
           </div>

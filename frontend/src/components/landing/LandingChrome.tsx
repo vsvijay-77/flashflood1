@@ -36,8 +36,8 @@ export function LandingNavbar() {
             <ShieldCheck className="size-5" />
           </span>
           <span className="leading-none">
-            <span className="block text-[11px] font-bold uppercase tracking-[0.2em] text-[#0F4C81]">Environmental</span>
-            <span className="block text-[13px] font-bold uppercase tracking-[0.14em] text-slate-900">Intelligence Network</span>
+            <span className="block text-[16px] font-black tracking-wider text-[#0B2545]">NEXGI</span>
+            <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600">Intelligence Network</span>
           </span>
         </Link>
 
@@ -102,8 +102,8 @@ export function GovernmentFooter() {
               <ShieldCheck className="size-5" />
             </span>
             <span>
-              <span className="block text-[14px] font-bold tracking-tight text-white">Environmental Intelligence Network</span>
-              <span className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-400">From Environmental Signals to Actionable Intelligence.</span>
+              <span className="block text-[16px] font-extrabold tracking-tight text-white">NEXGI</span>
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-400">National Environmental Intelligence Network</span>
             </span>
           </div>
           <p className="mt-6 max-w-md text-sm leading-relaxed text-slate-400">
@@ -133,7 +133,7 @@ export function GovernmentFooter() {
           <span className="relative flex size-1.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex size-1.5 rounded-full bg-red-500"></span></span>
           RESTRICTED GOVERNMENT MONITORING PLATFORM
         </div>
-        <p>© 2026 Environmental Intelligence Network. All authorized access is logged and audited.</p>
+        <p>© 2026 NEXGI. All authorized access is logged and audited.</p>
       </div>
     </footer>
   );

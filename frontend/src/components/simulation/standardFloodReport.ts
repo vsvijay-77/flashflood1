@@ -206,7 +206,7 @@ export function buildStandardFloodReport(
       coordinatesText: `${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E`,
       eventDate: dateStr,
       reportDate: new Date().toLocaleString(),
-      preparedBy: "Environmental Intelligence Network (EIN) • Hydrological Modeling Unit",
+      preparedBy: "NEXGI • Environmental Intelligence Network (EIN) • Hydrological Modeling Unit",
       reportRef: refNum,
     },
 
@@ -341,7 +341,7 @@ export function buildStandardFloodReport(
         "National Disaster Management Authority (NDMA) Flash Flood Guidelines",
         "Central Water Commission (CWC) River Basin Telemetry Standard",
         "WMO No. 1072 — Technical Guidelines for Flood Risk Mapping",
-        "Environmental Intelligence Network (EIN) Digital Twin Architecture v2.4",
+        "NEXGI (Environmental Intelligence Network) Digital Twin Architecture v2.4",
       ],
     },
   };

@@ -60,7 +60,7 @@ ALERTS = [
 
 USERS = [
     # Convenience test account (password overridden below to "12345678").
-    ("Test", "User", "test@gmail.com", "Administrator", "admin", "Environmental Intelligence Network", "Delhi", "New Delhi"),
+    ("Test", "User", "test@gmail.com", "Administrator", "admin", "NEXGI", "Delhi", "New Delhi"),
     ("Arjun", "Mehta", "admin@ein.gov.in", "Administrator", "admin", "National Disaster Management Authority", "Delhi", "New Delhi"),
     ("Priya", "Nair", "officer@ein.gov.in", "Government Official", "gov_officer", "Kerala State Disaster Management Authority", "Kerala", "Wayanad"),
     ("Rakesh", "Bhatt", "field@ein.gov.in", "Forest Officer", "field_officer", "Uttarakhand Forest Department", "Uttarakhand", "Chamoli"),

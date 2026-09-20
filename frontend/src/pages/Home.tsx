@@ -23,7 +23,7 @@ export default function Home() {
         <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:gap-8 lg:px-8">
           <div className="z-10">
             <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-400">
-              ENVIRONMENTAL INTELLIGENCE NETWORK · INDIA
+              NEXGI · ENVIRONMENTAL INTELLIGENCE NETWORK
             </span>
 
             <h1 className="mt-6 text-4xl font-extrabold leading-[1.1] tracking-tight text-white sm:text-5xl lg:text-[56px]">

@@ -196,8 +196,8 @@ export default function OAuthConsentPage() {
               <ShieldCheck className="size-5" />
             </span>
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-sky-700">
-                Environmental Intelligence Network
+              <div className="text-[12px] font-black uppercase tracking-[0.18em] text-sky-700">
+                NEXGI
               </div>
               <div className="text-xs font-semibold text-slate-800">
                 Supabase OAuth 2.1 Identity Server
@@ -284,7 +284,7 @@ export default function OAuthConsentPage() {
                   {authDetails?.client?.name || "Third-Party Application"}
                 </h1>
                 <p className="mt-1 text-sm text-slate-500">
-                  is requesting permission to access your Environmental Intelligence account.
+                  is requesting permission to access your NEXGI account.
                 </p>
 
                 {authDetails?.client?.uri && (
@@ -412,7 +412,7 @@ export default function OAuthConsentPage() {
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white/70 py-3 text-center text-[11px] text-slate-500">
-        Flash Flood &amp; Environmental Intelligence Network © 2026 · Ministry of Environment &amp;
+        NEXGI Environmental Intelligence Network © 2026 · Ministry of Environment &amp;
         Disaster Management
       </footer>
     </div>

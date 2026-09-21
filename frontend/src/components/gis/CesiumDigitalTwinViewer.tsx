@@ -425,6 +425,7 @@ export function CesiumDigitalTwinViewer({
   const [activeSlaveId, setActiveSlaveId] = useState<string | null>(null);
   const [slaveLiveTelemetry, setSlaveLiveTelemetry] = useState<LiveSlaveTelemetry>(defaultLiveTelemetry);
   const lastAutoStartedRainRef = useRef<boolean>(false);
+  const autoStartedRainBySensorRef = useRef<boolean>(false);
   const lastAutoStartedFloodRef = useRef<boolean>(false);
   const autoStartedBySensorRef = useRef<boolean>(false);
   const manuallyStoppedFloodRef = useRef<boolean>(false);
@@ -584,6 +585,7 @@ export function CesiumDigitalTwinViewer({
 
   const handleToggleRain = () => {
     const next = !rainActive;
+    autoStartedRainBySensorRef.current = false;
     setInternalRain(next);
     setShowVisibleRain(next);
     onToggleRain?.(next);
@@ -3309,6 +3311,7 @@ export function CesiumDigitalTwinViewer({
           // User requirement: "make rain only 50 percent above in simulation"
           const isRainOver50 = telemetry.hasData && (telemetry.rainfall > 50 || telemetry.rainfallPct > 50);
           if (isRainOver50) {
+            autoStartedRainBySensorRef.current = true;
             if (!rainActive) {
               setInternalRain(true);
               setShowVisibleRain(true);
@@ -3321,12 +3324,15 @@ export function CesiumDigitalTwinViewer({
             }
           } else {
             lastAutoStartedRainRef.current = false;
-            if (rainActive || internalRain || showVisibleRain) {
+            // CRITICAL: Only auto-stop rain if it was auto-started by sensor and user is not in simulation.
+            // When in simulation or when user manually toggled rain, do NOT auto-kill the rain!
+            if (autoStartedRainBySensorRef.current && !waterSimActive) {
+              autoStartedRainBySensorRef.current = false;
               setInternalRain(false);
               setShowVisibleRain(false);
               onToggleRain?.(false);
             }
-            setSimRainIntensity(0);
+            setSimRainIntensity(telemetry.hasData ? telemetry.rainfall : 0);
           }
 
           // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Water level or soil moisture >= 40%, otherwise NO) ───
@@ -3376,7 +3382,8 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem("dt_live_disaster_alert");
           } catch (e) {}
           lastAutoStartedRainRef.current = false;
-          if (rainActive || internalRain || showVisibleRain) {
+          if (autoStartedRainBySensorRef.current && !waterSimActive) {
+            autoStartedRainBySensorRef.current = false;
             setInternalRain(false);
             setShowVisibleRain(false);
             onToggleRain?.(false);
@@ -3394,7 +3401,8 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem("dt_live_disaster_alert");
           } catch (e) {}
           lastAutoStartedRainRef.current = false;
-          if (rainActive || internalRain || showVisibleRain) {
+          if (autoStartedRainBySensorRef.current && !waterSimActive) {
+            autoStartedRainBySensorRef.current = false;
             setInternalRain(false);
             setShowVisibleRain(false);
             onToggleRain?.(false);
@@ -5499,17 +5507,19 @@ export function CesiumDigitalTwinViewer({
       )}
 
 
-      {/* 🌧️ Standalone Sensor-Driven Live Rain Overlay (Dedicated Separate Code: No simulation, no water increase) */}
-      <SensorLiveRainController
-        viewer={cesiumViewer || viewerRef.current}
-        polygonCoords={getActivePolygon()}
-        sensorRainfall={simRainIntensity}
-        windSpeedKmh={simWindSpeed}
-        groundHeight={groundHeightMeters}
-        isFlatView={viewMode === "flat"}
-        thresholdMmH={50}
-        forceActive={(rainActive || showVisibleRain) && simRainIntensity > 0}
-      />
+      {/* 🌧️ Standalone Sensor-Driven Live Rain Overlay (Active when no water simulation is running) */}
+      {!waterSimActive && (
+        <SensorLiveRainController
+          viewer={cesiumViewer || viewerRef.current}
+          polygonCoords={getActivePolygon()}
+          sensorRainfall={simRainIntensity > 0 ? simRainIntensity : (rainActive || showVisibleRain ? 75 : 0)}
+          windSpeedKmh={simWindSpeed}
+          groundHeight={groundHeightMeters}
+          isFlatView={viewMode === "flat"}
+          thresholdMmH={50}
+          forceActive={Boolean(rainActive || showVisibleRain)}
+        />
+      )}
 
       {/* 🌊 3D Realistic Three.js Water Simulation (OSM Water Bodies + DEM Shallow-Water Flow) */}
       <ThreeWaterSimulation
@@ -5535,7 +5545,12 @@ export function CesiumDigitalTwinViewer({
         onRunningChange={setIsFloodRunning}
         onReadyChange={setIsFloodReady}
         showVisibleRain={showVisibleRain}
-        onToggleVisibleRain={setShowVisibleRain}
+        onToggleVisibleRain={(visible) => {
+          autoStartedRainBySensorRef.current = false;
+          setShowVisibleRain(visible);
+          setInternalRain(visible);
+          onToggleRain?.(visible);
+        }}
         onClose={() => {
           manuallyStoppedFloodRef.current = true;
           setSensorAutoFlood(false);
@@ -5545,6 +5560,7 @@ export function CesiumDigitalTwinViewer({
           setIsFloodRunning(false);
           setIsFloodPaused(false);
           setIsFloodReady(false);
+          setShowVisibleRain(false);
           setInternalRain(false);
           onToggleRain?.(false);
         }}

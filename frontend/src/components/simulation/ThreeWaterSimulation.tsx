@@ -197,13 +197,33 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       }
     }, [defaultSourceRise]);
 
-    const [rainfall, setRainfall] = useState(rainfallMmH ?? 0);
+    const [rainfall, setRainfall] = useState(rainfallMmH && rainfallMmH > 0 ? rainfallMmH : 150);
     const [fps, setFps] = useState(0);
     const [effectiveSpeed, setEffectiveSpeed] = useState(0);
     const [renderScale, setRenderScale] = useState(1);
     const rainfallRef = useRef(rainfall);
     rainfallRef.current = rainfall;
-    useEffect(() => setRainfall(rainfallMmH), [rainfallMmH]);
+    useEffect(() => {
+      if (rainfallMmH && rainfallMmH > 0) {
+        setRainfall(rainfallMmH);
+      }
+    }, [rainfallMmH]);
+
+    const [localShowRain, setLocalShowRain] = useState<boolean>(showVisibleRain ?? false);
+    useEffect(() => {
+      if (showVisibleRain !== undefined) {
+        setLocalShowRain(showVisibleRain);
+      }
+    }, [showVisibleRain]);
+
+    const isRainVisible = showVisibleRain !== undefined ? showVisibleRain : localShowRain;
+    const isRainVisibleRef = useRef<boolean>(isRainVisible);
+    isRainVisibleRef.current = isRainVisible;
+
+    const handleToggleVisibleRain = (visible: boolean) => {
+      setLocalShowRain(visible);
+      onToggleVisibleRain?.(visible);
+    };
     const waterFeaturesRef = useRef(riverFeatures);
     waterFeaturesRef.current = riverFeatures;
     const roadFeaturesRef = useRef(roadFeatures);
@@ -906,7 +926,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             : 0.8; // gentle ambient wave even when idle
           mat.uniforms.uTime.value += dt * waveRate;
           mat.uniforms.uWaveHeight.value = waveIntensityRef.current;
-          mat.uniforms.uRainIntensity.value = isRunningRef.current && physicsSimRef.current && physicsSimRef.current.state.elapsedSeconds < parametersRef.current.durationMinutes * 60 ? rainfallRef.current / 300 : 0;
+          mat.uniforms.uRainIntensity.value = isRainVisibleRef.current
+            ? Math.max(0.4, (rainfallRef.current || 150) / 300)
+            : (isRunningRef.current && physicsSimRef.current && physicsSimRef.current.state.elapsedSeconds < parametersRef.current.durationMinutes * 60
+                ? (rainfallRef.current || 150) / 300
+                : 0);
           renderer.getDrawingBufferSize(mat.uniforms.uResolution.value);
         }
 
@@ -1508,8 +1532,20 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           style={{ width: "100%", height: "100%" }}
         />
 
+        {/* 🌧️ Atmospheric Rain Overlay during Simulation */}
+        <CesiumSelectedAreaRainOverlay
+          viewer={cesiumViewer}
+          polygonCoords={stablePolygon}
+          active={Boolean(isRainVisible)}
+          intensityMm={Math.max(60, rainfall || 150)}
+          windSpeedKmh={parameters.windSpeedKmh}
+          groundHeight={baseElevation}
+          isFlatView={isFlatView}
+          isPaused={isPaused}
+        />
+
         {/* Sleek Loading HUD when initializing terrain and physics (hidden during rain auto-start: "while rain not load siluaion just start it") */}
-        {!isReady && !autoStart && !showVisibleRain && (
+        {!isReady && !autoStart && !isRainVisible && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/40 backdrop-blur-[2px] pointer-events-none transition-all duration-300">
             <div className="flex items-center gap-3.5 rounded-2xl border border-cyan-500/50 bg-slate-950/95 px-6 py-4 text-white shadow-2xl shadow-cyan-950/80">
               <Loader2 className="size-6 animate-spin text-cyan-400" />
@@ -1603,8 +1639,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           onResume={handleResume}
           onReset={handleReset}
           onToggleVisibility={(v) => setShowWater(v)}
-          showRain={showVisibleRain}
-          onToggleRain={onToggleVisibleRain}
+          showRain={isRainVisible}
+          onToggleRain={handleToggleVisibleRain}
           onSourceRiseChange={(r) => setSourceRise(r)}
           onSpeedChange={(s) => setSpeed(s)}
           onWaveIntensityChange={(w) => setWaveIntensity(w)}

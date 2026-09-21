@@ -108,6 +108,22 @@ export function FlashFloodControlPanel(props: Props) {
       <button type="button" disabled={!isReady} onClick={togglePlayback} aria-label={playbackLabel} title={playbackLabel} className="rounded-lg bg-cyan-700 p-2 hover:bg-cyan-600 disabled:opacity-40">
         {isRunning && !isPaused ? <Pause className="size-4" /> : <Play className="size-4" />}
       </button>
+      {props.onToggleRain && (
+        <button
+          type="button"
+          onClick={() => props.onToggleRain?.(!props.showRain)}
+          aria-label={Boolean(props.showRain) ? "Hide rain" : "Show rain"}
+          title={Boolean(props.showRain) ? "Atmospheric rain active — click to turn off" : "Atmospheric rain hidden — click to turn on"}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
+            Boolean(props.showRain)
+              ? "border border-cyan-500 bg-cyan-950/80 text-cyan-200 shadow-md shadow-cyan-950/60"
+              : "border border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <CloudRain className={`size-3.5 ${Boolean(props.showRain) ? "text-cyan-300 animate-pulse" : "text-slate-500"}`} />
+          <span>{Boolean(props.showRain) ? "Rain ON" : "Rain OFF"}</span>
+        </button>
+      )}
       <button
         type="button"
         onClick={props.onToggleGraph}
@@ -198,13 +214,13 @@ export function FlashFloodControlPanel(props: Props) {
                   type="button"
                   onClick={() => props.onToggleRain?.(!props.showRain)}
                   className={`flex items-center gap-2 rounded-lg border px-3 py-2 cursor-pointer ${
-                    props.showRain !== false
+                    Boolean(props.showRain)
                       ? "border-cyan-500 bg-cyan-950/60 text-cyan-200"
                       : "border-slate-700 bg-slate-900 text-slate-400"
                   }`}
                 >
-                  <CloudRain className={`size-4 ${props.showRain !== false ? "text-cyan-300" : "text-slate-500"}`} />
-                  {props.showRain !== false ? "Rain visible" : "Rain hidden"}
+                  <CloudRain className={`size-4 ${Boolean(props.showRain) ? "text-cyan-300" : "text-slate-500"}`} />
+                  {Boolean(props.showRain) ? "Rain visible (ON)" : "Rain hidden (OFF)"}
                 </button>
               )}
               <button type="button" onClick={() => props.onToggleVisibility(!props.showWater)} className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 cursor-pointer">

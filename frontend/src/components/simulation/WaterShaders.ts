@@ -296,11 +296,31 @@ export const WaterFragmentShader = /* glsl */ `
     vec3 foamColor = vec3(0.46, 0.84, 0.96);
     vec3 finalColor = mix(waterSurface, foamColor, max(crestFoam, rapidFoam));
 
-    // Opacity: high-contrast vivid water surface with smooth boundary blending
+    // ─── NATURAL RIVER SHAPE: smooth organic edges instead of square grid ─────
+    // Use fwidth-based anti-aliasing on depth edges to eliminate the blocky
+    // staircase appearance. Water front fades in smoothly like a real river.
+    // Feather depth edge over 1 derivative width → sub-pixel smooth shore.
+    float depthEdge = fwidth(vDepth);
+    float shoreAlpha = smoothstep(wetThreshold, wetThreshold + max(depthEdge * 3.0, 0.005), vDepth);
+
+    // Cross-stream (perpendicular-to-flow) fade narrows the visual channel
+    // so it looks like a real river ribbon, not a filled rectangle.
+    // Only applied in the shallow wetting front; deep water is fully opaque.
+    float crossFlowPos = dot(vWorldPosition.xz, crossFlow);
+    // Apply a gentle cross-stream taper only near the shallow flood margin
+    float channelWidth = smoothstep(0.0, 0.18, vDepth); // 0 → 1 as depth grows from 0 to 0.18m
+    float crossTaper = mix(
+      smoothstep(0.0, 1.0, sin(crossFlowPos * 0.55 + noise(vec2(crossFlowPos * 0.18, uTime * 0.06)) * 1.8)),
+      1.0,
+      channelWidth
+    );
+
+    // Boundary polygon blend
     float boundaryBlend = smoothstep(0.20, 0.80, vInside);
-    float marginBlend = smoothstep(wetThreshold, 0.04, vDepth);
+    // Depth-based opacity: deeper = more opaque
     float depthAlpha = mix(0.65, 0.95, clamp(vDepth / 0.35, 0.0, 1.0));
-    float alpha = marginBlend * depthAlpha * boundaryBlend;
+    // Combine: shore feather × cross-stream taper × depth opacity × polygon boundary
+    float alpha = shoreAlpha * crossTaper * depthAlpha * boundaryBlend;
 
     gl_FragColor = vec4(finalColor, alpha);
     #include <tonemapping_fragment>

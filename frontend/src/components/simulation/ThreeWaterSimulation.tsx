@@ -568,8 +568,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         setOsmFeatureCount(waterFeatureCount);
 
         // Establish initial water depth in rivers and waterways so the channel has visible water immediately
+        // User requirement: "make the width of water body at the start a bit small"
+        // Reduced from 0.45m → 0.12m so the initial river channel appears narrow and grows naturally during simulation.
         for (let i = 0; i < totalCells; i++) {
-          initialDepths[i] = insideMask[i] && sourceMask[i] ? 0.45 : 0.0;
+          initialDepths[i] = insideMask[i] && sourceMask[i] ? 0.12 : 0.0;
         }
 
         // 5. Initialize Physics Simulation Engine with High-to-Low Momentum
@@ -925,10 +927,10 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const elapsedSec = physics.state.elapsedSeconds;
           const secondsUntilStormEnds = stormDurationSec - elapsedSec;
           // Playback speed scaled to slow, observable realistic pace:
-          // User requirement: "make the simulation slow its very fast"
+          // User requirement: "make the simulation slow its very fast" + "MAKE THE EXPANSION OF RIVER SLOW BY 20%"
           // Previously: speedRef.current * 45 made 1x = 45x speed, rushing through the entire flood in seconds.
-          // Now: speedRef.current * 2.0 (1x advances at a realistic, visible ~2x real-time pace).
-          const playbackMultiplier = speedRef.current * 2.0;
+          // Then slowed to 2.0. Now further reduced by 20%: speedRef.current * 1.6.
+          const playbackMultiplier = speedRef.current * 1.6;
           // Advance exactly in display-time chunks so 1x evolves smoothly and
           // higher speeds allow fast-forwarding when desired.
           const safeDt = Math.min(1 / 35, physicsTime);

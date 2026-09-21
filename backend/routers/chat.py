@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-QWEN_API_URL = os.environ.get("LLM_API_URL", "http://3.211.159.169:8000")
+QWEN_API_URL = os.environ.get("LLM_API_URL", "http://127.0.0.1:8080")
 road_service = OSMRoadService()
 river_service = OSMRiverService()
 
@@ -209,21 +209,40 @@ async def chat_stream(req: ChatRequest):
         user_prompt = f"Previous conversation context:\n{history_snippet}\n\nUser Question: {user_prompt}"
 
     async def event_generator():
-        client_timeout = httpx.Timeout(60.0, connect=10.0, read=50.0)
-        data = {
+        client_timeout = httpx.Timeout(90.0, connect=10.0, read=80.0)
+        form_data = {
             "user_prompt": user_prompt,
             "system_prompt": system_prompt,
-            "max_tokens": "384",
         }
-        api_url = f"{QWEN_API_URL.rstrip('/')}/text"
+        plan_url = f"{QWEN_API_URL.rstrip('/')}/plan"
+        text_url = f"{QWEN_API_URL.rstrip('/')}/text"
 
         try:
             async with httpx.AsyncClient(timeout=client_timeout) as client:
-                async with client.stream("POST", api_url, data=data) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_text():
-                        if chunk:
-                            yield f"data: {json.dumps({'token': chunk})}\n\n"
+                stream_response = None
+                try:
+                    # Prioritize /plan endpoint (http://0.0.0.0:8080/docs#/default/plan_plan_post)
+                    resp = await client.post(plan_url, data=form_data)
+                    if resp.status_code == 200:
+                        stream_response = resp
+                    else:
+                        logger.warning(f"/plan returned {resp.status_code}, trying /text fallback")
+                except Exception as plan_err:
+                    logger.warning(f"Failed calling /plan: {plan_err}, trying /text")
+
+                if stream_response is not None:
+                    for line in stream_response.iter_lines():
+                        if line:
+                            yield f"data: {json.dumps({'token': line})}\n\n"
+                    # Or stream response content
+                    if not stream_response.text:
+                        pass
+                else:
+                    async with client.stream("POST", text_url, data=form_data) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_text():
+                            if chunk:
+                                yield f"data: {json.dumps({'token': chunk})}\n\n"
         except Exception as exc:
             logger.error(f"Error streaming directly from API: {exc}")
             err_payload = json.dumps({"token": f"\n\n*[API Streaming Error: {str(exc)}]*"})

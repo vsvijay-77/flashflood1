@@ -14,9 +14,20 @@ class QwenClient:
                 data = {
                     "user_prompt": user_prompt,
                     "system_prompt": system_prompt,
-                    "max_tokens": str(max_tokens)
                 }
-                async with client.stream("POST", f"{self.api_url}/text", data=data) as response:
+                # Try /plan endpoint first (http://0.0.0.0:8080/docs#/default/plan_plan_post)
+                endpoint = f"{self.api_url}/plan"
+                try:
+                    async with client.stream("POST", endpoint, data=data) as response:
+                        if response.status_code == 200:
+                            async for chunk in response.aiter_text():
+                                yield chunk
+                            return
+                except Exception:
+                    pass
+
+                # Fallback to /text
+                async with client.stream("POST", f"{self.api_url}/text", data={"user_prompt": user_prompt, "system_prompt": system_prompt, "max_tokens": str(max_tokens)}) as response:
                     response.raise_for_status()
                     async for chunk in response.aiter_text():
                         yield chunk

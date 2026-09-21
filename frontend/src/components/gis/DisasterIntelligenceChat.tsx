@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 const BACKEND_CHAT_API = "/api/chat";
-const QWEN_DIRECT_API = "http://3.211.159.169:8000/text";
+const QWEN_DIRECT_API = "http://127.0.0.1:8080/plan";
 
 interface Message {
   id: string;
@@ -444,7 +444,47 @@ export default function DisasterIntelligenceChat({
         console.warn("[DisasterChat] Backend stream error, attempting direct Qwen fallback:", err);
       }
 
-      // ── Step 2: Handle fallback if backend stream produced no tokens ──
+      // ── Step 2: Direct call to local Qwen /plan endpoint (http://0.0.0.0:8080/docs#/default/plan_plan_post) ──
+      if (!streamSucceeded && (!accumulated || accumulated.trim().length === 0)) {
+        try {
+          const formData = new FormData();
+          formData.append("user_prompt", text.trim());
+          const sysPrompt = `You are the NEXGI AI Disaster Intelligence Assistant for ${payload.area_name} (${(payload.latitude ?? 10.66).toFixed(4)}°N, ${(payload.longitude ?? 77.00).toFixed(4)}°E). Provide concise, direct emergency evacuation planning, flood risk assessment, and actionable safety instructions.`;
+          formData.append("system_prompt", sysPrompt);
+
+          const directRes = await fetch(QWEN_DIRECT_API, {
+            method: "POST",
+            body: formData,
+            signal: abortRef.current?.signal,
+          });
+
+          if (directRes.ok && directRes.body) {
+            const reader = directRes.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              const chunkText = decoder.decode(value, { stream: true });
+              if (chunkText) {
+                if (activeRequestRef.current !== requestToken) return;
+                accumulated += chunkText;
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === assistantId ? { ...m, text: accumulated } : m))
+                );
+                scrollToBottom();
+              }
+            }
+            if (accumulated.trim().length > 0) {
+              streamSucceeded = true;
+            }
+          }
+        } catch (directErr) {
+          console.warn("[DisasterChat] Direct Qwen /plan stream error:", directErr);
+        }
+      }
+
+      // If still empty after both backend and direct calls:
       if (!streamSucceeded && (!accumulated || accumulated.trim().length === 0)) {
         accumulated = `### 🛡️ AI Disaster Intelligence Report for **${payload.area_name}**\n\n📍 **Location**: ${payload.area_name} (${payload.latitude.toFixed(4)}°N, ${payload.longitude.toFixed(4)}°E)\n\n• **Evacuation Corridor**: Move via primary elevated routes away from low drainage channels.\n• **Status**: Live spatial monitoring active. Check active weather and water flow overlays.`;
         setMessages((prev) =>

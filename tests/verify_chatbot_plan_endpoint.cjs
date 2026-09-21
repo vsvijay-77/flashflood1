@@ -49,19 +49,28 @@ const { chromium } = require("@playwright/test");
 
     // Wait for AI response to stream in from http://127.0.0.1:8080/plan
     console.log("Waiting for stream from Qwen2.5-VL /plan endpoint...");
-    for (let i = 0; i < 30; i++) {
+    let prevLength = 0;
+    let chunksSeen = 0;
+    for (let i = 0; i < 45; i++) {
       await page.waitForTimeout(1000);
-      const assistantMsgs = await page.locator("p.whitespace-pre-wrap").allInnerTexts();
-      const lastMsg = assistantMsgs[assistantMsgs.length - 1] || "";
-      if (lastMsg.length > 30 && !lastMsg.includes("Hello! I'm your AI")) {
-        console.log(`Received streamed response (${lastMsg.length} chars):`, lastMsg.slice(0, 100) + "...");
-        break;
+      const assistantLoc = page.locator("div.space-y-1.text-\\[13px\\], div.relative, div.bg-white.rounded-xl").last();
+      const text = (await assistantLoc.innerText().catch(() => "")) || "";
+      if (text.length > 20 && !text.includes("Hello! I'm your AI")) {
+        if (text.length > prevLength) {
+          chunksSeen++;
+          console.log(`[Chunk ${chunksSeen}] Received streamed text (${text.length} chars): ${text.slice(-50).replace(/\n/g, " ")}`);
+          prevLength = text.length;
+        }
+        if (chunksSeen >= 3 && text.length > 150) {
+          console.log("Verified multi-chunk real-time streaming!");
+          break;
+        }
       }
     }
 
     // Capture screenshot of the chatbot answering in the Digital Twin
-    await page.screenshot({ path: "/Users/vijay/.gemini/antigravity/brain/4d3fbe4f-3b85-4fda-b67d-1b2e94907dad/chatbot_plan_endpoint_verified.png" });
-    console.log("Captured chatbot_plan_endpoint_verified.png");
+    await page.screenshot({ path: "/Users/vijay/.gemini/antigravity/brain/4d3fbe4f-3b85-4fda-b67d-1b2e94907dad/chatbot_chunk_streaming_verified.png" });
+    console.log("Captured chatbot_chunk_streaming_verified.png");
 
     console.log("=== Chatbot verification completed successfully! ===");
   } catch (err) {

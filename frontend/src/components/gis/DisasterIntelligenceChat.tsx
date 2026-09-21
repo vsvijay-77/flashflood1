@@ -80,6 +80,81 @@ function cleanChatText(value: string): string {
   return value.replace(/\|(?:&#x20;)?/g, " ").replace(/&#x20;/g, " ");
 }
 
+function renderInlineBold(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return (
+        <strong key={i} className="font-semibold text-slate-900">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return part;
+  });
+}
+
+function FormattedMessageText({ text }: { text: string }) {
+  if (!text) return null;
+  const lines = text.split("\n");
+
+  return (
+    <div className="space-y-1 text-[13px] leading-relaxed">
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return <div key={idx} className="h-1" />;
+        }
+
+        if (trimmed.startsWith("### ")) {
+          return (
+            <h4 key={idx} className="font-bold text-[13.5px] text-slate-900 mt-2 mb-1 flex items-center gap-1.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#0F4C81]" />
+              {renderInlineBold(trimmed.slice(4))}
+            </h4>
+          );
+        }
+        if (trimmed.startsWith("## ")) {
+          return (
+            <h3 key={idx} className="font-bold text-[14px] text-slate-900 mt-2.5 mb-1 border-b border-slate-100 pb-0.5">
+              {renderInlineBold(trimmed.slice(3))}
+            </h3>
+          );
+        }
+
+        if (/^[-*•]\s+/.test(trimmed)) {
+          const content = trimmed.replace(/^[-*•]\s+/, "");
+          return (
+            <div key={idx} className="flex items-start gap-1.5 ml-1 my-0.5">
+              <span className="text-[#0F4C81] font-bold text-[11px] mt-1 shrink-0">•</span>
+              <span className="text-slate-800">{renderInlineBold(content)}</span>
+            </div>
+          );
+        }
+
+        const orderedMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+        if (orderedMatch) {
+          const [, num, content] = orderedMatch;
+          return (
+            <div key={idx} className="flex items-start gap-1.5 ml-1 my-0.5">
+              <span className="inline-flex items-center justify-center size-4 rounded-full bg-sky-100 text-sky-800 text-[10px] font-bold shrink-0 mt-0.5">
+                {num}
+              </span>
+              <span className="text-slate-800">{renderInlineBold(content)}</span>
+            </div>
+          );
+        }
+
+        return (
+          <p key={idx} className="text-slate-800">
+            {renderInlineBold(line)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function RiskBadge({ level }: { level: string }) {
   const cls = RISK_COLORS[level] ?? RISK_COLORS.UNKNOWN;
   const dot = RISK_DOT[level] ?? RISK_DOT.UNKNOWN;
@@ -163,13 +238,27 @@ function AssistantMessage({
             </div>
           )}
 
-          {/* Streamed text — cursor blinks while streaming */}
-          <p className="text-[13px] text-slate-800 leading-relaxed whitespace-pre-wrap">
-            {cleanChatText(msg.text)}
-            {msg.streaming && (
-              <span className="inline-block w-0.5 h-3.5 bg-[#0F4C81] ml-0.5 align-middle animate-pulse" />
-            )}
-          </p>
+          {/* While streaming with no text yet, show live analyzing status */}
+          {msg.streaming && !msg.text && (
+            <div className="flex items-center gap-2 py-1 text-slate-500 text-[12px]">
+              <div className="flex gap-1">
+                <span className="size-1.5 rounded-full bg-[#0F4C81] animate-bounce" style={{ animationDelay: "0ms" }} />
+                <span className="size-1.5 rounded-full bg-[#0F4C81] animate-bounce" style={{ animationDelay: "150ms" }} />
+                <span className="size-1.5 rounded-full bg-[#0F4C81] animate-bounce" style={{ animationDelay: "300ms" }} />
+              </div>
+              <span className="text-[11px] font-medium text-slate-500">Formulating evacuation & disaster response plan...</span>
+            </div>
+          )}
+
+          {/* Streamed text chunks rendered with clear typography and blinking live cursor */}
+          {msg.text ? (
+            <div className="relative">
+              <FormattedMessageText text={msg.text} />
+              {msg.streaming && (
+                <span className="inline-block w-1.5 h-3.5 bg-[#0F4C81] ml-1 align-middle animate-pulse rounded-xs" />
+              )}
+            </div>
+          ) : null}
 
           {/* Sensor chips */}
           {!msg.streaming && msg.meta?.sensors?.length ? (
@@ -683,17 +772,7 @@ export default function DisasterIntelligenceChat({
           </div>
         ))}
 
-        {/* Typing indicator shown only before first chunk arrives */}
-        {loading && messages[messages.length - 1]?.text === "" && (
-          <div className="flex items-center gap-2 ml-9">
-            <div className="flex gap-1">
-              <span className="size-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-              <span className="size-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-              <span className="size-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "300ms" }} />
-            </div>
-            <span className="text-[11px] text-slate-400">Analyzing…</span>
-          </div>
-        )}
+
       </div>
 
       {/* ── Quick suggestions ── */}

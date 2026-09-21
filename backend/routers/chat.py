@@ -81,11 +81,11 @@ async def _extract_spatial_context(
 
     async def load_paths() -> List[str]:
         if provided_paths:
-            return provided_paths[:100]
+            return provided_paths[:10]
         try:
             _, road_geojson = await asyncio.wait_for(
                 road_service.get_road_network(north, south, east, west, polygon=polygon),
-                timeout=0.3,
+                timeout=0.25,
             )
             named_roads = set()
             for feat in road_geojson.get("features", []):
@@ -97,7 +97,7 @@ async def _extract_spatial_context(
                     named_roads.add(f"{name} ({rtype}{f', {int(length)}m' if length else ''})")
                 elif rtype in ("primary", "secondary", "tertiary", "trunk"):
                     named_roads.add(f"{rtype.capitalize()} Route")
-            return sorted(named_roads)[:100]
+            return sorted(named_roads)[:10]
         except Exception:
             return []
 
@@ -105,7 +105,7 @@ async def _extract_spatial_context(
         try:
             _, river_geojson = await asyncio.wait_for(
                 river_service.get_river_network(north, south, east, west, polygon=polygon),
-                timeout=0.3,
+                timeout=0.25,
             )
             named_rivers = set()
             for feat in river_geojson.get("features", []):
@@ -116,7 +116,7 @@ async def _extract_spatial_context(
                     named_rivers.add(f"{name} ({wtype})")
                 elif wtype in ("river", "stream", "canal"):
                     named_rivers.add(f"Local {wtype.capitalize()}")
-            return sorted(named_rivers)[:50]
+            return sorted(named_rivers)[:6]
         except Exception:
             return []
 
@@ -157,28 +157,24 @@ async def _extract_spatial_context(
 
 
 def _build_system_prompt(spatial: Dict[str, Any], req: ChatRequest) -> str:
-    paths_list = "\n".join(f"  • {p}" for p in spatial["paths"][:30])
-    rivers_list = "\n".join(f"  • {r}" for r in spatial["rivers"][:20])
+    # Limit to top 5 paths and top 3 waterways to guarantee < 1s prompt prefill on Apple Silicon MPS
+    paths_list = "\n".join(f"  • {p}" for p in spatial["paths"][:5])
+    rivers_list = "\n".join(f"  • {r}" for r in spatial["rivers"][:3])
 
-    return f"""You are an authoritative AI Disaster Intelligence & Early Warning Specialist for Flash Floods and Landslides.
-You are embedded directly inside the 3D Digital Twin GIS Operations Command Center.
-
-INITIAL MONITORED LOCATION & GEOGRAPHIC DETAILS:
-- Location Name: {spatial['area_name']}
-- Position: Latitude {spatial['latitude']:.4f}°N, Longitude {spatial['longitude']:.4f}°E
-- Extracted Roads, Paths & Evacuation Corridors:
+    return f"""You are the AI Disaster Intelligence & Early Warning Specialist for {spatial['area_name']} ({spatial['latitude']:.4f}°N, {spatial['longitude']:.4f}°E).
+Monitored Geo-Context:
+- Primary Evacuation Routes:
 {paths_list}
-- River Channels & Drainage Systems:
+- Key Drainage & River Channels:
 {rivers_list}
-- Environmental & Simulation State:
-  Rain simulation: {'active' if req.rain_active else 'inactive'} ({req.rainfall_intensity or 0} mm/h)
-  3D Water flow simulation: {'active' if req.water_sim_active else 'inactive'}
+- Real-time Telemetry & State:
+  Rain: {'active' if req.rain_active else 'inactive'} ({req.rainfall_intensity or 0} mm/h), Water Simulation: {'active' if req.water_sim_active else 'inactive'}
   {spatial['telemetry']}
 
-OPERATIONAL DIRECTIVES:
-1. Always ground your response in the monitored area: "{spatial['area_name']}" at ({spatial['latitude']:.4f}°N, {spatial['longitude']:.4f}°E).
-2. Explicitly mention specific roads, paths, and waterways from above when answering evacuation, flood risk, or weather questions.
-3. Answer the user's question directly, clearly, and concisely in formatted markdown.
+Directives:
+1. Provide a direct, actionable emergency plan, hazard analysis, or evacuation guidance for {spatial['area_name']}.
+2. Reference the above roads and waterways where relevant.
+3. Use clear markdown headings and bullet points.
 """
 
 
@@ -209,35 +205,36 @@ async def chat_stream(req: ChatRequest):
         user_prompt = f"Previous conversation context:\n{history_snippet}\n\nUser Question: {user_prompt}"
 
     async def event_generator():
-        client_timeout = httpx.Timeout(90.0, connect=10.0, read=80.0)
+        # Flush SSE connection headers immediately to client/browser
+        yield ": open\n\n"
+
+        # Generous timeout for comprehensive planning responses (3 minutes)
+        client_timeout = httpx.Timeout(180.0, connect=15.0, read=180.0, write=30.0)
         form_data = {
             "user_prompt": user_prompt,
             "system_prompt": system_prompt,
+            "max_tokens": "600",
         }
         plan_url = f"{QWEN_API_URL.rstrip('/')}/plan"
         text_url = f"{QWEN_API_URL.rstrip('/')}/text"
 
         try:
             async with httpx.AsyncClient(timeout=client_timeout) as client:
-                stream_response = None
+                streamed = False
                 try:
-                    # Prioritize /plan endpoint (http://0.0.0.0:8080/docs#/default/plan_plan_post)
-                    resp = await client.post(plan_url, data=form_data)
-                    if resp.status_code == 200:
-                        stream_response = resp
-                    else:
-                        logger.warning(f"/plan returned {resp.status_code}, trying /text fallback")
+                    # Stream tokens in real-time as chunks from /plan (http://0.0.0.0:8080/docs#/default/plan_plan_post)
+                    async with client.stream("POST", plan_url, data=form_data) as response:
+                        if response.status_code == 200:
+                            async for chunk in response.aiter_text():
+                                if chunk:
+                                    streamed = True
+                                    yield f"data: {json.dumps({'token': chunk})}\n\n"
+                        else:
+                            logger.warning(f"/plan returned {response.status_code}, trying /text fallback")
                 except Exception as plan_err:
-                    logger.warning(f"Failed calling /plan: {plan_err}, trying /text")
+                    logger.warning(f"Failed streaming /plan: {plan_err}, trying /text")
 
-                if stream_response is not None:
-                    for line in stream_response.iter_lines():
-                        if line:
-                            yield f"data: {json.dumps({'token': line})}\n\n"
-                    # Or stream response content
-                    if not stream_response.text:
-                        pass
-                else:
+                if not streamed:
                     async with client.stream("POST", text_url, data=form_data) as response:
                         response.raise_for_status()
                         async for chunk in response.aiter_text():
@@ -254,7 +251,8 @@ async def chat_stream(req: ChatRequest):
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
             "Access-Control-Allow-Origin": "*",
         },

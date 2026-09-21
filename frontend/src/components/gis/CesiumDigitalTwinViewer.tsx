@@ -5534,7 +5534,7 @@ export function CesiumDigitalTwinViewer({
         onPauseChange={setIsFloodPaused}
         onRunningChange={setIsFloodRunning}
         onReadyChange={setIsFloodReady}
-        showVisibleRain={showVisibleRain && !waterSimActive}
+        showVisibleRain={showVisibleRain}
         onToggleVisibleRain={setShowVisibleRain}
         onClose={() => {
           manuallyStoppedFloodRef.current = true;

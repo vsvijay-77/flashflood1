@@ -94,6 +94,7 @@ from routers.buildings import router as buildings_router  # noqa: E402
 from routers.chat import router as chat_router  # noqa: E402
 from routers.external_sensors import router as external_sensors_router  # noqa: E402
 from routers.simulation_pg import router as simulation_pg_router  # noqa: E402
+from routers.weather import router as weather_router  # noqa: E402
 
 api_router.include_router(auth_router)
 api_router.include_router(network_router)
@@ -108,6 +109,7 @@ api_router.include_router(buildings_router)
 api_router.include_router(chat_router)
 api_router.include_router(external_sensors_router)
 api_router.include_router(simulation_pg_router)
+api_router.include_router(weather_router)
 
 
 

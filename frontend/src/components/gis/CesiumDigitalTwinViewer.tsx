@@ -431,6 +431,38 @@ export function CesiumDigitalTwinViewer({
   const manuallyStoppedFloodRef = useRef<boolean>(false);
   const [sensorAutoFlood, setSensorAutoFlood] = useState<boolean>(false);
   const [sensorSimWaterLevel, setSensorSimWaterLevel] = useState<number>(0.8);
+  const [liveWeatherForecast, setLiveWeatherForecast] = useState<Record<string, any>>({});
+  const [weatherDataSource, setWeatherDataSource] = useState<string>("OpenWeatherMap");
+
+  useEffect(() => {
+    const lat = latitude ?? 10.6608;
+    const lon = longitude ?? 77.0048;
+    let isMounted = true;
+    const loadWeather = async () => {
+      try {
+        const res = await fetch(`/api/weather/forecast?lat=${lat}&lon=${lon}&days=7`);
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data.daily && Array.isArray(data.daily)) {
+            const mapped: Record<string, any> = {};
+            data.daily.forEach((d: any) => {
+              if (d.tab) mapped[d.tab] = d;
+            });
+            setLiveWeatherForecast(mapped);
+            if (data.data_source) setWeatherDataSource(data.data_source);
+          }
+        }
+      } catch (err) {
+        console.warn("[Weather] Failed loading OpenWeatherMap forecast:", err);
+      }
+    };
+    loadWeather();
+    const interval = setInterval(loadWeather, 5 * 60 * 1000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [latitude, longitude]);
 
   // ─── 🚨 DISASTER ALERT DETECTION & DB LOGGING ───
   const [activeDisasterAlert, setActiveDisasterAlert] = useState<{
@@ -5023,8 +5055,8 @@ export function CesiumDigitalTwinViewer({
                 <CloudRain className="size-4 text-cyan-400" />
                 <span className="text-xs font-bold text-cyan-200">Weather Forecast</span>
               </div>
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                Live Overview
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800" title="Live data via OpenWeatherMap API">
+                {weatherDataSource.includes("OpenWeatherMap") ? "OpenWeatherMap" : "Live Weather"}
               </span>
             </div>
 
@@ -5034,25 +5066,29 @@ export function CesiumDigitalTwinViewer({
                 <div>
                   <span className="text-slate-400 block text-[9px]">Condition</span>
                   <span className="font-semibold text-white truncate block">
-                    {weatherDayTab === "1d"
-                      ? "Moderate Rain"
-                      : weatherDayTab === "2d"
-                      ? "Heavy Rain"
-                      : weatherDayTab === "3d"
-                      ? "Storm Alert"
-                      : weatherDayTab === "4d"
-                      ? "Thunderstorm"
-                      : weatherDayTab === "5d"
-                      ? "Passing Showers"
-                      : weatherDayTab === "6d"
-                      ? "Light Drizzle"
-                      : "Clear Sky"}
+                    {liveWeatherForecast[weatherDayTab]?.condition || (
+                      weatherDayTab === "1d"
+                        ? "Moderate Rain"
+                        : weatherDayTab === "2d"
+                        ? "Heavy Rain"
+                        : weatherDayTab === "3d"
+                        ? "Storm Alert"
+                        : weatherDayTab === "4d"
+                        ? "Thunderstorm"
+                        : weatherDayTab === "5d"
+                        ? "Passing Showers"
+                        : weatherDayTab === "6d"
+                        ? "Light Drizzle"
+                        : "Clear Sky"
+                    )}
                   </span>
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[9px]">Rainfall Rate</span>
                   <span className="font-mono text-cyan-300 font-bold">
-                    {weatherDayTab === "1d"
+                    {liveWeatherForecast[weatherDayTab]?.rainfall_rate_mmh != null
+                      ? `${liveWeatherForecast[weatherDayTab].rainfall_rate_mmh} mm/h`
+                      : weatherDayTab === "1d"
                       ? "12.4 mm/h"
                       : weatherDayTab === "2d"
                       ? "28.5 mm/h"
@@ -5073,19 +5109,25 @@ export function CesiumDigitalTwinViewer({
                 <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
                   <span className="text-slate-400 block text-[8px]">Temp</span>
                   <span className="font-mono text-cyan-300 font-bold">
-                    {weatherDayTab === "1d" ? "27.4 °C" : weatherDayTab === "2d" ? "24.1 °C" : weatherDayTab === "3d" ? "23.0 °C" : "29.2 °C"}
+                    {liveWeatherForecast[weatherDayTab]?.temp_c != null
+                      ? `${liveWeatherForecast[weatherDayTab].temp_c} °C`
+                      : weatherDayTab === "1d" ? "27.4 °C" : weatherDayTab === "2d" ? "24.1 °C" : weatherDayTab === "3d" ? "23.0 °C" : "29.2 °C"}
                   </span>
                 </div>
                 <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
                   <span className="text-slate-400 block text-[8px]">Humidity</span>
                   <span className="font-mono text-cyan-300 font-bold">
-                    {weatherDayTab === "1d" ? "82%" : weatherDayTab === "2d" ? "94%" : weatherDayTab === "3d" ? "98%" : "71%"}
+                    {liveWeatherForecast[weatherDayTab]?.humidity_pct != null
+                      ? `${liveWeatherForecast[weatherDayTab].humidity_pct}%`
+                      : weatherDayTab === "1d" ? "82%" : weatherDayTab === "2d" ? "94%" : weatherDayTab === "3d" ? "98%" : "71%"}
                   </span>
                 </div>
                 <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
                   <span className="text-slate-400 block text-[8px]">Wind</span>
                   <span className="font-mono text-cyan-300 font-bold">
-                    {weatherDayTab === "1d" ? "14.2 km/h" : weatherDayTab === "2d" ? "28.0 km/h" : weatherDayTab === "3d" ? "36.5 km/h" : "10.1 km/h"}
+                    {liveWeatherForecast[weatherDayTab]?.wind_speed_kmh != null
+                      ? `${liveWeatherForecast[weatherDayTab].wind_speed_kmh} km/h`
+                      : weatherDayTab === "1d" ? "14.2 km/h" : weatherDayTab === "2d" ? "28.0 km/h" : weatherDayTab === "3d" ? "36.5 km/h" : "10.1 km/h"}
                   </span>
                 </div>
               </div>

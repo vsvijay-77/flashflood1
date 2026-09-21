@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from services.location_service import bbox_from_radius, bbox_from_polygon
 from services.osm_road_service import OSMRoadService
 from services.osm_river_service import OSMRiverService
+from services.openweather_service import openweather_service
 from lib.db import db
 
 logger = logging.getLogger(__name__)
@@ -140,11 +141,28 @@ async def _extract_spatial_context(
                 )
         except Exception:
             pass
-        return "All field telemetry nodes operating normally."
+    async def load_weather() -> Dict[str, Any]:
+        try:
+            return await asyncio.wait_for(
+                openweather_service.get_current_weather(effective_lat, effective_lng),
+                timeout=0.35,
+            )
+        except Exception:
+            return {}
 
-    extracted_paths, extracted_rivers, telemetry_summary = await asyncio.gather(
-        load_paths(), load_rivers(), load_telemetry()
+    extracted_paths, extracted_rivers, telemetry_summary, live_weather = await asyncio.gather(
+        load_paths(), load_rivers(), load_telemetry(), load_weather()
     )
+
+    weather_desc = ""
+    if live_weather:
+        weather_desc = (
+            f"Weather: {live_weather.get('condition', 'Overcast')}, {live_weather.get('temperature_c', 26.0)}°C, "
+            f"Rain Rate: {live_weather.get('rainfall_rate_mmh', 0.0)} mm/h, Wind: {live_weather.get('wind_speed_kmh', 12.0)} km/h {live_weather.get('wind_direction', '')} "
+            f"({live_weather.get('data_source', 'OpenWeatherMap')})"
+        )
+
+    full_telemetry = f"{telemetry_summary} | {weather_desc}" if weather_desc else telemetry_summary
 
     return {
         "area_name": effective_name,
@@ -152,7 +170,8 @@ async def _extract_spatial_context(
         "longitude": effective_lng,
         "paths": extracted_paths or ["Main Access Road", "High Ridge Evacuation Path"],
         "rivers": extracted_rivers or ["Local River Channel", "Valley Stream"],
-        "telemetry": telemetry_summary,
+        "telemetry": full_telemetry,
+        "weather": live_weather,
     }
 
 

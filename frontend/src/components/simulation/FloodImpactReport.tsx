@@ -40,7 +40,22 @@ export interface FloodImpactReportProps {
   onDismiss?: () => void;
 }
 
-export function FloodImpactReport({
+export function FloodImpactReport(props: FloodImpactReportProps) {
+  const [open, setOpen] = useState(false);
+  if (!open && !props.completedReport) {
+    const assessed = props.buildings.some(building => building.assessed);
+    const affected = props.buildings.filter(building => building.affectedDuringRun).length;
+    return <button type="button" onClick={() => setOpen(true)}
+      className="absolute bottom-4 right-3 z-30 flex items-center gap-2 rounded-xl border border-cyan-500/80 bg-slate-950/95 px-4 py-3 text-sm text-white shadow-2xl backdrop-blur hover:bg-slate-900 transition-all cursor-pointer">
+      <FileText className="size-4 text-cyan-400" />
+      <span>Flood Report · {assessed ? `${affected} exposed buildings` : "monitoring area"}</span>
+    </button>;
+  }
+  // The full report sorts/builds every section only when someone opens it.
+  return <FloodImpactReportContent {...props} onDismiss={() => { setOpen(false); props.onDismiss?.(); }} />;
+}
+
+function FloodImpactReportContent({
   buildings,
   scenario,
   graphCounts,
@@ -50,7 +65,7 @@ export function FloodImpactReport({
   onRetry,
   onDismiss,
 }: FloodImpactReportProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<"all" | "summary" | "hardware" | "met" | "impact" | "response" | "annexures">("all");
   const [searchQuery, setSearchQuery] = useState("");
 

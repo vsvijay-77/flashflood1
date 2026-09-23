@@ -84,9 +84,11 @@ export interface BuildingFeature {
     landslide_risk?: "LOW" | "MODERATE" | "HIGH";
     distance_to_river_m?: number;
     distance_from_river?: string;
+    flood_arrival_time?: string;
     evacuation_zone?: string;
     confidence?: number;
     source?: string;
+    lng?: number;
   };
   geometry: {
     type: "Polygon" | "MultiPolygon";

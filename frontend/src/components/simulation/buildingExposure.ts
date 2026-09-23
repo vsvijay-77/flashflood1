@@ -5,7 +5,13 @@ export interface ExposureGrid {
 }
 
 export interface BuildingSample {
-  id: string; name: string; kind: string; cells: number[];
+  id: string;
+  name: string;
+  kind: string;
+  cells: number[];
+  lat?: number;
+  lon?: number;
+  distanceToRiverM?: number;
 }
 
 export const exposureThresholdM = 0.1;
@@ -64,7 +70,20 @@ export function indexBuildings(buildings: BuildingFeature[], grid: ExposureGrid,
         }
       }
     }
-    return [{ id, name: building.properties.name || `Building ${id}`, kind: building.properties.building && building.properties.building !== "yes" ? building.properties.building : "unknown", cells: [...cells] }];
+    const props = building.properties || {};
+    const lat = typeof props.lat === "number" ? props.lat : undefined;
+    const lon = typeof props.lon === "number" ? props.lon : typeof (props as any).lng === "number" ? (props as any).lng : undefined;
+    const distanceToRiverM = Number(props.distance_to_river_m) || (parseFloat(String(props.distance_from_river || "")) || undefined);
+
+    return [{
+      id,
+      name: props.name || `Building ${id}`,
+      kind: props.building && props.building !== "yes" ? props.building : "unknown",
+      cells: [...cells],
+      lat,
+      lon,
+      distanceToRiverM,
+    }];
   });
 }
 

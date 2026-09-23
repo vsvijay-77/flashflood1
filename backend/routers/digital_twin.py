@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
+import logging
 from PIL import Image, ImageDraw
 import httpx
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/digital-twin", tags=["digital-twin"])
 
@@ -415,12 +418,56 @@ async def get_terrain(lat: float, lng: float):
         
     return {"status": "unavailable"}
 
+@router.get("/tin")
+async def get_tin_terrain(
+    north: float = Query(..., description="Northern latitude boundary of AOI"),
+    south: float = Query(..., description="Southern latitude boundary of AOI"),
+    east: float = Query(..., description="Eastern longitude boundary of AOI"),
+    west: float = Query(..., description="Western longitude boundary of AOI"),
+    dem_type: Optional[str] = Query(None, description="DEM dataset type (default COP30)"),
+    resolution: Optional[str] = Query(None, description="Alternative alias for dem_type (e.g., COP30)"),
+    max_vertices: int = Query(25000, ge=1000, le=60000, description="Target maximum vertex count"),
+    refresh: bool = Query(False, description="Bypass cache and force re-download from OpenTopography"),
+):
+    """Generate or retrieve cached Triangulated Irregular Network (TIN) for the selected AOI.
+    
+    Downloads Copernicus DEM (COP30, 30m) from OpenTopography API, extracts X/Y/Z points,
+    filters NoData, performs Delaunay triangulation, and computes terrain features for ML/GNN.
+    """
+    effective_dem = dem_type if isinstance(dem_type, str) and dem_type else (
+        resolution if isinstance(resolution, str) and resolution else "COP30"
+    )
+    actual_max_vertices = max_vertices if isinstance(max_vertices, int) else 25000
+    actual_refresh = refresh if isinstance(refresh, bool) else False
+
+    try:
+        from services.tin_service import generate_or_get_tin
+        result = await generate_or_get_tin(
+            north=float(north),
+            south=float(south),
+            east=float(east),
+            west=float(west),
+            dem_type=effective_dem,
+            max_vertices=actual_max_vertices,
+            refresh=actual_refresh,
+        )
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as exc:
+        logger.error("Failed to generate TIN terrain: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"TIN terrain unavailable: {str(exc)}"
+        )
+
 @router.get("/metadata")
 def get_metadata():
     return {
         "layers": {
             "buildings": {"source": "OSM / Local GeoJSON", "updated": "2024-05-10"},
             "terrain": {"source": "Google Earth Engine", "updated": "Realtime"},
+            "tin_terrain": {"source": "OpenTopography Copernicus DEM GLO-30", "resolution": "30m"},
             "infrastructure": {"source": "Overpass API", "updated": "Realtime"}
         }
     }
@@ -844,6 +891,11 @@ async def surface_forecast(request: SurfaceForecastRequest):
             request.south, request.north, request.west, request.east, frames, request.size)
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Forecast unavailable. Check weather access and the configured model checkpoint, then retry.") from exc
+
+
+from .multi_hazard import router as multi_hazard_router
+
+router.include_router(multi_hazard_router)
 
 
 @router.delete("/network-features")

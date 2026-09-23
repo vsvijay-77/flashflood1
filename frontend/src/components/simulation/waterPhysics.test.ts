@@ -36,7 +36,7 @@ describe("WaterPhysicsSimulation Engine", () => {
     expect(simulation.state.velocityY[4]).toBeGreaterThan(0);
   });
 
-  it("bridges a shallow valley cell between wet neighbours without crossing a high ridge", () => {
+  it("wets shallow gaps through gradual flux without teleporting water or crossing a high ridge", () => {
     const valley = new WaterPhysicsSimulation(
       { cols: 3, rows: 3, dx: 10 },
       new Array(9).fill(0),
@@ -45,7 +45,9 @@ describe("WaterPhysicsSimulation Engine", () => {
       [0, 0, 0, 0, 0, 0, 0.10, 0, 0.10]
     );
     valley.stepPhysics(0.01);
-    expect(valley.state.depth[4]).toBeGreaterThan(0.01);
+    expect(valley.state.depth[4]).toBeGreaterThan(0);
+    expect(valley.state.depth[4]).toBeLessThan(0.001);
+    expect(Array.from(valley.state.depth).reduce((sum, depth) => sum + depth, 0)).toBeCloseTo(0.2, 7);
 
     const ridge = new WaterPhysicsSimulation(
       { cols: 3, rows: 3, dx: 10 },
@@ -355,6 +357,23 @@ describe("WaterPhysicsSimulation Engine", () => {
 });
 
 describe("water volume regression", () => {
+  it("accepts waterways loaded after terrain setup without seeding or resetting water", () => {
+    const sim = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 10 }, [0, 0]);
+    sim.advance(10, 1, 0, 100);
+    const volume = sim.state.totalVolumeM3;
+    const depth = Array.from(sim.state.depth);
+    const sources = new Uint8Array([1, 0]), paths = new Uint8Array([0, 1]);
+    expect(sim.updateMappedFeatures(sources, paths)).toBe(true);
+    expect(Array.from(sim.state.depth)).toEqual(depth);
+    expect(sim.state.elapsedSeconds).toBeCloseTo(10);
+    expect(sim.updateMappedFeatures(sources, paths)).toBe(false);
+    sim.advance(1, 1, 0.1);
+    expect(sim.state.totalVolumeM3).toBeGreaterThan(volume);
+    expect(sim.state.totalVolumeM3).toBeCloseTo(sim.state.injectedVolumeM3, 5);
+    sim.reset();
+    expect(sim.state.totalVolumeM3).toBe(0);
+    expect(sim.state.isSource[0]).toBe(1);
+  });
   it("keeps explicit dry sources dry and includes shallow water in volume", () => {
     const sim = new WaterPhysicsSimulation({ cols: 2, rows: 1, dx: 10 }, [0, 0], undefined,
       new Uint8Array([1, 0]), [0, 0.01]);
@@ -371,5 +390,27 @@ describe("water volume regression", () => {
     sim.reset();
     expect(sim.state.depth[4]).toBe(2);
     expect(sim.state.edges.every(e => e.discharge === 0)).toBe(true);
+  });
+
+  it("keeps existing water after the source forcing stops or drops", () => {
+    const sim = new WaterPhysicsSimulation({ cols: 1, rows: 1, dx: 10 }, [0], undefined, [true]);
+    sim.advance(10, 1, 1);
+    const suppliedVolume = sim.state.injectedVolumeM3;
+    expect(suppliedVolume).toBeGreaterThan(0);
+    sim.advance(10, 1, 0.1);
+    sim.advance(10, 1, 0);
+    expect(sim.state.totalVolumeM3).toBeCloseTo(suppliedVolume, 3);
+    expect(sim.state.injectedVolumeM3).toBeCloseTo(suppliedVolume, 3);
+  });
+
+  it("balances every source and rainfall addition against total water volume", () => {
+    const sim = new WaterPhysicsSimulation({ cols: 6, rows: 6, dx: 10 },
+      Array.from({ length: 36 }, (_, i) => Math.floor(i / 6) * 0.2), undefined,
+      Array.from({ length: 36 }, (_, i) => i >= 30), new Float32Array(36));
+    sim.advance(20, 1, 0.2, 120);
+    expect(sim.state.totalVolumeM3).toBeCloseTo(sim.state.injectedVolumeM3, 3);
+    const suppliedVolume = sim.state.injectedVolumeM3;
+    sim.advance(20, 1, 0, 0);
+    expect(sim.state.totalVolumeM3).toBeCloseTo(suppliedVolume, 3);
   });
 });

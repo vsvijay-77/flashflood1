@@ -1,22 +1,9 @@
 /**
- * Realistic Game-Quality Water Shaders (Three.js ShaderMaterial)
- *
- * Implements:
- * - Layered Gerstner waves with horizontal displacement
- * - Multi-frequency ripples with fwidth derivative anti-shimmering
- * - Current advection: ripples flow along simulated hydrodynamic velocity
- * - Fresnel reflectance
- * - GGX / Blinn-Phong specular sun highlights
- * - Depth-based Beer-Lambert absorption
- * - Screen-space refraction using live Cesium canvas texture
- * - Procedural sky reflection and sampled-terrain depth occlusion
- * - Differential-area caustic brightness on shallow beds
- * - Shoreline foam at water margins
- * - Froude-number-based whitewater for fast shallow rapids
- * - ACES filmic tone mapping
- * - Logarithmic depth buffer and transparent rendering
+ * Depth-aware flood surface for the Three.js/Cesium overlay.
+ * The solver alone determines the footprint: shallow edges fade without
+ * procedural cutouts or displacement across the bank. Four filtered ripple
+ * bands and restrained reflection keep the surface readable at map scale.
  */
-
 import * as THREE from "three";
 
 export const WaterVertexShader = /* glsl */ `
@@ -25,75 +12,38 @@ export const WaterVertexShader = /* glsl */ `
 
   uniform float uTime;
   uniform float uWaveHeight;
-  uniform float uWindSpeed;
 
   attribute float aDepth;
   attribute vec2 aVelocity;
-  attribute float aBedElevation;
   attribute float aInside;
   attribute float aIsWaterBody;
+  attribute vec2 aGridUv;
 
   varying vec3 vWorldPosition;
-  varying vec3 vViewPosition;
-  varying vec3 vNormal;
-  varying vec2 vUv;
   varying float vDepth;
   varying vec2 vVelocity;
-  varying float vBedElevation;
-  varying float vWaveDisplacement;
   varying float vInside;
-  varying float vIsWaterBody;
-
-  // Gerstner Wave function: computes (dx, dy, dz)
-  vec3 gerstnerWave(vec2 p, vec2 dir, float steepness, float wavelength, float speed) {
-    dir = normalize(dir);
-    float k = 6.2831853 / wavelength;
-    float c = sqrt(9.81 / k) * speed * 0.35;
-    float phase = k * dot(dir, p) - uTime * c;
-
-    float a = steepness / k;
-    float cosP = cos(phase);
-    float sinP = sin(phase);
-
-    return vec3(
-      dir.x * (a * cosP),
-      a * sinP,
-      dir.y * (a * cosP)
-    );
-  }
+  varying float vSource;
+  varying vec2 vGridUv;
 
   void main() {
-    vUv = uv;
-    vDepth = aDepth;
+    vDepth = max(0.0, aDepth);
     vVelocity = vec2(aVelocity.x, -aVelocity.y);
-    vBedElevation = aBedElevation;
     vInside = aInside;
-    vIsWaterBody = aIsWaterBody;
+    vSource = aIsWaterBody;
+    vGridUv = aGridUv;
 
     vec3 displaced = position;
-
-    // Subtle water surface ripple: strictly vertical motion (never displace horizontally)
-    // to ensure water stays clamped against the ground and never floats in the air
-    if (aDepth > 0.01) {
-      vec2 p = position.xz;
-      float waveScale = min(0.006, uWaveHeight * 0.004 * min(aDepth, 0.3));
-      float ripple = sin(p.x * 2.5 + uTime * 2.0) * cos(p.y * 2.5 - uTime * 1.5) * waveScale;
-      displaced.y += ripple;
-      vWaveDisplacement = ripple;
-    } else {
-      vWaveDisplacement = 0.0;
-    }
+    // Vertical motion only, bounded by the available water depth. The mesh
+    // never expands sideways to imitate a wider flood or dips below its bed.
+    float waveScale = min(vDepth * 0.08, 0.004) * clamp(uWaveHeight, 0.0, 2.0);
+    displaced.y += sin(position.x * 0.8 - uTime * 0.55)
+      * cos(position.z * 0.6 + uTime * 0.35) * waveScale;
 
     vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
     vWorldPosition = worldPos.xyz;
-
     vec4 mvPosition = viewMatrix * worldPos;
-    vViewPosition = -mvPosition.xyz;
-
-    vNormal = normalize(normalMatrix * normal);
-
     gl_Position = projectionMatrix * mvPosition;
-
     #include <logdepthbuf_vertex>
   }
 `;
@@ -105,222 +55,132 @@ export const WaterFragmentShader = /* glsl */ `
   uniform float uTime;
   uniform float uFlowTime;
   uniform float uRainIntensity;
-  uniform vec2 uResolution;
-  uniform sampler2D uSceneColor; // Live Cesium canvas texture for screen-space refraction
-  uniform sampler2D uTerrainHeight; // Terrain heightfield texture for bank ray marching
   uniform vec3 uSunDirection;
   uniform vec3 uSunColor;
   uniform vec3 uWaterColorDeep;
   uniform vec3 uWaterColorShallow;
   uniform vec3 uSkyColor;
-  uniform float uHasSceneColor;
   uniform float uWaveHeight;
+  uniform sampler2D uWaterwayDistance;
+  uniform float uHasWaterwayDistance;
+  uniform float uWaterwayDistanceRange;
 
   varying vec3 vWorldPosition;
-  varying vec3 vViewPosition;
-  varying vec3 vNormal;
-  varying vec2 vUv;
   varying float vDepth;
   varying vec2 vVelocity;
-  varying float vBedElevation;
-  varying float vWaveDisplacement;
   varying float vInside;
-  varying float vIsWaterBody;
+  varying float vSource;
+  varying vec2 vGridUv;
 
-  // Anti-shimmering ripple generator using fwidth derivative filtering (calm, slow speed)
   vec2 ripple(vec2 p, vec2 direction, float wavelength, float amplitude) {
-    direction = normalize(direction);
     float k = 6.2831853 / wavelength;
-    float phase = dot(p, direction) * k - uTime * sqrt(9.81 * k) * 0.35;
-    float filtered = exp(-pow(fwidth(phase), 2.0));
+    float phase = dot(p, direction) * k - uTime * sqrt(9.81 * k) * 0.10;
+    float footprint = fwidth(phase);
+    float filtered = exp(-footprint * footprint);
     return direction * cos(phase) * amplitude * filtered;
   }
 
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-  float noise(vec2 p) {
-    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x),
-      mix(hash(i + vec2(0, 1)), hash(i + 1.0), f.x), f.y);
-  }
-  float computeCaustics(vec2 p, float depth) {
-    vec2 q = p * 0.6 + vec2(uTime * 0.08, -uTime * 0.06);
-    float pattern = noise(q + noise(q * 0.7)) * noise(q * 1.8 + 9.0);
-    float filtered = exp(-length(fwidth(q)));
-    return smoothstep(0.35, 0.7, pattern) * 0.16 * filtered * exp(-depth);
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
   }
 
-  vec2 surfaceSlope(vec2 point, vec2 flowDirection, float flowSpeed) {
-    vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
-    vec2 result = ripple(point, flowDirection, 52.0, 0.030);
-    result += ripple(point, flowDirection, 16.0, 0.026);
-    result += ripple(point, flowDirection, 5.0, 0.038);
-    result += ripple(point, crossFlow, 9.0, 0.012);
-    result += ripple(point, crossFlow, 2.2, 0.016);
-    result += ripple(point, flowDirection + crossFlow * 0.35, 0.7, 0.010);
-    float currentDetail = mix(0.62, 1.18, smoothstep(0.03, 2.5, flowSpeed));
-    return result * max(0.0, uWaveHeight) * currentDetail;
+  float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0)), f.x), f.y);
   }
 
   void main() {
     #include <logdepthbuf_fragment>
 
-    // ⛔ Discard fragments outside the selected polygon area with smooth margin blend
-    if (vInside < 0.20) discard;
-
-    // Resting rivers are rendered by their exact Cesium vectors. The hydraulic
-    // mesh appears only once floodwater has a visible physical depth, avoiding
-    // coarse grid cells turning the whole catchment cyan at simulation start.
     float flowSpeed = length(vVelocity);
-    // Moving sheets are visible earlier than still water. This joins narrow
-    // downhill corridors without tinting every rain-damp cell blue.
-    float movingWater = smoothstep(0.03, 0.70, flowSpeed);
-    float wetThreshold = mix(0.016, 0.0025, movingWater);
-    float floodThreshold = 0.065;
-    if (vDepth < wetThreshold) discard;
+    // Millimetres of rain film should not paint whole grid cells. Flowing
+    // water can appear slightly earlier, but remains transparent at its edge.
+    float wetThreshold = mix(0.014, 0.006, smoothstep(0.04, 0.70, flowSpeed));
+    if (vInside < 0.20 || vDepth <= wetThreshold) discard;
 
-    // Carry surface detail in the simulated current direction. uFlowTime is
-    // simulated time, so high playback rates also advance the visible water.
-    vec2 stillWaterDirection = normalize(vec2(0.78, 0.62));
-    vec2 flowDirection = flowSpeed > 0.02 ? vVelocity / flowSpeed : stillWaterDirection;
+    // A river narrower than the hydraulic grid must not paint its entire
+    // source cell. Follow the mapped channel and widen its visible margin
+    // with depth (an assumed 3.5% bank slope, not surveyed bathymetry).
+    // Water routed into non-source cells retains the solver's flood extent.
+    float channelAlpha = 1.0;
+    if (uHasWaterwayDistance > 0.5 && vSource > 0.0) {
+      float bankDistance = texture2D(uWaterwayDistance, vGridUv).r * uWaterwayDistanceRange;
+      float bankReach = max(1.0, vDepth / 0.035);
+      float feather = max(fwidth(bankDistance), uWaterwayDistanceRange / 255.0);
+      float corridor = 1.0 - smoothstep(bankReach, bankReach + feather, bankDistance);
+      channelAlpha = mix(1.0, corridor, smoothstep(0.0, 0.02, vSource));
+      if (channelAlpha < 0.01) discard;
+    }
+
+    vec2 flowDirection = flowSpeed > 0.02
+      ? vVelocity / flowSpeed : normalize(vec2(0.78, 0.62));
+    vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
+    // Surface detail follows simulated metres/second. There is no extra
+    // fast-moving streak layer that suggests a faster flood at 1x playback.
     vec2 p = vWorldPosition.xz - vVelocity * uFlowTime;
+    vec2 slope = ripple(p, flowDirection, 24.0, 0.026);
+    slope += ripple(p, flowDirection, 6.0, 0.025);
+    slope += ripple(p, crossFlow, 10.0, 0.015);
+    slope += ripple(p, crossFlow, 1.8, 0.010);
+    slope *= clamp(uWaveHeight, 0.0, 2.0) * smoothstep(0.005, 0.12, vDepth);
 
-    // Multi-frequency ripple slope with fwidth derivative anti-shimmering
-    vec2 slope = surfaceSlope(p, flowDirection, flowSpeed);
-    vec2 rainPoint = p * 0.7;
-    vec2 rainCell = floor(rainPoint);
-    float rainSeed = fract(sin(dot(rainCell, vec2(127.1, 311.7))) * 43758.5453);
-    float rainAge = fract(uTime * 1.4 + rainSeed);
-    vec2 rainOffset = fract(rainPoint) - vec2(0.5);
-    float rainRadius = length(rainOffset);
-    float rainRing = exp(-pow((rainRadius - rainAge * 0.45) * 28.0, 2.0));
-    float rainDetail = 1.0 - smoothstep(0.15, 0.6, length(fwidth(rainPoint)));
-    slope += rainOffset / max(rainRadius, 0.01) * rainRing * (1.0 - rainAge) * uRainIntensity * 0.16 * rainDetail;
+    if (uRainIntensity > 0.001) {
+      vec2 rainPoint = p * 0.7;
+      float rainAge = fract(uTime * 0.9 + hash(floor(rainPoint)));
+      vec2 rainOffset = fract(rainPoint) - vec2(0.5);
+      float rainRadius = length(rainOffset);
+      float ringDistance = (rainRadius - rainAge * 0.45) * 24.0;
+      float rainRing = exp(-ringDistance * ringDistance);
+      float rainDetail = 1.0 - smoothstep(0.15, 0.6, length(fwidth(rainPoint)));
+      slope += rainOffset / max(rainRadius, 0.01) * rainRing
+        * (1.0 - rainAge) * clamp(uRainIntensity, 0.0, 1.0) * 0.035 * rainDetail;
+    }
 
-    // Dynamic perturbed surface normal
-    vec3 geometric = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
+    vec3 geometric = cross(dFdx(vWorldPosition), dFdy(vWorldPosition));
+    geometric /= max(length(geometric), 0.00001);
     if (geometric.y < 0.0) geometric = -geometric;
     vec3 normal = normalize(geometric + vec3(-slope.x, 0.0, -slope.y));
     vec3 viewDir = normalize(cameraPosition - vWorldPosition);
-
-    // Air/water Fresnel reflectance, evaluated entirely in world coordinates.
     float cosTheta = clamp(dot(normal, viewDir), 0.0, 1.0);
     float fresnel = 0.02037 + 0.97963 * pow(1.0 - cosTheta, 5.0);
 
-    // Tight pinpoint specular sunlight highlight
-    vec3 sunDir = normalize(uSunDirection);
-    vec3 halfVec = normalize(sunDir + viewDir);
+    vec3 halfVec = normalize(normalize(uSunDirection) + viewDir);
     float specAngle = max(0.0, dot(normal, halfVec));
-    float roughness = 0.12 + min(uWaveHeight, 2.0) * 0.045;
-    float roughnessSquared = roughness * roughness;
+    // Widen highlights at distant pixels to avoid bright temporal shimmer.
+    float roughness = 0.20 + min(2.0, max(0.0, uWaveHeight)) * 0.035;
+    float roughnessSquared = roughness * roughness + min(0.12, fwidth(specAngle));
     float denominator = specAngle * specAngle * (roughnessSquared - 1.0) + 1.0;
-    float specular = min(0.65, roughnessSquared / (3.141593 * denominator * denominator) * 0.012);
-    vec3 specHighlight = uSunColor * specular * 0.15;
+    float specular = min(0.28, roughnessSquared / (3.141593 * denominator * denominator) * 0.008);
 
-    // Screen-space refraction: samples live Cesium canvas with normal distortion
-    vec2 screenUv = gl_FragCoord.xy / max(uResolution, vec2(1.0, 1.0));
-    vec2 refractOffset = (mat3(viewMatrix) * normal).xy * min(vDepth, 2.0) * 6.0 / uResolution;
-    vec2 refractUv = clamp(screenUv + refractOffset, vec2(0.001), vec2(0.999));
-
-    vec3 refractedGround;
-    if (uHasSceneColor > 0.5) {
-      refractedGround = texture2D(uSceneColor, refractUv).rgb;
-    } else {
-      // Blue-tinted fallback matching the river blue family
-      refractedGround = vec3(0.01, 0.45, 0.75);
-    }
-
-    // Absorption: red and green absorb fast, deep blue survives
-    vec3 absorption = exp(-vDepth * vec3(1.2, 0.35, 0.02));
-
-    // Caustics sparkle (blue shimmer)
-    float caustics = computeCaustics(vWorldPosition.xz, vDepth);
-
-    // Sky reflection — deep blue sky tone to keep water richly colored
-    vec3 reflDir = reflect(-viewDir, normal);
-    vec3 skyBase = vec3(0.05, 0.50, 0.85);   // deep river-sky blue
-    vec3 reflectedColor = mix(skyBase, uSkyColor, sqrt(clamp(reflDir.y, 0.0, 1.0)));
-
-    // ─── EXACT RIVER NETWORK BLUE (#0284c7 / #0ea5e9 / #0369a1) ─────────────
-    // Matches the 3D river network lines in Cesium: rich, saturated, vibrant blue
-    vec3 cEdge    = vec3(0.045, 0.670, 0.900);   // clear shallow moving water
-    vec3 cBody    = vec3(0.006, 0.460, 0.735);   // saturated river body
-    vec3 cDeep    = vec3(0.008, 0.290, 0.510);   // deep blue-green channel
-    vec3 cChannel = vec3(0.010, 0.200, 0.360);   // deepest gorge / source
-
-    vec3 depthColor;
-    if (vDepth < 0.08) {
-      // Expanding edge: bright vivid river blue, crisp front clearly visible
-      depthColor = mix(cEdge, cBody, vDepth / 0.08);
-    } else if (vDepth < 0.60) {
-      // Main flood body: solid, vivid #0284c7 river blue
-      depthColor = mix(cBody, cDeep, (vDepth - 0.08) / 0.52);
-    } else {
-      // Deep channel: rich deep river blue
-      depthColor = mix(cDeep, cChannel, clamp((vDepth - 0.60) / 1.5, 0.0, 1.0));
-    }
-
-    // Advected multi-scale color texture makes the current legible without
-    // relying on opaque fill color. It moves with the physical flow above.
-    vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
-    float broadTexture = noise(p * 0.10 + flowDirection * uTime * 0.10);
-    float fineTexture = noise(vec2(dot(p, flowDirection) * 0.62, dot(p, crossFlow) * 0.20) + vec2(uTime * 0.24, 3.7));
-    float flowBands = 0.5 + 0.5 * sin(dot(p, flowDirection) * 1.25 + uTime * (0.35 + flowSpeed * 0.55));
-    float waterTexture = broadTexture * 0.42 + fineTexture * 0.34 + flowBands * 0.24;
-    depthColor *= mix(0.78, 1.18, waterTexture);
-
-    // Animated longitudinal streaks make the downhill current legible at a
-    // glance. Their phase travels in flowDirection, never across the current.
+    float depthBlend = 1.0 - exp(-vDepth * 1.8);
+    vec3 bodyColor = mix(uWaterColorShallow, uWaterColorDeep, depthBlend);
     vec2 flowCoordinates = vec2(dot(p, flowDirection), dot(p, crossFlow));
-    float currentStreak = pow(0.5 + 0.5 * sin(flowCoordinates.x * 1.45 - uTime * (1.2 + flowSpeed * 1.6)), 7.0);
-    float channelBand = 0.45 + 0.55 * pow(0.5 + 0.5 * cos(flowCoordinates.y * 1.7), 2.0);
-    float currentHighlight = currentStreak * channelBand * smoothstep(0.05, 1.4, flowSpeed);
-    depthColor = mix(depthColor, vec3(0.18, 0.74, 0.95), currentHighlight * 0.26);
+    float currentTexture = noise(flowCoordinates * vec2(0.14, 0.35));
+    // Subtle elongated texture exposes the direction of flow without stripes.
+    bodyColor *= mix(0.94, 1.06, currentTexture);
 
-    // Blue-tinted caustics sparkle on shallower, moving water.
-    depthColor += vec3(caustics * 0.14) * vec3(0.08, 0.62, 1.0);
+    vec3 reflection = reflect(-viewDir, normal);
+    vec3 reflectedColor = mix(uSkyColor * 0.65, uSkyColor,
+      sqrt(clamp(reflection.y, 0.0, 1.0)));
+    vec3 waterSurface = mix(bodyColor, reflectedColor, fresnel * 0.68)
+      + uSunColor * specular;
 
-    // Natural fluid surface: Fresnel reflections and sun glints over depth-based body color
-    // Underlying Cesium 3D terrain naturally shows through without duplicate screen-space re-projection (prevents multi-layer mismatch upon zoom)
-    vec3 waterSurface = mix(depthColor, reflectedColor, fresnel * 0.35) + specHighlight;
+    // Restrict aerated highlights to fast shallow water rather than adding
+    // foam across the full flood surface.
+    float rapidFoam = smoothstep(0.9, 2.6, flowSpeed)
+      * (1.0 - smoothstep(0.15, 0.65, vDepth));
+    rapidFoam *= smoothstep(0.45, 0.8, currentTexture) * 0.16;
+    vec3 finalColor = mix(waterSurface, vec3(0.74, 0.81, 0.80), rapidFoam);
 
-    // ─── SURFACE WAVES & SUBTLE FOAM ──────────────────────────────────────────
-    vec2 rc = p * 0.40;
-    float wavePattern = sin(rc.x * 3.0 + uTime * 1.0) * cos(rc.y * 2.8 - uTime * 0.8);
-    float slopeSteepness = length(slope) * 4.0;
-    float crestValue = vWaveDisplacement * 4.0 + wavePattern * 0.25 + slopeSteepness;
-    float crestFoam = smoothstep(0.70, 0.95, crestValue) * 0.10;
-    float rapidFoam = smoothstep(0.85, 2.8, flowSpeed) * (1.0 - smoothstep(0.18, 0.75, vDepth));
-    rapidFoam *= 0.16 * (0.45 + 0.55 * fineTexture);
-
-    // Soft sky-blue wave highlights (NEVER white wash-out)
-    vec3 foamColor = vec3(0.46, 0.84, 0.96);
-    vec3 finalColor = mix(waterSurface, foamColor, max(crestFoam, rapidFoam));
-
-    // ─── NATURAL RIVER SHAPE: smooth organic edges instead of square grid ─────
-    // Use fwidth-based anti-aliasing on depth edges to eliminate the blocky
-    // staircase appearance. Water front fades in smoothly like a real river.
-    // Feather depth edge over 1 derivative width → sub-pixel smooth shore.
-    float depthEdge = fwidth(vDepth);
-    float shoreAlpha = smoothstep(wetThreshold, wetThreshold + max(depthEdge * 3.0, 0.005), vDepth);
-
-    // Cross-stream (perpendicular-to-flow) fade narrows the visual channel
-    // so it looks like a real river ribbon, not a filled rectangle.
-    // Only applied in the shallow wetting front; deep water is fully opaque.
-    float crossFlowPos = dot(vWorldPosition.xz, crossFlow);
-    // Apply a gentle cross-stream taper only near the shallow flood margin
-    float channelWidth = smoothstep(0.0, 0.18, vDepth); // 0 → 1 as depth grows from 0 to 0.18m
-    float crossTaper = mix(
-      smoothstep(0.0, 1.0, sin(crossFlowPos * 0.55 + noise(vec2(crossFlowPos * 0.18, uTime * 0.06)) * 1.8)),
-      1.0,
-      channelWidth
-    );
-
-    // Boundary polygon blend
-    float boundaryBlend = smoothstep(0.20, 0.80, vInside);
-    // Depth-based opacity: deeper = more opaque
-    float depthAlpha = mix(0.65, 0.95, clamp(vDepth / 0.35, 0.0, 1.0));
-    // Combine: shore feather × cross-stream taper × depth opacity × polygon boundary
-    float alpha = shoreAlpha * crossTaper * depthAlpha * boundaryBlend;
+    // Derivatives anti-alias wet boundaries without moving procedural holes.
+    float edgeWidth = max(fwidth(vDepth) * 1.25, 0.004);
+    float shoreAlpha = smoothstep(wetThreshold, wetThreshold + edgeWidth, vDepth);
+    float boundaryAlpha = smoothstep(0.20, 0.80, vInside);
+    float depthAlpha = mix(0.20, 0.91, 1.0 - exp(-vDepth * 3.5));
+    float alpha = shoreAlpha * boundaryAlpha * depthAlpha * channelAlpha;
 
     gl_FragColor = vec4(finalColor, alpha);
     #include <tonemapping_fragment>
@@ -333,7 +193,7 @@ export function createWaterShaderMaterial(
   terrainHeightTexture: THREE.Texture | null,
   resolution: THREE.Vector2
 ): THREE.ShaderMaterial {
-  const material = new THREE.ShaderMaterial({
+  return new THREE.ShaderMaterial({
     vertexShader: WaterVertexShader,
     fragmentShader: WaterFragmentShader,
     uniforms: {
@@ -341,22 +201,28 @@ export function createWaterShaderMaterial(
       uFlowTime: { value: 0 },
       uRainIntensity: { value: 0 },
       uWaveHeight: { value: 0.8 },
+      uWaterwayDistance: { value: null },
+      uHasWaterwayDistance: { value: 0 },
+      uWaterwayDistanceRange: { value: 1 },
+      // Kept for callers that update shared scene/terrain uniforms; the overlay
+      // uses alpha blending with Cesium rather than copying its canvas per frame.
       uWindSpeed: { value: 15.0 },
       uResolution: { value: resolution },
-      uSceneColor: { value: null },
+      uSceneColor: { value: sceneColorTexture },
       uTerrainHeight: { value: terrainHeightTexture },
+      uHasSceneColor: { value: sceneColorTexture ? 1.0 : 0.0 },
       uSunDirection: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
-      uSunColor: { value: new THREE.Color(1.0, 1.0, 0.95) },
-      uWaterColorDeep: { value: new THREE.Color(0.012, 0.412, 0.631) },    // #0369a1
-      uWaterColorShallow: { value: new THREE.Color(0.008, 0.518, 0.780) }, // #0284c7
-      uSkyColor: { value: new THREE.Color(0.055, 0.647, 0.914) },          // #0ea5e9
-      uHasSceneColor: { value: 0.0 },
+      uSunColor: { value: new THREE.Color(1.0, 0.98, 0.92) },
+      uWaterColorDeep: { value: new THREE.Color("#204d60") },
+      uWaterColorShallow: { value: new THREE.Color("#56878d") },
+      uSkyColor: { value: new THREE.Color("#b5c9d8") },
     },
     transparent: true,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
-    side: THREE.DoubleSide, // DoubleSide: ensures water is never culled by camera view angle or winding order
+    side: THREE.DoubleSide,
+    // This flat transparent surface needs one draw even when seen from below;
+    // Three's default double-sided transparent path otherwise draws it twice.
+    forceSinglePass: true,
   });
-
-  return material;
 }

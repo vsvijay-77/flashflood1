@@ -33,6 +33,8 @@ def client():
         def test_status(client):
             assert client.get("/status").status_code == 200
     """
+    if os.environ.get("RUN_LIVE_BACKEND_TESTS") != "1":
+        pytest.skip("Set RUN_LIVE_BACKEND_TESTS=1 against a disposable backend; these tests mutate users and alerts")
     with httpx.Client(base_url=API_URL, timeout=30.0) as c:
         yield c
 
@@ -40,6 +42,8 @@ def client():
 @pytest_asyncio.fixture
 async def aclient():
     """Async variant, for tests that also await motor/backend helpers directly."""
+    if os.environ.get("RUN_LIVE_BACKEND_TESTS") != "1":
+        pytest.skip("Set RUN_LIVE_BACKEND_TESTS=1 against a disposable backend; these tests mutate users and alerts")
     async with httpx.AsyncClient(base_url=API_URL, timeout=30.0) as c:
         yield c
 

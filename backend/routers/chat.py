@@ -23,7 +23,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-QWEN_API_URL = os.environ.get("LLM_API_URL", "http://127.0.0.1:8080")
+def get_qwen_api_url() -> str:
+    raw = os.environ.get("LLM_API_URL", "https://qwen.blk2np.qzz.io").strip()
+    if not raw.startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+    return raw.rstrip("/")
+
+QWEN_API_URL = get_qwen_api_url()
 road_service = OSMRoadService()
 river_service = OSMRiverService()
 
@@ -234,14 +240,15 @@ async def chat_stream(req: ChatRequest):
             "system_prompt": system_prompt,
             "max_tokens": "600",
         }
-        plan_url = f"{QWEN_API_URL.rstrip('/')}/plan"
-        text_url = f"{QWEN_API_URL.rstrip('/')}/text"
+        current_api_url = get_qwen_api_url()
+        plan_url = f"{current_api_url}/plan"
+        text_url = f"{current_api_url}/text"
 
         try:
             async with httpx.AsyncClient(timeout=client_timeout) as client:
                 streamed = False
                 try:
-                    # Stream tokens in real-time as chunks from /plan (http://0.0.0.0:8080/docs#/default/plan_plan_post)
+                    # Stream tokens in real-time as chunks from /plan (https://qwen.blk2np.qzz.io/docs#/default/plan_plan_post)
                     async with client.stream("POST", plan_url, data=form_data) as response:
                         if response.status_code == 200:
                             async for chunk in response.aiter_text():

@@ -66,6 +66,9 @@ import { generateCirclePolygon } from "@/lib/gisUtils";
 import { buildingTouchesArea, buildingCenter, prepareBuildingFootprints } from "./buildingGeometry";
 import { loadSelectedAreaBuildings } from "@/services/selectedAreaBuildings";
 import { saveDigitalTwinEvacPoint, removeDigitalTwinEvacPoint } from "@/lib/digitalTwinEvacuation";
+import { MULTI_HAZARD_COLORS } from "@/lib/multiHazard";
+import { useMultiHazard } from "@/lib/useMultiHazard";
+import { addMultiHazardLayer } from "./multiHazardCesium";
 import {
   extractNetworks,
   extractBuildings,
@@ -81,7 +84,9 @@ import type {
   EvacuationRouteResponse,
   HighRiskZone,
 } from "../../lib/routingApi";
-
+import { CesiumTinTerrainLayer } from "./CesiumTinTerrainLayer";
+import { TinTerrainControls } from "./TinTerrainControls";
+import { fetchTinTerrain, type TinTerrainData } from "@/services/tinTerrain";
 
 declare const Cesium: any;
 
@@ -286,6 +291,14 @@ export function CesiumDigitalTwinViewer({
   const [internalRain, setInternalRain] = useState<boolean>(false);
   const rainActive = isRaining !== undefined ? isRaining : internalRain;
   const [cesiumViewer, setCesiumViewer] = useState<any>(null);
+  const multiHazard = useMultiHazard(areaId, polygon);
+  const [showMultiHazard, setShowMultiHazard] = useState(true);
+  const [multiHazardLayerError, setMultiHazardLayerError] = useState(false);
+  useEffect(() => {
+    setMultiHazardLayerError(false);
+    if (!cesiumViewer || cesiumViewer.isDestroyed() || !showMultiHazard || !multiHazard.features.length) return;
+    return addMultiHazardLayer(Cesium, cesiumViewer, multiHazard.features, () => setMultiHazardLayerError(true));
+  }, [cesiumViewer, showMultiHazard, multiHazard.features]);
   const [forecastActive, setForecastActive] = useState(false);
   const [forecastHour, setForecastHour] = useState(0);
   const [forecastOpacity, setForecastOpacity] = useState(0.85);
@@ -332,7 +345,22 @@ export function CesiumDigitalTwinViewer({
   const [srtmOpacity, setSrtmOpacity] = useState<number>(0.65);
   const [showSrtmLegend, setShowSrtmLegend] = useState<boolean>(false);
   const [showLayersStatusBox, setShowLayersStatusBox] = useState<boolean>(true);
- 
+
+  // ─── ⛰️ TIN TERRAIN (COPERNICUS DEM COP30) STATE ───
+  const [terrainMode, setTerrainMode] = useState<"standard" | "satellite" | "tin">("standard");
+  const [tinData, setTinData] = useState<TinTerrainData | null>(null);
+  const [tinLoading, setTinLoading] = useState<boolean>(false);
+  const [tinError, setTinError] = useState<string | null>(null);
+  const [tinActive, setTinActive] = useState<boolean>(true);
+  const [tinWireframeActive, setTinWireframeActive] = useState<boolean>(false);
+  const [tinSurfaceActive, setTinSurfaceActive] = useState<boolean>(true);
+  const [tinElevationColoring, setTinElevationColoring] = useState<boolean>(true);
+  const [tinGnnNodesActive, setTinGnnNodesActive] = useState<boolean>(true);
+  const [tinOpacity, setTinOpacity] = useState<number>(0.85);
+  const [tinExaggeration, setTinExaggeration] = useState<number>(1.0);
+  const tinLayerRef = useRef<CesiumTinTerrainLayer | null>(null);
+  const lastTinAoiKeyRef = useRef<string>("");
+
   // ─── 🛣️ REAL ROAD NETWORK, 🌊 RIVERS & 🚨 EVACUATION ROUTING ───
   const roadEntitiesRef = useRef<any[]>([]);
   const roadPrimitivesRef = useRef<any[]>([]); // Batched GroundPolylinePrimitives (fast 60 FPS path)
@@ -368,6 +396,7 @@ export function CesiumDigitalTwinViewer({
   layerVisibilityRef.current = { roads: showRoads, rivers: showRivers, buildings: showBuildings };
   const [showBuildingStats, setShowBuildingStats] = useState<boolean>(true);
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingFeature["properties"] | null>(null);
+  const selectedBuildingHighlightRef = useRef<any>(null);
   const [buildingRiskFilter, setBuildingRiskFilter] = useState<"ALL" | "SAFE" | "MODERATE" | "HIGH" | "CRITICAL">("ALL");
   const [buildingStats, setBuildingStats] = useState<{
     total: number;
@@ -1750,6 +1779,10 @@ export function CesiumDigitalTwinViewer({
           );
           const height = Math.max(3.5, Number.isFinite(rawHeight) ? rawHeight : 6.0);
 
+          const distM = Number(building.properties?.distance_to_river_m) || (parseFloat(String(building.properties?.distance_from_river || "")) || 350);
+          const reachTimeSec = Math.max(15, Math.round(distM / 1.8));
+          const timeText = reachTimeSec < 60 ? `${reachTimeSec}s` : `${Math.floor(reachTimeSec / 60)}m ${reachTimeSec % 60}s`;
+
           const enrichedProps = {
             ...building.properties,
             id: building.properties?.id || `MS-BLDG-${idx + 1}`,
@@ -1762,10 +1795,45 @@ export function CesiumDigitalTwinViewer({
             flood_risk: "MONITORED",
             risk_color: "#f97316",
             landslide_risk: building.properties?.landslide_risk || "LOW",
-            distance_from_river: building.properties?.distance_from_river || `${building.properties?.distance_to_river_m || 350} m`,
+            distance_from_river: building.properties?.distance_from_river || `${distM} m`,
+            distance_to_river_m: distM,
+            flood_arrival_time: `~${timeText}`,
             evacuation_zone: building.properties?.evacuation_zone || "Zone B (Monitored Area)",
             _buildingData: true,
           };
+
+          // Rooftop billboard label displaying time for the flood to reach on top of the house
+          try {
+            const labelEntity = viewer.entities.add({
+              position: Cesium.Cartesian3.fromDegrees(cLon, cLat, height + 2.5),
+              point: {
+                pixelSize: 6,
+                color: Cesium.Color.fromCssColorString("#38bdf8"),
+                outlineColor: Cesium.Color.WHITE,
+                outlineWidth: 1.5,
+                heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000),
+                scaleByDistance: new Cesium.NearFarScalar(150, 1.0, 8000, 0.5),
+              },
+              label: {
+                text: `🌊 Flood ETA: ~${timeText}`,
+                font: "bold 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+                heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                fillColor: Cesium.Color.fromCssColorString("#38bdf8"),
+                showBackground: true,
+                backgroundColor: Cesium.Color.fromCssColorString("#090d16").withAlpha(0.92),
+                backgroundPadding: new Cesium.Cartesian2(8, 4),
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                pixelOffset: new Cesium.Cartesian2(0, -10),
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000),
+                scaleByDistance: new Cesium.NearFarScalar(150, 1.0, 8000, 0.55),
+              },
+              show: layerVisibilityRef.current.buildings && !waterSimActive,
+            });
+            buildingEntitiesRef.current.push(labelEntity);
+          } catch (lblErr) {}
 
           const flatOuter = outer.flatMap((p) => p.slice(0, 2));
           if (flatOuter.length < 6) return;
@@ -3601,6 +3669,92 @@ export function CesiumDigitalTwinViewer({
     }
   };
 
+  // ─── ⛰️ TIN TERRAIN (COPERNICUS DEM COP30) PIPELINE ───
+  const loadTinTerrainData = async (forceRefresh = false) => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    const poly = getActivePolygon();
+    if (!poly || poly.length < 3) return;
+
+    const lats = poly.map((p) => p[0]);
+    const lngs = poly.map((p) => p[1]);
+    const north = Math.max(...lats);
+    const south = Math.min(...lats);
+    const east = Math.max(...lngs);
+    const west = Math.min(...lngs);
+
+    const aoiKey = `${north.toFixed(4)}_${south.toFixed(4)}_${east.toFixed(4)}_${west.toFixed(4)}`;
+    if (!forceRefresh && aoiKey === lastTinAoiKeyRef.current && tinData) {
+      if (tinLayerRef.current) {
+        tinLayerRef.current.updateOptions({ visible: tinActive });
+      }
+      return;
+    }
+
+    lastTinAoiKeyRef.current = aoiKey;
+    setTinLoading(true);
+    setTinError(null);
+
+    try {
+      const data = await fetchTinTerrain({ north, south, east, west }, forceRefresh);
+      setTinData(data);
+      setTinLoading(false);
+      setTinError(null);
+      if (tinLayerRef.current) {
+        tinLayerRef.current.setData(data, {
+          visible: tinActive,
+          surfaceVisible: tinSurfaceActive,
+          wireframeVisible: tinWireframeActive,
+          elevationColoring: tinElevationColoring,
+          gnnNodesVisible: tinGnnNodesActive,
+          opacity: tinOpacity,
+          verticalExaggeration: tinExaggeration,
+        });
+      }
+      toast.success(
+        `TIN READY: Copernicus DEM loaded (${data.vertex_count.toLocaleString()} vertices, ${data.triangle_count.toLocaleString()} triangles)`
+      );
+    } catch (err: any) {
+      console.warn("TIN terrain load error:", err);
+      const errMsg = err?.message || "OpenTopography COP30 DEM unavailable";
+      setTinError(errMsg);
+      setTinLoading(false);
+      toast.error("TIN terrain unavailable — standard terrain retained.");
+      if (tinLayerRef.current) {
+        tinLayerRef.current.updateOptions({ visible: false });
+      }
+    }
+  };
+
+  const handleSelectTerrainMode = (mode: "standard" | "satellite" | "tin") => {
+    setTerrainMode(mode);
+    if (mode === "tin") {
+      setTinActive(true);
+      if (tinLayerRef.current && tinData) {
+        tinLayerRef.current.updateOptions({ visible: true });
+      } else {
+        void loadTinTerrainData(false);
+      }
+    } else if (mode === "satellite") {
+      tinLayerRef.current?.updateOptions({ visible: false });
+      switchToTopDown();
+    } else {
+      // standard 3D terrain
+      tinLayerRef.current?.updateOptions({ visible: false });
+      switchTo3DView();
+    }
+  };
+
+  // Re-fetch TIN when active area or coordinates change while in TIN mode
+  useEffect(() => {
+    if (terrainMode === "tin") {
+      void loadTinTerrainData(false);
+    } else {
+      tinLayerRef.current?.updateOptions({ visible: false });
+    }
+  }, [terrainMode, latitude, longitude, areaId, polygon]);
+
 
   // ─── AREA CLIPPING: Restrict globe strictly to monitored polygon (removes everything outside) ───
   const updateWhiteMask = (polyCoords: [number, number][], _centerLon: number, _centerLat: number) => {
@@ -3873,6 +4027,18 @@ export function CesiumDigitalTwinViewer({
         viewerRef.current = viewer;
         setCesiumViewer(viewer);
         (window as any)._dtCesiumViewer = viewer;
+        tinLayerRef.current = new CesiumTinTerrainLayer(viewer);
+        if (tinData && terrainMode === "tin") {
+          tinLayerRef.current.setData(tinData, {
+            visible: tinActive,
+            surfaceVisible: tinSurfaceActive,
+            wireframeVisible: tinWireframeActive,
+            elevationColoring: tinElevationColoring,
+            gnnNodesVisible: tinGnnNodesActive,
+            opacity: tinOpacity,
+            verticalExaggeration: tinExaggeration,
+          });
+        }
 
         // High-performance 60 FPS resolution configuration (prevents GPU fill-rate exhaustion)
         viewer.useBrowserRecommendedResolution = true;
@@ -4312,6 +4478,8 @@ export function CesiumDigitalTwinViewer({
         viewportDebounceRef.current = null;
       }
       srtmLayerRef.current = null;
+      tinLayerRef.current?.destroy();
+      tinLayerRef.current = null;
       if (viewer && !viewer.isDestroyed()) {
         // Reset globe limit so next mount starts fresh
         try {
@@ -4772,7 +4940,7 @@ export function CesiumDigitalTwinViewer({
     if (buildingEntitiesRef.current.length > 0) {
       buildingEntitiesRef.current.forEach((ent) => {
         try {
-          ent.show = showBuildings;
+          ent.show = showBuildings && !waterSimActive;
         } catch (e) {}
       });
     }
@@ -4787,7 +4955,7 @@ export function CesiumDigitalTwinViewer({
       } catch (e) {}
     }
     viewerRef.current?.scene?.requestRender();
-  }, [showBuildings]);
+  }, [showBuildings, waterSimActive]);
 
   // Interactive 3D Terrain & Entity Click Handler (Buildings, Mesh Nodes, Place, Delete)
   useEffect(() => {
@@ -4803,15 +4971,47 @@ export function CesiumDigitalTwinViewer({
       if (Cesium.defined(picked) && picked.id) {
         const entity = picked.id;
 
-        // User Requirement: Check if 3D building footprint was clicked
-        const bData =
+        // User Requirement: Check if 3D building footprint or rooftop arrival label was clicked
+        let bData =
           (entity as any)?._buildingData === true
             ? entity
             : (entity as any)?._buildingData ||
               (entity?.id && (entity?.flood_risk || entity?.estimated_height) ? entity : null);
+
+        // Check if entity.id is the enrichedProps object from GeometryInstance
+        if (!bData && entity?.id && typeof entity.id === "object" && (entity.id._buildingData || entity.id.flood_risk || entity.id.estimated_height)) {
+          bData = entity.id;
+        }
+
+        // Check if a billboard rooftop label was clicked (arrival-label-${id})
+        if (!bData && typeof entity?.id === "string" && entity.id.startsWith("arrival-label-")) {
+          const rawId = entity.id.replace("arrival-label-", "");
+          const found = buildingFeatures.find((b, i) => String(b.id ?? b.properties?.id ?? i) === rawId);
+          if (found) bData = found.properties;
+        }
+
         if (bData) {
           setSelectedBuilding(bData);
           setSelectedNodeId(null);
+
+          // Fly camera to view the clicked house on map
+          const bLat = Number(bData.lat);
+          const bLon = Number(bData.lon ?? bData.lng);
+          if (Number.isFinite(bLat) && Number.isFinite(bLon)) {
+            viewer.camera.flyTo({
+              destination: Cesium.Cartesian3.fromDegrees(
+                bLon,
+                bLat - 0.0015,
+                (Number(bData.estimated_height || bData.height) || 6) + 120
+              ),
+              orientation: {
+                heading: Cesium.Math.toRadians(0),
+                pitch: Cesium.Math.toRadians(-40),
+                roll: 0,
+              },
+              duration: 1.5,
+            });
+          }
           return;
         }
 
@@ -4949,6 +5149,41 @@ export function CesiumDigitalTwinViewer({
       } catch (e) {}
     };
   }, [isPickingLocation, isDeleteMode, newNodeName, newNodeRole, meshNodes, deployedSensors, stagedSensorId, isMarkingEvacPoints, evacWaypoints]);
+
+  // ─── 🏠 ACTIVE SELECTED BUILDING HIGHLIGHT RING ───
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
+
+    if (selectedBuildingHighlightRef.current) {
+      try {
+        viewer.entities.remove(selectedBuildingHighlightRef.current);
+      } catch (e) {}
+      selectedBuildingHighlightRef.current = null;
+    }
+
+    if (selectedBuilding && Number.isFinite(Number(selectedBuilding.lat)) && Number.isFinite(Number(selectedBuilding.lon ?? (selectedBuilding as any).lng))) {
+      const bLat = Number(selectedBuilding.lat);
+      const bLon = Number(selectedBuilding.lon ?? (selectedBuilding as any).lng);
+      const bHeight = Number(selectedBuilding.estimated_height || selectedBuilding.height) || 6;
+
+      try {
+        selectedBuildingHighlightRef.current = viewer.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(bLon, bLat, bHeight + 2),
+          ellipse: {
+            semiMinorAxis: 18.0,
+            semiMajorAxis: 18.0,
+            material: Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.38),
+            outline: true,
+            outlineColor: Cesium.Color.fromCssColorString("#38bdf8"),
+            outlineWidth: 3,
+            heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          },
+        });
+        viewer.scene.requestRender();
+      } catch (e) {}
+    }
+  }, [selectedBuilding]);
 
 
 
@@ -5606,6 +5841,7 @@ export function CesiumDigitalTwinViewer({
           setInternalRain(false);
           onToggleRain?.(false);
         }}
+        onSelectBuilding={setSelectedBuilding}
       />
 
       {/* 🗺️ Selected Area Map Layers Status Box (Moved below ML Footprint box so they do not overlap) */}
@@ -5688,6 +5924,20 @@ export function CesiumDigitalTwinViewer({
               void loadBuildings({ polygon: boundary }, roadFeatures, riverFeatures, bounds, areaKey);
             }}>{isLoadingBuildings ? "Buildings are still loading…" : "Reload buildings only"}</button>
           </div>
+          <div className="mt-2 border-t border-slate-700 pt-2 text-[10px] text-slate-300" data-testid="multi-hazard-map-legend">
+            <div className="flex items-center gap-2">
+              <Activity className="size-3.5 text-cyan-300" />
+              <span>{multiHazardLayerError ? "Risk overlay unavailable" : !multiHazard.ready ? "ML risk: model unavailable" : multiHazard.heatmap.isError ? "ML risk: service unavailable" : `${multiHazard.features.length} predicted risk locations${showMultiHazard ? "" : " · hidden"}`}</span>
+            </div>
+            {multiHazard.ready && multiHazard.features.length > 0 && (
+              <>
+                <div className="mt-1.5 flex flex-wrap gap-2">{Object.entries(MULTI_HAZARD_COLORS).map(([label, color]) => <span key={label} className="inline-flex items-center gap-1"><span className="size-2 rounded-full" style={{ backgroundColor: color }} />{label}</span>)}</div>
+                <p className={`mt-1 ${multiHazard.stale ? "text-amber-300" : "text-slate-400"}`}>
+                  {multiHazard.stale ? "Stale inference" : "Latest inference"}{multiHazard.ageMinutes !== null ? ` · ${multiHazard.ageMinutes} min ago` : ""} · {multiHazard.model.data?.model_version}
+                </p>
+              </>
+            )}
+          </div>
         </div>
       )}
       <div
@@ -5729,46 +5979,70 @@ export function CesiumDigitalTwinViewer({
 
       {/* Top Right Floating Toolbar */}
       <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5 bg-slate-900/85 backdrop-blur-md border border-slate-700/70 p-1.5 rounded-lg shadow-xl text-white">
+        {/* 🌐 TERRAIN / LAYER MODE SELECTOR */}
+        <div className="flex items-center bg-slate-950/80 p-0.5 rounded-lg border border-slate-700/70 gap-0.5" data-testid="terrain-layer-selector">
+          {/* Standard 3D Terrain */}
+          <button
+            type="button"
+            data-testid="terrain-mode-standard-btn"
+            onClick={() => handleSelectTerrainMode("standard")}
+            title="Standard 3D Terrain: Cesium World Terrain with 3D elevation"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+              terrainMode === "standard" && viewMode !== "flat"
+                ? "bg-sky-600 text-white ring-1 ring-sky-400 shadow-xs"
+                : "hover:bg-slate-800 text-slate-300"
+            }`}
+          >
+            <Mountain className="size-3.5 text-sky-300" />
+            <span>Standard 3D</span>
+          </button>
+
+          {/* Satellite */}
+          <button
+            type="button"
+            data-testid="terrain-mode-satellite-btn"
+            onClick={() => handleSelectTerrainMode("satellite")}
+            title="Satellite: Aerial satellite imagery perspective"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+              terrainMode === "satellite"
+                ? "bg-sky-600 text-white ring-1 ring-sky-400 shadow-xs"
+                : "hover:bg-slate-800 text-slate-300"
+            }`}
+          >
+            <Eye className="size-3.5 text-sky-300" />
+            <span>Satellite</span>
+          </button>
+
+          {/* TIN Terrain */}
+          <button
+            type="button"
+            data-testid="terrain-mode-tin-btn"
+            onClick={() => handleSelectTerrainMode("tin")}
+            title="TIN Terrain: Triangulated Irregular Network generated from Copernicus DEM (COP30)"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all ${
+              terrainMode === "tin"
+                ? "bg-gradient-to-r from-cyan-600 to-teal-600 text-white ring-1 ring-cyan-300 shadow-md shadow-cyan-950"
+                : "hover:bg-slate-800 text-cyan-300 hover:text-white"
+            }`}
+          >
+            <Layers className="size-3.5 text-cyan-400" />
+            <span>TIN Terrain</span>
+            {tinLoading && <Loader2 className="size-3 animate-spin text-cyan-300 ml-0.5" />}
+          </button>
+        </div>
+
         {/* 🚶 FLAT VIEW BUTTON */}
         <button
           onClick={switchToFlatView}
           title="Flat View: Ground level perspective"
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all shadow-xs ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-all shadow-xs ${
             viewMode === "flat"
               ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white ring-1 ring-emerald-400"
               : "hover:bg-slate-800 text-slate-200"
           }`}
         >
-          <PersonStanding className="size-4 text-emerald-300" />
-          <span>Flat View</span>
-        </button>
-
-        {/* 🏔️ 3D VIEW BUTTON */}
-        <button
-          onClick={switchTo3DView}
-          title="3D View: Oblique perspective"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-all ${
-            viewMode === "3d"
-              ? "bg-sky-600 text-white ring-1 ring-sky-400"
-              : "hover:bg-slate-800 text-slate-300"
-          }`}
-        >
-          <Mountain className="size-3.5" />
-          <span>3D View</span>
-        </button>
-
-        {/* 🛰️ TOP-DOWN SATELLITE BUTTON */}
-        <button
-          onClick={switchToTopDown}
-          title="Top-Down Satellite Nadir View"
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-all ${
-            viewMode === "topdown"
-              ? "bg-sky-600 text-white ring-1 ring-sky-400"
-              : "hover:bg-slate-800 text-slate-300"
-          }`}
-        >
-          <Eye className="size-3.5" />
-          <span className="hidden sm:inline">Top-Down</span>
+          <PersonStanding className="size-3.5 text-emerald-300" />
+          <span className="hidden sm:inline">Flat View</span>
         </button>
 
         <div className="w-px h-5 bg-slate-700 mx-0.5" />
@@ -5833,6 +6107,18 @@ export function CesiumDigitalTwinViewer({
         </button>
 
 
+
+        <button
+          type="button"
+          data-testid="multi-hazard-overlay-toggle"
+          aria-pressed={showMultiHazard}
+          disabled={!multiHazard.ready}
+          onClick={() => setShowMultiHazard(previous => !previous)}
+          title={multiHazard.ready ? "Toggle model-predicted multi-hazard node risk" : "A trained model is required for the risk overlay"}
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold disabled:opacity-40 ${showMultiHazard && multiHazard.ready ? "bg-violet-600/90 text-white ring-1 ring-violet-400" : "hover:bg-slate-800 text-slate-300"}`}
+        >
+          <Activity className="size-3.5" /><span>ML Risk</span>
+        </button>
 
         {/* 🗺️ AREA IN GIS BUTTON */}
         {onViewInGIS && (
@@ -5942,6 +6228,7 @@ export function CesiumDigitalTwinViewer({
 
         {/* 🤖 AI ASSISTANT CHAT BUTTON */}
         <button
+          data-testid="ai-chat-btn"
           onClick={() => {
             setShowAIChat((prev) => !prev);
             if (!showAIChat) {
@@ -5996,6 +6283,53 @@ export function CesiumDigitalTwinViewer({
           )}
         </button>
       </div>
+
+      {/* ⛰️ TIN TERRAIN CONTROL PANEL */}
+      {terrainMode === "tin" && (
+        <TinTerrainControls
+          data={tinData}
+          loading={tinLoading}
+          error={tinError}
+          tinActive={tinActive}
+          wireframeActive={tinWireframeActive}
+          surfaceActive={tinSurfaceActive}
+          elevationColoring={tinElevationColoring}
+          gnnNodesActive={tinGnnNodesActive}
+          opacity={tinOpacity}
+          verticalExaggeration={tinExaggeration}
+          onToggleTin={(active) => {
+            setTinActive(active);
+            tinLayerRef.current?.updateOptions({ visible: active });
+          }}
+          onToggleWireframe={(active) => {
+            setTinWireframeActive(active);
+            tinLayerRef.current?.updateOptions({ wireframeVisible: active });
+          }}
+          onToggleSurface={(active) => {
+            setTinSurfaceActive(active);
+            tinLayerRef.current?.updateOptions({ surfaceVisible: active });
+          }}
+          onToggleElevationColoring={(active) => {
+            setTinElevationColoring(active);
+            tinLayerRef.current?.updateOptions({ elevationColoring: active });
+          }}
+          onToggleGnnNodes={(active) => {
+            setTinGnnNodesActive(active);
+            tinLayerRef.current?.updateOptions({ gnnNodesVisible: active });
+          }}
+          onChangeOpacity={(val) => {
+            setTinOpacity(val);
+            tinLayerRef.current?.updateOptions({ opacity: val });
+          }}
+          onChangeExaggeration={(val) => {
+            setTinExaggeration(val);
+            tinLayerRef.current?.updateOptions({ verticalExaggeration: val });
+          }}
+          onRefresh={() => {
+            void loadTinTerrainData(true);
+          }}
+        />
+      )}
 
 
       {/* 🎯 Interactive 3D Terrain Node / Sensor Placement Banner */}
@@ -6935,6 +7269,26 @@ export function CesiumDigitalTwinViewer({
               }}
             >
               ● {selectedBuilding.flood_risk || "MONITORED"}
+            </span>
+          </div>
+
+          {/* Flood Arrival Time Highlight Banner */}
+          <div className="mt-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 px-3 py-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🌊</span>
+              <div>
+                <div className="text-[9px] font-semibold text-cyan-300 uppercase tracking-wider">Flood Reach Time</div>
+                <div className="text-xs font-bold text-white">
+                  {selectedBuilding.flood_arrival_time || (
+                    (typeof selectedBuilding.distance_to_river_m === "number" || typeof selectedBuilding.distance_from_river === "string")
+                      ? `~${Math.max(15, Math.round((Number(selectedBuilding.distance_to_river_m) || (parseFloat(String(selectedBuilding.distance_from_river || "")) || 350)) / 1.8))}s`
+                      : "Calculating…"
+                  )}
+                </div>
+              </div>
+            </div>
+            <span className="text-[10px] font-mono text-cyan-400/90 bg-cyan-900/40 px-2 py-0.5 rounded border border-cyan-700/50">
+              {selectedBuilding.flood_risk || "MONITORED"}
             </span>
           </div>
 

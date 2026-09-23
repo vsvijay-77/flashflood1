@@ -4,7 +4,10 @@ from app.config import settings
 
 class QwenClient:
     def __init__(self):
-        self.api_url = settings.qwen_api_url
+        url = settings.qwen_api_url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+        self.api_url = url.rstrip('/')
         self.timeout = 60.0
 
     async def generate_text_stream(self, user_prompt: str, system_prompt: str, max_tokens: int = 600):
@@ -53,8 +56,14 @@ class QwenClient:
                 
     async def test_connection(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                try:
+                    res = await client.get(f"{self.api_url}/openapi.json")
+                    if res.status_code == 200:
+                        return True
+                except Exception:
+                    pass
                 res = await client.get(self.api_url)
-                return res.status_code == 200 or res.status_code == 404
-        except:
+                return res.status_code in (200, 404, 405)
+        except Exception:
             return False

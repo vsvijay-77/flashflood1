@@ -14,6 +14,8 @@
 
 import { predictEdgeDischarge } from "./terrainFlowGnn";
 import { precomputeHydrology, type HydrologicalPrecomputedGrid } from "./hydrologyPrecompute";
+import { selectHeadwaterSources } from "./headwaterSources";
+import type { FloodForcing } from "./flashFloodParameters";
 
 export interface SimulationConfig {
   cols: number;
@@ -25,6 +27,7 @@ export interface SimulationConfig {
   cflSafety?: number; // 0.6
   maxSubstepsPerFrame?: number;
   flowModel?: "physics" | "gnn";
+  sourceMode?: "mapped" | "headwaters";
 }
 
 export interface CellEdge {
@@ -50,7 +53,8 @@ export interface WaterPhysicsState {
   velocityX: Float32Array; // horizontal velocity m/s
   velocityY: Float32Array; // vertical velocity m/s
   insideMask: Uint8Array; // 1 if inside marked area polygon, 0 otherwise
-  isSource: Uint8Array; // 1 if high-terrain source cell
+  isSource: Uint8Array; // 1 only at inflow entry cells
+  isWaterway: Uint8Array; // complete mapped channel network, including dry downstream cells
   initialSourceDepth: Float32Array;
   edges: CellEdge[];
   elapsedSeconds: number;
@@ -88,9 +92,10 @@ export class WaterPhysicsSimulation {
       manningN: config.manningN ?? 0.032,
       gravity: config.gravity ?? 9.81,
       cflSafety: config.cflSafety ?? 0.6,
-      // 60x playback needs roughly nine stable 0.2 s steps per rendered frame.
+      // Bound work per rendered frame; forecasts continue in subsequent worker slices.
       maxSubstepsPerFrame: config.maxSubstepsPerFrame ?? 12,
       flowModel: config.flowModel ?? "physics",
+      sourceMode: config.sourceMode ?? "mapped",
     };
 
     const totalCells = this.config.cols * this.config.rows;
@@ -121,9 +126,13 @@ export class WaterPhysicsSimulation {
       initialDepth[i] = d;
       // initialSourceDepth is the stable level used by injectSourceRise().
       // Vector river rendering handles the resting water appearance.
-      initialSourceDepth[i] = d > 0 ? d : (isSrc && inside[i] ? 0.025 : 0);
+      initialSourceDepth[i] = d;
     }
 
+    const isWaterway = new Uint8Array(isSource);
+    if (this.config.sourceMode === "headwaters") {
+      isSource.set(selectHeadwaterSources(config.cols, config.rows, bed, inside, isWaterway));
+    }
     this.hydrology = hydrology ?? precomputeHydrology({
       cols: this.config.cols,
       rows: this.config.rows,
@@ -131,7 +140,7 @@ export class WaterPhysicsSimulation {
       dy: this.config.dy,
       bedElevations: bed,
       insideMask: inside,
-      waterBodyMask: isSource,
+      waterBodyMask: isWaterway,
       pathMask: this.pathMask,
     });
 
@@ -194,6 +203,7 @@ export class WaterPhysicsSimulation {
       velocityY,
       insideMask: inside,
       isSource,
+      isWaterway,
       initialSourceDepth,
       edges,
       elapsedSeconds: 0,
@@ -209,8 +219,28 @@ export class WaterPhysicsSimulation {
   }
 
   /**
-   * Resets simulation: restores initial source water depths and clears momentum/velocities.
+   * Updates late-loading mapped channels/paths without changing water or time.
    */
+  public updateMappedFeatures(sources: Uint8Array, paths: Uint8Array): boolean {
+    const state = this.state;
+    if (sources.length !== state.totalCells || paths.length !== state.totalCells) return false;
+    let changed = false;
+    for (let i = 0; i < state.totalCells; i++) {
+      if (state.isWaterway[i] !== sources[i] || this.pathMask[i] !== paths[i]) { changed = true; break; }
+    }
+    if (!changed) return false;
+    state.isWaterway.set(sources);
+    state.isSource.set(this.config.sourceMode === "headwaters"
+      ? selectHeadwaterSources(state.cols, state.rows, state.bed, state.insideMask, sources) : sources);
+    this.pathMask.set(paths);
+    this.hydrology = precomputeHydrology({
+      cols: state.cols, rows: state.rows, dx: this.config.dx, dy: this.config.dy,
+      bedElevations: state.bed, insideMask: state.insideMask,
+      waterBodyMask: state.isWaterway, pathMask: this.pathMask,
+    });
+    return true;
+  }
+
   public reset(): void {
     const { totalCells, depth, initialDepth, delta, velocityX, velocityY, edges } = this.state;
     for (let i = 0; i < totalCells; i++) {
@@ -237,16 +267,7 @@ export class WaterPhysicsSimulation {
     const cellArea = dx * this.config.dy;
     const effectiveRise = Math.max(0, sourceRiseM);
 
-    if (effectiveRise <= 0) {
-      for (let i = 0; i < totalCells; i++) {
-        if (!insideMask[i]) continue;
-        if (isSource[i] && depth[i] > initialSourceDepth[i]) {
-          const drainRate = Math.min(depth[i] - initialSourceDepth[i], 0.20 * dt);
-          depth[i] -= drainRate;
-        }
-      }
-      return;
-    }
+    if (!Number.isFinite(effectiveRise) || !Number.isFinite(dt) || effectiveRise <= 0 || dt <= 0) return;
 
     for (let i = 0; i < totalCells; i++) {
       if (!insideMask[i]) continue;
@@ -254,14 +275,10 @@ export class WaterPhysicsSimulation {
       if (isSource[i]) {
         const targetDepth = initialSourceDepth[i] + effectiveRise;
         if (depth[i] < targetDepth) {
-          // A restrained inflow lets the flood front emerge from waterways over
-          // Gradual rise rate: river water swells smoothly and overtops banks m² by m²
+          // Rate-limited stage boundary; the storm hydrograph sets its target.
           const riseRate = Math.min(targetDepth - depth[i], (0.08 + 0.04 * Math.min(effectiveRise, 4.0)) * dt);
           depth[i] += riseRate;
           this.state.injectedVolumeM3 += riseRate * cellArea;
-        } else if (depth[i] > targetDepth) {
-          const drainRate = Math.min(depth[i] - targetDepth, 0.05 * dt);
-          depth[i] -= drainRate;
         }
       }
     }
@@ -270,7 +287,8 @@ export class WaterPhysicsSimulation {
   /**
    * Advances the shallow-water physics by time dt using adaptive CFL sub-stepping.
    */
-  public advance(deltaTime: number, speedMultiplier = 1.0, sourceRiseM = 1.2, rainfallMmH = 0, budgetMs = Infinity): number {
+  public advance(deltaTime: number, speedMultiplier = 1.0, sourceRiseM = 1.2, rainfallMmH = 0, budgetMs = Infinity,
+    forcing?: (elapsedSeconds: number) => FloodForcing): number {
     if (![deltaTime, speedMultiplier, sourceRiseM, rainfallMmH].every(Number.isFinite) || deltaTime <= 0 || speedMultiplier <= 0) return 0;
 
     const totalSimTime = deltaTime * speedMultiplier;
@@ -278,20 +296,22 @@ export class WaterPhysicsSimulation {
     let remainingTime = totalSimTime;
     const startedAt = performance.now();
 
-    // Compute CFL timestep once per frame (O(1) calculation)
-    const cflDt = this.computeCFLTimestep();
-
     let stepCount = 0;
     while (remainingTime > 1e-8) {
       if (stepCount > 0 && Number.isFinite(budgetMs) &&
           (stepCount >= this.config.maxSubstepsPerFrame || performance.now() - startedAt >= budgetMs)) break;
-      const dt = Math.min(remainingTime, cflDt);
+      // Recheck after every update: rising water and accelerating currents can
+      // reduce the stable timestep during accelerated playback or forecasting.
+      const dt = Math.min(remainingTime, this.computeCFLTimestep());
+      const stepForcing = forcing?.(this.state.elapsedSeconds + dt / 2);
+      const stepSourceRise = stepForcing?.sourceRiseM ?? sourceRiseM;
+      const stepRainfall = stepForcing?.rainfallMmH ?? rainfallMmH;
       this.stepPhysics(dt);
-      if (sourceRiseM >= 0) {
-        this.injectSourceRise(sourceRiseM, dt);
+      if (stepSourceRise > 0) {
+        this.injectSourceRise(stepSourceRise, dt);
       }
-      if (rainfallMmH > 0) {
-        const addedDepth = (rainfallMmH / 3_600_000) * dt;
+      if (Number.isFinite(stepRainfall) && stepRainfall > 0) {
+        const addedDepth = (stepRainfall / 3_600_000) * dt;
         for (let index = 0; index < this.state.totalCells; index++) if (this.state.insideMask[index]) {
           this.state.depth[index] += addedDepth;
           this.state.injectedVolumeM3 += addedDepth * this.config.dx * this.config.dy;
@@ -313,10 +333,17 @@ export class WaterPhysicsSimulation {
     return totalSimTime - remainingTime;
   }
 
+  /** Evaluate the shared storm at each substep, independent of render speed. */
+  public advanceWithForcing(deltaTime: number, speedMultiplier: number,
+    forcing: (elapsedSeconds: number) => FloodForcing, budgetMs = Infinity): number {
+    return this.advance(deltaTime, speedMultiplier, 0, 0, budgetMs, forcing);
+  }
+
   /**
    * Hydrodynamic step: calculates gravity & pressure driven flow down the terrain elevation gradient.
    */
   public stepPhysics(dt: number): void {
+    if (!Number.isFinite(dt) || dt <= 0) return;
     const { g = 9.81, n = this.config.manningN, dx } = {
       g: this.config.gravity,
       n: this.config.manningN,
@@ -360,7 +387,7 @@ export class WaterPhysicsSimulation {
 
       // Downhill momentum equation
       if (this.config.flowModel === "gnn") {
-        const channel = this.state.isSource[a] || this.state.isSource[b];
+        const channel = this.state.isWaterway[a] || this.state.isWaterway[b];
         const path = this.pathMask[a] || this.pathMask[b];
         const effectiveRoughness = effectiveN * (channel ? 0.7 : path ? 0.85 : 1);
         edge.discharge = -Math.sign(gradient) * predictEdgeDischarge(waterDepth, Math.abs(gradient), effectiveRoughness);
@@ -373,16 +400,7 @@ export class WaterPhysicsSimulation {
       const available = depth[donor] * distance;
 
       const requested = Math.abs(edge.discharge) * dt;
-      // Over dry land margins, limit transfer rate so expansion creeps m² by m² visibly
-      const shallowMargin = Math.min(depth[a], depth[b]);
-      const wettingDepth = Math.max(depth[a], depth[b]);
-      const wettingProgress = Math.min(1, Math.max(0, (wettingDepth - 0.01) / 0.11));
-      const wettingFactor = wettingProgress * wettingProgress * (3 - 2 * wettingProgress);
-      const isOverlandExpansion = shallowMargin < 0.08;
-      const transferLimit = isOverlandExpansion
-        ? available * Math.min(1.0, (0.16 + 0.48 * wettingFactor) * dt)
-        : available;
-      const limited = Math.min(requested, transferLimit);
+      const limited = Math.min(requested, available);
 
       edge.discharge = Math.sign(edge.discharge) * (limited / Math.max(1e-5, dt));
     }
@@ -436,61 +454,6 @@ export class WaterPhysicsSimulation {
       delta[i] = 0;
     }
 
-    this.bridgeWettingGaps();
-  }
-
-  /**
-   * Smooths isolated dry cells between nearby wet valley cells. The bridge is
-   * conservative and refuses to cross a terrain lip, so it removes rendering
-   * gaps without turning separate basins into one continuous lake.
-   */
-  private bridgeWettingGaps(): void {
-    const { cols, rows, bed, depth, insideMask } = this.state;
-    const adjustments = new Float32Array(this.state.totalCells);
-    const neighbourOffsets = [
-      [-1, -1], [0, -1], [1, -1],
-      [-1, 0],           [1, 0],
-      [-1, 1],  [0, 1],  [1, 1],
-    ];
-
-    for (let row = 1; row < rows - 1; row++) {
-      for (let column = 1; column < cols - 1; column++) {
-        const index = row * cols + column;
-        if (!insideMask[index] || depth[index] >= 0.014) continue;
-
-        const contributors: number[] = [];
-        let depthSum = 0;
-        for (const [columnOffset, rowOffset] of neighbourOffsets) {
-          const neighbour = (row + rowOffset) * cols + column + columnOffset;
-          if (!insideMask[neighbour] || depth[neighbour] < 0.028) continue;
-          // Do not bridge across a bank or ridge that is materially higher
-          // than the adjacent wet water surface.
-          if (bed[index] > bed[neighbour] + depth[neighbour] + 0.12) continue;
-          contributors.push(neighbour);
-          depthSum += depth[neighbour];
-        }
-
-        if (contributors.length < 2) continue;
-        const targetDepth = Math.min(0.045, (depthSum / contributors.length) * 0.32);
-        const required = targetDepth - depth[index];
-        if (required <= 1e-5) continue;
-
-        let available = 0;
-        for (const neighbour of contributors) available += Math.max(0, depth[neighbour] - 0.018);
-        if (available <= 1e-5) continue;
-
-        const transferred = Math.min(required, available * 0.20);
-        adjustments[index] += transferred;
-        for (const neighbour of contributors) {
-          const share = Math.max(0, depth[neighbour] - 0.018) / available;
-          adjustments[neighbour] -= transferred * share;
-        }
-      }
-    }
-
-    for (let i = 0; i < depth.length; i++) {
-      if (adjustments[i] !== 0) depth[i] = Math.max(0, depth[i] + adjustments[i]);
-    }
   }
 
   /**
@@ -518,7 +481,9 @@ export class WaterPhysicsSimulation {
       }
     }
     const cflDt = (cflSafety * Math.min(dx, this.config.dy)) / maxWaveSpeed;
-    return Math.min(0.20, cflDt);
+    // A one-second ceiling permits efficient forecasts on coarse terrain grids.
+    // Fine grids and fast flow remain constrained by the current CFL bound.
+    return Math.min(1, Math.max(0.2, 0.02 * Math.min(dx, this.config.dy)), cflDt);
   }
 
   /**

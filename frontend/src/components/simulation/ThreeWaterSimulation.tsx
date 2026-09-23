@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwa
 import { Loader2, CloudRain } from "lucide-react";
 import * as THREE from "three";
 import { WaterPhysicsSimulation } from "./waterPhysics";
+import { clampFloodPlaybackSpeed, floodPlaybackRate } from "./playbackSpeed";
 import { createWaterShaderMaterial } from "./WaterShaders";
+import { createWaterwayDistanceTexture } from "./waterwayDistance";
 import type { OsmWaterQueryResult, WaterSourceFeature } from "@/services/osmWaterSourceService";
 import { FlashFloodControlPanel } from "./FlashFloodControlPanel";
-import { defaultFlashFloodParameters, runoffRainfall } from "./flashFloodParameters";
+import { defaultFlashFloodParameters, getFloodForcing } from "./flashFloodParameters";
 import CesiumSelectedAreaRainOverlay from "./CesiumSelectedAreaRainOverlay";
 import { rasterizeWaterSources } from "./water/sourceRaster";
 import { fetchWater, type WaterFootprint } from "./water/osmWater";
@@ -17,8 +19,9 @@ import { buildStandardFloodReport } from "./standardFloodReport";
 import { buildSimulationReport, type SimulationReportData } from "./simulationReport";
 import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
+import { HouseArrivalPanel } from "./HouseArrivalPanel";
 import { BuildingArrivalLabels } from "./BuildingArrivalLabels";
-import { createArrivalForecast, advanceArrivalForecast, type ArrivalForecastInput, type ArrivalForecastResult } from "./arrivalForecast";
+import { type ArrivalForecastInput, type ArrivalForecastResult, formatArrivalTime } from "./arrivalForecast";
 import type { BuildingFeature } from "@/lib/routingApi";
 
 declare const Cesium: any;
@@ -47,6 +50,7 @@ export interface ThreeWaterSimulationProps {
   onToggleVisibleRain?: (show: boolean) => void;
   autoStart?: boolean;
   onClose?: () => void;
+  onSelectBuilding?: (building: any) => void;
   debugMode?: boolean;
 }
 
@@ -92,6 +96,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       onToggleVisibleRain,
       autoStart = false,
       onClose,
+      onSelectBuilding,
     },
     ref
   ) => {
@@ -105,6 +110,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const terrainMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
+    const waterwayTextureRef = useRef<THREE.DataTexture | null>(null);
 
     // Physics Engine Ref
     const physicsSimRef = useRef<WaterPhysicsSimulation | null>(null);
@@ -128,7 +134,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [buildingExposure, setBuildingExposure] = useState<BuildingExposure[]>([]);
     const [arrivalForecast, setArrivalForecast] = useState<ArrivalForecastResult | null>(null);
     const arrivalForecastRef = useRef<ArrivalForecastResult | null>(null);
-    arrivalForecastRef.current = arrivalForecast;
+    const [forecastRevision, setForecastRevision] = useState(0);
+    const [forecastError, setForecastError] = useState<string | null>(null);
+    const startPlaybackRef = useRef<() => void>(() => {});
     const [completedReport, setCompletedReport] = useState<SimulationReportData | null>(null);
     const [saveStatus, setSaveStatus] = useState<string>("Ready");
     const simulationStartedAtRef = useRef<string | null>(null);
@@ -158,7 +166,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [isPaused, setIsPaused] = useState<boolean>(false);
     const [showWater, setShowWater] = useState<boolean>(true);
-    const [sourceRise, setSourceRise] = useState<number>(defaultSourceRise !== undefined && defaultSourceRise > 0 ? defaultSourceRise : 1.2);
+    const [sourceRise, setSourceRise] = useState<number>(defaultSourceRise !== undefined ? Math.max(0, defaultSourceRise) : 1.2);
     const [speed, setSpeed] = useState<number>(1);
     const [waveIntensity, setWaveIntensity] = useState<number>(1.0);
     const [statusText, setStatusText] = useState<string>("Initializing terrain & water sources…");
@@ -192,19 +200,19 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     }, [defaultDurationMinutes]);
 
     useEffect(() => {
-      if (defaultSourceRise !== undefined && defaultSourceRise > 0) {
+      if (defaultSourceRise !== undefined) {
         setSourceRise(defaultSourceRise);
       }
     }, [defaultSourceRise]);
 
-    const [rainfall, setRainfall] = useState(rainfallMmH && rainfallMmH > 0 ? rainfallMmH : 150);
+    const [rainfall, setRainfall] = useState(Math.max(0, rainfallMmH));
     const [fps, setFps] = useState(0);
     const [effectiveSpeed, setEffectiveSpeed] = useState(0);
     const [renderScale, setRenderScale] = useState(1);
     const rainfallRef = useRef(rainfall);
     rainfallRef.current = rainfall;
     useEffect(() => {
-      if (rainfallMmH && rainfallMmH > 0) {
+      if (Number.isFinite(rainfallMmH)) {
         setRainfall(rainfallMmH);
       }
     }, [rainfallMmH]);
@@ -242,7 +250,6 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     waveIntensityRef.current = waveIntensity;
     const showWaterRef = useRef(showWater);
     showWaterRef.current = showWater;
-    const lastAppliedAtSecRef = useRef<number | null>(null);
 
     // ─── 1. INITIALIZE TERRAIN & OSM WATER BODIES ────────────────────────────
     useEffect(() => {
@@ -250,6 +257,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
       const abortController = new AbortController();
       let isMounted = true;
+      isRunningRef.current = false;
+      isPausedRef.current = false;
+      arrivalForecastRef.current = null;
+      setArrivalForecast(null);
+      setCompletedReport(null);
+      simulationStartedAtRef.current = null;
       setIsRunning(false);
       setIsPaused(false);
       setIsReady(false);
@@ -343,7 +356,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const totalHeightM = (north - south) * metersPerLat;
         if (!(totalWidthM > 0 && totalHeightM > 0)) throw new Error("Select an area with nonzero width and height.");
 
-        const maxGridAxis = 180;
+        const maxGridAxis = 128;
         const targetCellSizeM = 16;
         const spacing = Math.max(targetCellSizeM, totalWidthM / (maxGridAxis - 1), totalHeightM / (maxGridAxis - 1));
         const COLS = Math.max(2, Math.round(totalWidthM / spacing) + 1);
@@ -563,40 +576,17 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           }
         }
 
-        // If no mapped waterways exist in the area, establish natural valley stream sources along lowest depressions
-        if (waterFeatureCount === 0) {
-          const elevThreshold = minElev + relief * 0.15;
-          for (let i = 0; i < totalCells; i++) {
-            if (insideMask[i] && sampledElevations[i] <= elevThreshold) {
-              sourceMask[i] = 1;
-              waterFeatureCount++;
-            }
-          }
-          if (waterFeatureCount === 0) {
-            const candidates = Array.from({ length: totalCells }, (_, i) => i)
-              .filter(i => insideMask[i])
-              .sort((a, b) => sampledElevations[a] - sampledElevations[b]);
-            for (let k = 0; k < Math.min(16, candidates.length); k++) {
-              sourceMask[candidates[k]] = 1;
-              waterFeatureCount++;
-            }
-          }
-        }
-
+        // Floodwater starts dry; rainfall and selected river rise build a small
+        // front over simulated time without a pre-filled river-width band.
+        // Missing waterways permit rainfall-only runoff, never synthetic sources.
         waterBodyMaskRef.current = sourceMask;
         setIsFallbackSource(raster.featureCount === 0);
-        setOsmFeatureCount(waterFeatureCount);
-
-        // Establish initial water depth in rivers and waterways so the channel has visible water immediately
-        // User requirement: "make the width of water body at the start a bit small"
-        // Reduced from 0.45m → 0.12m so the initial river channel appears narrow and grows naturally during simulation.
-        for (let i = 0; i < totalCells; i++) {
-          initialDepths[i] = insideMask[i] && sourceMask[i] ? 0.12 : 0.0;
-        }
+        setOsmFeatureCount(raster.featureCount);
+        initialDepths.fill(0);
 
         // 5. Initialize Physics Simulation Engine with High-to-Low Momentum
         const physics = new WaterPhysicsSimulation(
-          { cols: COLS, rows: ROWS, dx, dy, manningN: parametersRef.current.roughness, gravity: 9.81, flowModel: parametersRef.current.flowModel },
+          { cols: COLS, rows: ROWS, dx, dy, manningN: parametersRef.current.roughness, gravity: 9.81, flowModel: parametersRef.current.flowModel, sourceMode: "headwaters" },
           sampledElevations,
           insideMask,
           sourceMask,
@@ -653,34 +643,17 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         });
         setIsReady(true);
 
-        // User requirement: "only wtaer level or soil moisture either one of them 40 percent trigger water simu otherwise no"
-        // Rain alone does NOT trigger water simulation. Only autoStart triggers water simulation.
-        const shouldAutoStart = Boolean(autoStart);
-        if (shouldAutoStart) {
-          if (!simulationStartedAtRef.current) {
-            simulationStartedAtRef.current = new Date().toISOString();
-          }
-          isRunningRef.current = true;
-          isPausedRef.current = false;
-          setIsRunning(true);
-          setIsPaused(false);
-          setControlsOpen(false);
-          onRunningChange?.(true);
-          onPauseChange?.(false);
-          setStatusText("Flash flood simulation running with live rainfall");
-        } else {
-          isRunningRef.current = false;
-          isPausedRef.current = false;
-          setIsRunning(false);
-          setIsPaused(false);
-          setControlsOpen(true);   // keep controls open so user can configure parameters and start flood
-          onRunningChange?.(false);
-          onPauseChange?.(false);
-
-          setStatusText(
-            `Ready • ${minElev.toFixed(0)}–${maxElev.toFixed(0)}m (${relief.toFixed(0)}m relief) · River loaded · Click Play to start flood simulation`
-          );
-        }
+        isRunningRef.current = false;
+        isPausedRef.current = false;
+        setIsRunning(false);
+        setIsPaused(false);
+        onRunningChange?.(false);
+        onPauseChange?.(false);
+        setControlsOpen(!autoStart);
+        setStatusText(
+          `Terrain ready • ${minElev.toFixed(0)}–${maxElev.toFixed(0)}m · Ready to start`
+        );
+        if (autoStart) startPlaybackRef.current();
         try {
           cesiumViewer.scene.requestRender();
         } catch (e) {}
@@ -759,6 +732,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       geometry.setAttribute("aBedElevation", new THREE.BufferAttribute(new Float32Array(bedElevations), 1));
       geometry.setAttribute("aInside", new THREE.BufferAttribute(new Float32Array(insideMask), 1));
       geometry.setAttribute("aIsWaterBody", new THREE.BufferAttribute(new Float32Array(waterBodyMask), 1));
+      const gridUvs = new Float32Array(totalCells * 2);
+      for (let i = 0; i < totalCells; i++) {
+        gridUvs[i * 2] = (i % cols) / (cols - 1);
+        gridUvs[i * 2 + 1] = Math.floor(i / cols) / (rows - 1);
+      }
+      geometry.setAttribute("aGridUv", new THREE.BufferAttribute(gridUvs, 2));
       geometry.setIndex(indices);
       // Lighting normals are reconstructed in the fragment shader.
       for (const name of ["position", "aDepth", "aVelocity"]) (geometry.attributes[name] as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
@@ -779,11 +758,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         new THREE.MeshBasicMaterial({
           colorWrite: false,
           side: THREE.DoubleSide,
-          depthWrite: false,
+          depthWrite: true,
         })
       );
-      terrainMesh.visible = false;
+      terrainMesh.renderOrder = -1;
       terrainMeshRef.current = terrainMesh;
+      scene.add(terrainMesh);
 
       const container = canvasContainerRef.current;
       const res = new THREE.Vector2(container?.clientWidth || 800, container?.clientHeight || 600);
@@ -833,6 +813,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       container.appendChild(renderer.domElement);
       rendererRef.current = renderer;
 
+      // Reuse the matrix instead of allocating on every map frame.
+      const cameraView = new THREE.Matrix4();
       // 3. Camera Sync function
       const syncCamera = () => {
         if (!cesiumViewer || cesiumViewer.isDestroyed() || !cameraRef.current || !enuTransformRef.current)
@@ -844,8 +826,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
         // Multiply Cesium's camera view matrix by the Three.js coordinate frame.
         // This mathematically aligns Three.js clip space with Cesium's clip space to the sub-millimeter.
-        const view = new THREE.Matrix4()
-          .fromArray(Array.from(cCamera.viewMatrix) as number[])
+        const view = cameraView
+          .fromArray(cCamera.viewMatrix)
           .multiply(threeFrame);
 
         camera.matrixAutoUpdate = false;
@@ -858,7 +840,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           if (cCamera.frustum.far !== undefined) camera.far = Math.max(1000, cCamera.frustum.far);
         }
 
-        camera.projectionMatrix.fromArray(Array.from(cCamera.frustum.projectionMatrix) as number[]);
+        camera.projectionMatrix.fromArray(cCamera.frustum.projectionMatrix);
         camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
       };
 
@@ -874,8 +856,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         const now = performance.now();
         if (!document.hidden && waterMeshRef.current) {
           const isActive = isRunningRef.current && !isPausedRef.current;
-          // Fluid, responsive 35 FPS render rate: eliminates GPU fill-rate exhaustion & micro-stutters
-          const frameInterval = isActive ? 1000 / 35 - 1 : 1000;
+          const frameInterval = isActive ? 1000 / 30 - 1 : 1000;
           if (now - requestedAt >= frameInterval) {
             requestedAt = now;
             try {
@@ -896,12 +877,6 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       let simulatedSinceTelemetry = 0;
       let telemetryStartedAt = performance.now();
       let frameCount = 0;
-      // Dirty flag: only call renderer.render() when water or camera actually changed.
-      // Skips redundant GPU draws during flat-view navigation (huge perf win).
-      let renderDirty = true;
-      let lastCamPosX = 0, lastCamPosY = 0, lastCamPosZ = 0;
-      let lastCamDirX = 0, lastCamDirY = 0;
-
       const onPostRender = () => {
         const now = performance.now();
         if (document.hidden) { lastTime = now; return; }
@@ -910,8 +885,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         if (now - qualityCheck > 3000 && !document.hidden) {
           qualityCheck = now;
           const ratio = renderer.getPixelRatio();
-          const next = frameTime > 28 ? Math.max(0.75, ratio - 0.25)
-            : frameTime < 18 ? Math.min(window.devicePixelRatio, 1.5, ratio + 0.25) : ratio;
+          const next = frameTime > 42 ? Math.max(0.75, ratio - 0.25)
+            : frameTime < 35 ? Math.min(window.devicePixelRatio, 1.5, ratio + 0.25) : ratio;
           if (next !== ratio) renderer.setPixelRatio(next);
         }
         const dt = Math.min(frameMs / 1000, 0.1);
@@ -919,18 +894,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
         const mat = waterMaterialRef.current;
         if (mat) {
-          // Wave animation: base rate=1.0 so water always looks alive at 1x
-          // Scales with speed when simulation is running (faster spread = faster waves)
-          const waveRate = isRunningRef.current && !isPausedRef.current
-            ? Math.max(1.0, speedRef.current * 0.5)
-            : 0.8; // gentle ambient wave even when idle
-          mat.uniforms.uTime.value += dt * waveRate;
+          // Pause freezes surface detail as well as the hydraulic clock.
+          if (isRunningRef.current && !isPausedRef.current) mat.uniforms.uTime.value += dt;
           mat.uniforms.uWaveHeight.value = waveIntensityRef.current;
-          mat.uniforms.uRainIntensity.value = isRainVisibleRef.current
-            ? Math.max(0.4, (rainfallRef.current || 150) / 300)
-            : (isRunningRef.current && physicsSimRef.current && physicsSimRef.current.state.elapsedSeconds < parametersRef.current.durationMinutes * 60
-                ? (rainfallRef.current || 150) / 300
-                : 0);
+          mat.uniforms.uRainIntensity.value = isRunningRef.current && !isPausedRef.current
+            && physicsSimRef.current && physicsSimRef.current.state.elapsedSeconds < parametersRef.current.durationMinutes * 60
+            ? rainfallRef.current / 300 : 0;
           renderer.getDrawingBufferSize(mat.uniforms.uResolution.value);
         }
 
@@ -941,80 +910,22 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
         if (isRunningRef.current && !isPausedRef.current) physicsTime += dt;
         else physicsTime = 0;
-        if (physics && mesh && gridMeta && isRunningRef.current && !isPausedRef.current && physicsTime >= 1 / 35) {
+        if (physics && mesh && gridMeta && isRunningRef.current && !isPausedRef.current && physicsTime >= 1 / 60) {
           const currentParameters = parametersRef.current;
           physics.config.manningN = currentParameters.roughness;
-          // Hydrograph with soft-start:
-          // Even if parameters are maxed out, initial expansion starts very gently from the 10px river thread
-          // and expands m² by m² outward over time.
-          const stormDurationSec = Math.max(120, currentParameters.durationMinutes * 60);
-          const elapsedSec = physics.state.elapsedSeconds;
-          const secondsUntilStormEnds = stormDurationSec - elapsedSec;
-          // Playback speed scaled to slow, observable realistic pace:
-          // User requirement: "make the simulation slow its very fast" + "MAKE THE EXPANSION OF RIVER SLOW BY 20%"
-          // Previously: speedRef.current * 45 made 1x = 45x speed, rushing through the entire flood in seconds.
-          // Then slowed to 2.0. Now further reduced by 20%: speedRef.current * 1.6.
-          const playbackMultiplier = speedRef.current * 1.6;
-          // Advance exactly in display-time chunks so 1x evolves smoothly and
-          // higher speeds allow fast-forwarding when desired.
-          const safeDt = Math.min(1 / 35, physicsTime);
-          const stepTime = secondsUntilStormEnds > 0 ? Math.min(safeDt, secondsUntilStormEnds / playbackMultiplier) : safeDt;
-
-          const stormPhase = elapsedSec / stormDurationSec;
-          // Active flood surge: starts immediately at >= 0.50 factor so water rises without dry delay
-          let timeRiseFactor = 0.50;
-          if (stormPhase < 0.40) {
-            timeRiseFactor = Math.max(0.50, Math.sin((stormPhase / 0.40) * (Math.PI / 2)));
-          } else if (stormPhase < 0.80) {
-            timeRiseFactor = 1.0;
-          } else if (stormPhase < 1.0) {
-            timeRiseFactor = Math.max(0.50, Math.cos(((stormPhase - 0.80) / 0.20) * (Math.PI / 2)));
-          } else {
-            // User requirement: "simulation not stop water evoving" - keep active evolving
-            timeRiseFactor = 0.50;
-          }
-
-          // If changes were applied live to an existing scenario, ramp in the new environment change immediately:
-          const lastAppliedAt = lastAppliedAtSecRef.current;
-          if (lastAppliedAt != null && elapsedSec >= lastAppliedAt) {
-            const appliedDuration = Math.max(180, currentParameters.durationMinutes * 60);
-            const appliedElapsed = elapsedSec - lastAppliedAt;
-            const appliedPhase = appliedElapsed / appliedDuration;
-            let appliedRise = 0.0;
-            if (appliedPhase < 0.20) {
-              appliedRise = Math.sin((appliedPhase / 0.20) * (Math.PI / 2));
-            } else if (appliedPhase < 0.80) {
-              appliedRise = 1.0;
-            } else if (appliedPhase < 1.0) {
-              appliedRise = Math.cos(((appliedPhase - 0.80) / 0.20) * (Math.PI / 2));
-            }
-            timeRiseFactor = Math.max(timeRiseFactor, appliedRise);
-          }
-
-          const runoff = runoffRainfall(rainfallRef.current, currentParameters, elapsedSec) * timeRiseFactor;
-          const windMs = Math.max(0, currentParameters.windSpeedKmh) / 3.6;
-          const windMultiplier = 1 + Math.min(1, windMs / 20) * 0.25;
-          const effectiveRunoff = runoff * windMultiplier;
-          const intensityScale = Math.max(0, (currentParameters.floodIntensity ?? 100)) / 100;
-          const effectiveSourceRise = Math.max(0.6, sourceRiseRef.current) * intensityScale * timeRiseFactor;
-
-          // The controls' extreme corner represents a basin-wide cloudburst,
-          // not merely a stronger river source. This intentionally inundates
-          // the selected area after the normal hydrograph ramps in, while all
-          // ordinary combinations remain terrain-routed shallow-water flow.
-          const isExtremeInundation =
-            currentParameters.floodIntensity >= 195 &&
-            rainfallRef.current >= 295 &&
-            sourceRiseRef.current >= 9.5;
-          const basinCloudburstMmH = isExtremeInundation ? 25000 * timeRiseFactor : 0;
-          const appliedRunoff = Math.max(effectiveRunoff * intensityScale, basinCloudburstMmH);
-
-          // Playback rate is proportional across every speed option.
-          // Budget max 6ms per frame to eliminate main-thread freezing and stuttering.
-          const advanced = physics.advance(stepTime, playbackMultiplier, effectiveSourceRise, appliedRunoff, 6);
+          physics.config.flowModel = currentParameters.flowModel;
+          // One real second is one simulated second at 1×. Consume elapsed frame
+          // time within the frame budget; faster presets use the displayed pace mapping.
+          const playbackMultiplier = floodPlaybackRate(speedRef.current);
+          const stepTime = Math.min(0.1, physicsTime);
+          const advanced = physics.advanceWithForcing(
+            stepTime, playbackMultiplier,
+            time => getFloodForcing(rainfallRef.current, sourceRiseRef.current, currentParameters, time),
+            6,
+          );
           simulatedSinceTelemetry += advanced;
           if (mat) mat.uniforms.uFlowTime.value = physics.state.elapsedSeconds;
-          physicsTime = Math.min(0.06, Math.max(0, physicsTime - advanced / playbackMultiplier));
+          physicsTime = Math.min(0.1, Math.max(0, physicsTime - advanced / playbackMultiplier));
 
           const depths = physics.state.depth;
 
@@ -1039,8 +950,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             for (let i = 0; i < totalCells; i++) {
               const isInside = insideMask ? insideMask[i] : 1;
               const d = isInside ? depths[i] : 0.0;
-              if (d > peaks[i]) peaks[i] = d;
-              posArr[i * 3 + 1] = basePositions[i * 3 + 1] + Math.min(d, 2.5);
+              peaks[i] = physics.state.peakDepth[i];
+              posArr[i * 3 + 1] = basePositions[i * 3 + 1] + d;
               depthArr[i] = d;
               velArr[i * 2 + 0] = isInside ? velX[i] : 0;
               velArr[i * 2 + 1] = isInside ? velY[i] : 0;
@@ -1136,6 +1047,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           }
           waterMeshRef.current = null;
         }
+        waterwayTextureRef.current?.dispose();
+        waterwayTextureRef.current = null;
         if (waterMaterialRef.current) {
           waterMaterialRef.current.dispose();
           waterMaterialRef.current = null;
@@ -1173,15 +1086,42 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     useEffect(() => {
       const grid = gridMetaRef.current;
       const inside = insideMaskRef.current;
-      if (!isReady || !grid || !inside || !physicsSimRef.current) return;
-      const features: WaterSourceFeature[] = (roadFeatures || []).map(feature => ({
+      const sim = physicsSimRef.current;
+      if (!isReady || !grid || !inside || !sim) return;
+      // OSM layers can finish after terrain sampling (including on fullscreen
+      // remounts). Incorporate them without seeding water or losing live state.
+      const sources: WaterSourceFeature[] = (riverFeatures || []).map((feature, index) => ({
+        id: String(feature.properties?.id ?? index), name: feature.properties?.name ?? "Waterway",
+        waterType: feature.properties?.waterway_type as WaterSourceFeature["waterType"],
+        isPolygon: ["Polygon", "MultiPolygon"].includes(feature.geometry.type),
+        geometry: feature.geometry, properties: feature.properties,
+      }));
+      const paths: WaterSourceFeature[] = (roadFeatures || []).map(feature => ({
         id: feature.properties.id, name: feature.properties.name, waterType: "stream", isPolygon: false,
         geometry: feature.geometry, properties: { width_m: 6 },
       }));
-      pathMaskRef.current.set(rasterizeWaterSources(features, grid, inside).mask);
-      graphRef.current?.update(physicsSimRef.current.state);
+      const sourceRaster = rasterizeWaterSources(sources, grid, inside);
+      const pathRaster = rasterizeWaterSources(paths, grid, inside);
+      if (sim.updateMappedFeatures(sourceRaster.mask, pathRaster.mask)) {
+        waterBodyMaskRef.current?.set(sourceRaster.mask);
+        pathMaskRef.current.set(pathRaster.mask);
+        graphRef.current?.update(sim.state);
+      }
+      const sourceAttribute = waterMeshRef.current?.geometry.getAttribute("aIsWaterBody") as THREE.BufferAttribute | undefined;
+      if (sourceAttribute) { (sourceAttribute.array as Float32Array).set(sourceRaster.mask); sourceAttribute.needsUpdate = true; }
+      waterwayTextureRef.current?.dispose();
+      const waterwayMap = sourceRaster.featureCount ? createWaterwayDistanceTexture(sources, grid) : null;
+      waterwayTextureRef.current = waterwayMap?.texture ?? null;
+      const material = waterMaterialRef.current;
+      if (material) {
+        material.uniforms.uWaterwayDistance.value = waterwayMap?.texture ?? null;
+        material.uniforms.uHasWaterwayDistance.value = waterwayMap ? 1 : 0;
+        material.uniforms.uWaterwayDistanceRange.value = waterwayMap?.maxDistance ?? 1;
+      }
+      setOsmFeatureCount(sourceRaster.featureCount);
+      setIsFallbackSource(sourceRaster.featureCount === 0);
       cesiumViewer?.scene.requestRender();
-    }, [roadFeatures, isReady, cesiumViewer]);
+    }, [riverFeatures, roadFeatures, isReady, cesiumViewer]);
 
     useEffect(() => {
       const grid = gridMetaRef.current;
@@ -1203,66 +1143,71 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       );
     }, [buildingFeatures, isReady, active]);
 
-    // Periodic arrival forecast rollout for building ETA estimation
+    // Precompute from one frozen snapshot in a worker. Playback and visual-only
+    // changes do not restart the calculation or rebuild the solver on the UI thread.
     useEffect(() => {
-      const physics = physicsSimRef.current;
-      const grid = gridMetaRef.current;
-      if (!active || !isReady || !physics || !grid) return;
-
+      const sim = physicsSimRef.current;
+      if (!active || !isReady || !sim || completedReport) return;
       let cancelled = false;
-      const computeForecast = () => {
-        if (cancelled || !physicsSimRef.current) return;
-        try {
-          const sim = physicsSimRef.current;
-          const input: ArrivalForecastInput = {
-            config: sim.config,
-            bed: sim.state.bed,
-            inside: sim.state.insideMask,
-            sources: sim.state.isSource,
-            paths: pathMaskRef.current,
-            depth: new Float32Array(sim.state.depth),
-            discharges: sim.state.edges.map((e) => e.discharge),
-            elapsed: sim.state.elapsedSeconds,
-            rainfall,
-            sourceRise,
-            parameters,
-            horizon: Math.max(sim.state.elapsedSeconds + 1800, parameters.durationMinutes * 60),
-          };
-          const forecastSim = createArrivalForecast(input);
-          const result = advanceArrivalForecast(forecastSim, input, 4);
-          if (!cancelled) {
-            arrivalForecastRef.current = result;
-            setArrivalForecast(result);
-            if (physicsSimRef.current) {
-              setBuildingExposure(
-                assessBuildings(
-                  buildingSamplesRef.current,
-                  physicsSimRef.current.state.depth,
-                  peakDepthRef.current,
-                  physicsSimRef.current.state.firstArrivalSeconds,
-                  result.arrivals
-                )
-              );
-            }
+      let worker: Worker | null = null;
+      arrivalForecastRef.current = null;
+      setArrivalForecast(null);
+      setForecastError(null);
+      const input: ArrivalForecastInput = {
+        config: { ...sim.config, manningN: parameters.roughness, flowModel: parameters.flowModel },
+        bed: sim.state.bed,
+        inside: sim.state.insideMask,
+        sources: sim.state.isWaterway,
+        paths: pathMaskRef.current,
+        depth: sim.state.depth,
+        initialSourceDepth: sim.state.initialSourceDepth,
+        firstArrivalSeconds: sim.state.firstArrivalSeconds,
+        velocityX: sim.state.velocityX,
+        velocityY: sim.state.velocityY,
+        discharges: sim.state.edges.map(edge => edge.discharge),
+        elapsed: sim.state.elapsedSeconds,
+        rainfall,
+        sourceRise,
+        parameters,
+        horizon: Math.max(sim.state.elapsedSeconds + 3600, parameters.durationMinutes * 60),
+      };
+      const fail = () => {
+        if (cancelled) return;
+        worker?.terminate();
+        setForecastError("Arrival estimates could not be prepared. Retry the calculation.");
+      };
+      try {
+        worker = new Worker(new URL("./arrivalForecast.worker.ts", import.meta.url), { type: "module" });
+        worker.onmessage = (event: MessageEvent<ArrivalForecastResult>) => {
+          if (cancelled) return;
+          const result = event.data;
+          arrivalForecastRef.current = result;
+          setArrivalForecast(result);
+          const live = physicsSimRef.current;
+          if (live) setBuildingExposure(assessBuildings(
+            buildingSamplesRef.current, live.state.depth, live.state.peakDepth,
+            live.state.firstArrivalSeconds, result.arrivals,
+          ));
+          if (result.complete) {
+            worker?.terminate();
           }
-        } catch (e) {
-          console.warn("Building arrival forecast rollout failed:", e);
-        }
-      };
-
-      const timer = window.setTimeout(computeForecast, 200);
-      return () => {
-        cancelled = true;
-        window.clearTimeout(timer);
-      };
-    }, [active, isReady, isRunning, Math.floor(elapsedSeconds / 10), rainfall, sourceRise, parameters]);
+        };
+        worker.onerror = fail;
+        worker.onmessageerror = fail;
+        // Structured cloning freezes the forecast without detaching live buffers.
+        worker.postMessage(input);
+      } catch {
+        fail();
+      }
+      return () => { cancelled = true; worker?.terminate(); };
+    }, [active, isReady, forecastRevision, rainfall, sourceRise, parameters.durationMinutes,
+      parameters.soilSaturation, parameters.infiltrationMmH, parameters.roughness,
+      parameters.flowModel, parameters.floodIntensity, riverFeatures, roadFeatures, completedReport]);
 
     // ─── 4. IMPERATIVE CONTROLS ──────────────────────────────────────────────
     const handleStart = () => {
-      if (!physicsSimRef.current || !waterMeshRef.current) return;
-      if (!simulationStartedAtRef.current) {
-        simulationStartedAtRef.current = new Date().toISOString();
-      }
+      if (!physicsSimRef.current || !waterMeshRef.current || isRunningRef.current) return;
+      if (!simulationStartedAtRef.current) simulationStartedAtRef.current = new Date().toISOString();
       setCompletedReport(null);
       isRunningRef.current = true;
       isPausedRef.current = false;
@@ -1272,10 +1217,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       onPauseChange?.(false);
       setStatusText("Rainfall and downhill runoff active");
       setControlsOpen(false);
-      try {
-        cesiumViewer.scene.requestRender();
-      } catch (e) {}
+      if (!cesiumViewer.isDestroyed()) cesiumViewer.scene.requestRender();
     };
+    startPlaybackRef.current = handleStart;
 
     const handlePause = () => {
       isPausedRef.current = true;
@@ -1288,6 +1232,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     };
 
     const handleResume = () => {
+      if (!isRunningRef.current) { handleStart(); return; }
       isRunningRef.current = true;
       isPausedRef.current = false;
       setIsPaused(false);
@@ -1301,8 +1246,6 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
     const handleApply = () => {
       if (!physicsSimRef.current || !waterMeshRef.current) return;
-      // Record time of live application so fresh rain/inflow begins immediately on existing water
-      lastAppliedAtSecRef.current = physicsSimRef.current.state.elapsedSeconds;
       parametersRef.current = parameters;
       rainfallRef.current = rainfall;
       sourceRiseRef.current = sourceRise;
@@ -1328,7 +1271,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     };
 
     const handleReset = () => {
-      lastAppliedAtSecRef.current = null;
+      arrivalForecastRef.current = null;
+      setForecastRevision(value => value + 1);
       simulationStartedAtRef.current = null;
       setCompletedReport(null);
       if (physicsSimRef.current) {
@@ -1501,7 +1445,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       resumeSimulation: handleResume,
       resetSimulation: handleReset,
       setSourceRise: (r) => setSourceRise(r),
-      setSpeed: (s) => setSpeed(s),
+      setSpeed: (s) => setSpeed(clampFloodPlaybackSpeed(s)),
       setWaveIntensity: (w) => setWaveIntensity(w),
       toggleWater: (show) => setShowWater(show),
       toggleGraph: (show?: boolean) => {
@@ -1566,6 +1510,67 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           exposures={buildingExposure}
           elapsed={elapsedSeconds}
           forecast={arrivalForecast}
+        />
+
+        <HouseArrivalPanel
+          buildings={buildingExposure}
+          elapsed={elapsedSeconds}
+          forecast={arrivalForecast}
+          error={forecastError}
+          onRetry={() => setForecastRevision(value => value + 1)}
+          onSelectBuilding={(building) => {
+            const feature = (buildingFeatures || []).find((b, i) => String(b.id ?? b.properties?.id ?? i) === building.id);
+            const bProps = (feature?.properties || {}) as any;
+            let lat = building.lat ?? bProps.lat;
+            let lon = building.lon ?? bProps.lon ?? (bProps as any).lng;
+
+            if ((typeof lat !== "number" || typeof lon !== "number") && feature?.geometry) {
+              const ring = feature.geometry.type === "Polygon"
+                ? feature.geometry.coordinates[0]
+                : feature.geometry.coordinates?.[0]?.[0];
+              if (ring?.length) {
+                const pts = ring as number[][];
+                lon = pts.reduce((sum, p) => sum + p[0], 0) / pts.length;
+                lat = pts.reduce((sum, p) => sum + p[1], 0) / pts.length;
+              }
+            }
+
+            if (cesiumViewer && !cesiumViewer.isDestroyed() && typeof lat === "number" && typeof lon === "number" && typeof Cesium !== "undefined") {
+              cesiumViewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(lon, lat - 0.0015, (Number(bProps.estimated_height || bProps.height) || 6) + 120),
+                orientation: {
+                  heading: Cesium.Math.toRadians(0),
+                  pitch: Cesium.Math.toRadians(-40),
+                  roll: 0,
+                },
+                duration: 1.5,
+              });
+            }
+
+            const distM = building.distanceToRiverM || Number(bProps.distance_to_river_m) || (parseFloat(String(bProps.distance_from_river || "")) || 350);
+            const arrivalText = building.arrivalSeconds !== null
+              ? `Reached at ${formatArrivalTime(building.arrivalSeconds)}`
+              : building.predictedArrivalSeconds !== null && building.predictedArrivalSeconds > elapsedSeconds
+              ? `~${formatArrivalTime(building.predictedArrivalSeconds - elapsedSeconds)}`
+              : building.predictedArrivalSeconds !== null
+              ? "Flood Imminent"
+              : `~${formatArrivalTime(Math.max(15, Math.round(distM / 1.8)))}`;
+
+            onSelectBuilding?.({
+              ...bProps,
+              id: building.id,
+              name: building.name,
+              lat,
+              lon,
+              estimated_height: bProps.estimated_height || bProps.height || 6,
+              elevation: bProps.elevation || bProps.elevation_m || 298.0,
+              flood_risk: building.arrivalSeconds !== null ? "CRITICAL" : bProps.flood_risk || "MONITORED",
+              distance_from_river: `${Math.round(distM)} m`,
+              distance_to_river_m: distM,
+              flood_arrival_time: arrivalText,
+              _buildingData: true,
+            });
+          }}
         />
 
         {/* Floating Control Panel HUD */}
@@ -1642,7 +1647,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           showRain={isRainVisible}
           onToggleRain={handleToggleVisibleRain}
           onSourceRiseChange={(r) => setSourceRise(r)}
-          onSpeedChange={(s) => setSpeed(s)}
+          onSpeedChange={(s) => setSpeed(clampFloodPlaybackSpeed(s))}
           onWaveIntensityChange={(w) => setWaveIntensity(w)}
           onClose={handleClose}
         />

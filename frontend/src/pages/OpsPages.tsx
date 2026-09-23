@@ -49,6 +49,7 @@ import {
   type MobAlertRecord,
 } from "@/lib/types";
 import { CesiumDigitalTwinViewer } from "@/components/gis/CesiumDigitalTwinViewer";
+import { MultiHazardIntelligencePanel } from "@/components/gis/MultiHazardIntelligencePanel";
 import GISMap, { DEFAULT_LAYERS } from "@/components/gis/GISMap";
 import { supabase } from "@/lib/supabase";
 import { parseCustomAreaPolygon } from "@/lib/gisUtils";
@@ -400,7 +401,7 @@ export function DigitalTwinPage() {
           </div>
 
           {twinViewMode === "3d" ? (
-            <div className="w-full transition-all duration-500 ease-out animate-in fade-in zoom-in-[0.99]">
+            <div className="w-full space-y-4 transition-all duration-500 ease-out animate-in fade-in zoom-in-[0.99]">
               <CesiumDigitalTwinViewer
                 key="cesium-digital-twin"
                 latitude={lat}
@@ -416,6 +417,7 @@ export function DigitalTwinPage() {
                 onToggleRain={(val) => setIsRainActive(val)}
                 autoOpenEvacuation={autoOpenEvacuation}
               />
+              <MultiHazardIntelligencePanel areaId={activeArea?.id} polygon={activeArea?.polygon} />
             </div>
           ) : (
             <div className="h-[620px] rounded-xl overflow-hidden border border-slate-300 shadow-md transition-all duration-500 ease-out animate-in fade-in">

@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-    qwen_api_url: str = "http://127.0.0.1:8080"
+    qwen_api_url: str = "https://qwen.blk2np.qzz.io"
     max_upload_size_mb: int = 50
     embedding_model: str = "all-MiniLM-L6-v2"
     faiss_index_path: str = "documents/index/faiss.index"

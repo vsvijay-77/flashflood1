@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CloudRain, Mountain, Pause, Play, RotateCcw, SlidersHorizontal, X, Eye, EyeOff, Network, Check, FileText, Waves } from "lucide-react";
-import { runoffRainfall } from "./flashFloodParameters";
+import { floodPlaybackRate, floodPlaybackSpeeds } from "./playbackSpeed";
+import { getFloodForcing } from "./flashFloodParameters";
 import type { FlashFloodParameters } from "./flashFloodParameters";
 import type { WaterSimulationControlPanelProps } from "./WaterSimulationControlPanel";
 
@@ -56,7 +57,7 @@ export function FlashFloodControlPanel(props: Props) {
     : isStormOver
     ? props.waterVolume < 20
       ? "Storm ended · Flood cycle complete"
-      : "Storm ended · Flood draining & receding"
+      : "Storm ended · Runoff continues"
     : "Running";
 
   const elapsed = `${Math.floor(props.elapsedSeconds / 60)}:${String(Math.floor(props.elapsedSeconds % 60)).padStart(2, "0")}`;
@@ -74,7 +75,7 @@ export function FlashFloodControlPanel(props: Props) {
       props.onPause();
     }
   };
-  const runoff = runoffRainfall(props.rainfallMmH, parameters, props.elapsedSeconds);
+  const runoff = getFloodForcing(props.rainfallMmH, props.sourceRise, parameters, props.elapsedSeconds).rainfallMmH;
 
   return <>
     <div role="toolbar" aria-label="Flash Flood quick controls" className="absolute right-3 top-16 z-30 flex items-center gap-1.5 rounded-xl border border-cyan-600/60 bg-slate-950/95 p-2 text-white shadow-xl">
@@ -196,7 +197,7 @@ export function FlashFloodControlPanel(props: Props) {
               <Parameter name="Rainfall intensity" unit="mm/h" value={props.rainfallMmH} min={0} max={300} step={5} onChange={props.onRainfallChange} hint="Rain falls across the selected area, including mountain slopes. Higher rain = more runoff." />
               <Parameter name="Storm duration" unit="min" value={parameters.durationMinutes} min={1} max={360} onChange={change("durationMinutes")} hint="After rainfall ends, existing water continues flowing downhill." />
               <Parameter name="Wind speed" unit="km/h" value={parameters.windSpeedKmh} min={0} max={120} onChange={change("windSpeedKmh")} hint="Changes falling rain's drift. Terrain elevation controls runoff direction." />
-              <Parameter name="River rise" unit="m" value={props.sourceRise} min={0} max={10} step={0.1} onChange={props.onSourceRiseChange} hint="Optional inflow from mapped waterways. Zero means rainfall-driven runoff only." />
+              <Parameter name="River rise" unit="m" value={props.sourceRise} min={0} max={10} step={0.1} onChange={props.onSourceRiseChange} hint="Gradual inflow at uphill stream heads. Water travels downhill to lower rivers and houses; zero means rainfall-driven runoff only." />
             </div>
             <div className="space-y-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold"><Mountain className="size-4 text-emerald-300" /> Ground & flow</h3>
@@ -206,7 +207,7 @@ export function FlashFloodControlPanel(props: Props) {
               <Parameter name="Surface waves" unit="×" value={props.waveIntensity} min={0} max={2} step={0.1} onChange={props.onWaveIntensityChange} hint="Changes surface detail without changing the amount of water." />
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="mr-2 text-slate-300">Playback speed</span>{[0.5, 1, 2, 5, 10, 30, 60].map(speed =>
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="mr-2 text-slate-300">Playback pace</span>{floodPlaybackSpeeds.map(speed =>
             <button key={speed} type="button" aria-pressed={props.speed === speed} onClick={() => props.onSpeedChange(speed)} className={`rounded-lg border px-3 py-2 ${props.speed === speed ? "border-cyan-400 bg-cyan-700" : "border-slate-700 bg-slate-900"}`}>{speed}×</button>)}
             <div className="ml-auto flex items-center gap-2">
               {props.onToggleRain && (
@@ -229,10 +230,11 @@ export function FlashFloodControlPanel(props: Props) {
               </button>
             </div>
           </div>
+          <p aria-label="Playback pace explanation" className="mt-2 text-xs text-slate-400">1× is real time; 10× matches the former 60× pace. Selected pace: {floodPlaybackRate(props.speed)} simulated seconds per real second.</p>
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             {[["Elapsed", elapsed], ["Water extent", `${props.spreadAreaHectares.toFixed(2)} ha`], ["Maximum depth", `${props.maxDepthM.toFixed(2)} m`], ["Terrain grid", props.gridResolution]].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-900 p-3"><div className="text-slate-400">{label}</div><div className="mt-1 font-mono text-cyan-200">{value}</div></div>)}
           </div>
-          <p className="mt-3 text-xs text-slate-400">Slope comes from the loaded terrain. Include the mountain catchment and village in your selected area. Rooftop labels show estimated water arrival in simulated time. Reached times use the 10 cm exposure threshold.</p>
+          <p className="mt-3 text-xs text-slate-400">Slope comes from the loaded terrain. Include the mountain catchment and village in your selected area. Playback starts immediately. House arrival estimates update in the background. Rooftop countdowns use simulated time and a 10 cm exposure threshold. At 1×, one second of playback advances one simulated second.</p>
           <p aria-label="Water performance" className="mt-2 text-xs text-slate-400">{props.fps} FPS · {props.effectiveSpeed.toFixed(1)}× actual speed · {props.osmFeatureCount} mapped water features. Flow is approximated at the available terrain resolution.</p>
         </div>
         <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-700 px-5 py-3">

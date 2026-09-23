@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 const BACKEND_CHAT_API = "/api/chat";
-const QWEN_DIRECT_API = "http://127.0.0.1:8080/plan";
+const QWEN_DIRECT_API = "https://qwen.blk2np.qzz.io/plan";
 
 interface Message {
   id: string;

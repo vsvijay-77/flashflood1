@@ -119,13 +119,27 @@ export function BuildingArrivalLabels({
   visible?: boolean;
 }) {
   const labels = useRef(new Map<string, any>());
+  const collectionRef = useRef<any>(null);
 
   useEffect(() => {
     if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
 
+    if (!visible) {
+      if (collectionRef.current) {
+        try {
+          viewer.dataSources.remove(collectionRef.current, true);
+        } catch (e) {}
+        collectionRef.current = null;
+        labels.current.clear();
+        viewer.scene?.requestRender?.();
+      }
+      return;
+    }
+
     const collection = new Cesium.CustomDataSource("simulation-building-arrivals");
-    collection.show = visible;
+    collection.show = true;
     viewer.dataSources.add(collection);
+    collectionRef.current = collection;
 
     // Label all loaded buildings in the area (cap at 250 for peak 60 FPS performance)
     const maxLabels = 250;
@@ -197,16 +211,17 @@ export function BuildingArrivalLabels({
 
     return () => {
       labels.current.clear();
-      if (!viewer.isDestroyed()) {
+      if (!viewer.isDestroyed() && collectionRef.current) {
         try {
-          viewer.dataSources.remove(collection, true);
+          viewer.dataSources.remove(collectionRef.current, true);
         } catch (e) {}
+        collectionRef.current = null;
       }
     };
   }, [viewer, buildings, visible]);
 
   useEffect(() => {
-    if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
+    if (!visible || !viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
 
     let changed = false;
     const exposureMap = new Map<string, BuildingExposure>();
@@ -234,7 +249,7 @@ export function BuildingArrivalLabels({
     if (changed && viewer && !viewer.isDestroyed()) {
       viewer.scene.requestRender();
     }
-  }, [viewer, exposures, elapsed, forecast]);
+  }, [viewer, exposures, elapsed, forecast, visible]);
 
   return null;
 }

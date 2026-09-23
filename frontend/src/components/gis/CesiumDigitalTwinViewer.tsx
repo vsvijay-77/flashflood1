@@ -1797,43 +1797,10 @@ export function CesiumDigitalTwinViewer({
             landslide_risk: building.properties?.landslide_risk || "LOW",
             distance_from_river: building.properties?.distance_from_river || `${distM} m`,
             distance_to_river_m: distM,
-            flood_arrival_time: `~${timeText}`,
+            flood_arrival_time: undefined,
             evacuation_zone: building.properties?.evacuation_zone || "Zone B (Monitored Area)",
             _buildingData: true,
           };
-
-          // Rooftop billboard label displaying time for the flood to reach on top of the house
-          try {
-            const labelEntity = viewer.entities.add({
-              position: Cesium.Cartesian3.fromDegrees(cLon, cLat, height + 2.5),
-              point: {
-                pixelSize: 6,
-                color: Cesium.Color.fromCssColorString("#38bdf8"),
-                outlineColor: Cesium.Color.WHITE,
-                outlineWidth: 1.5,
-                heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000),
-                scaleByDistance: new Cesium.NearFarScalar(150, 1.0, 8000, 0.5),
-              },
-              label: {
-                text: `🌊 Flood ETA: ~${timeText}`,
-                font: "bold 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-                heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                fillColor: Cesium.Color.fromCssColorString("#38bdf8"),
-                showBackground: true,
-                backgroundColor: Cesium.Color.fromCssColorString("#090d16").withAlpha(0.92),
-                backgroundPadding: new Cesium.Cartesian2(8, 4),
-                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                pixelOffset: new Cesium.Cartesian2(0, -10),
-                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000),
-                scaleByDistance: new Cesium.NearFarScalar(150, 1.0, 8000, 0.55),
-              },
-              show: layerVisibilityRef.current.buildings && !waterSimActive,
-            });
-            buildingEntitiesRef.current.push(labelEntity);
-          } catch (lblErr) {}
 
           const flatOuter = outer.flatMap((p) => p.slice(0, 2));
           if (flatOuter.length < 6) return;
@@ -7272,25 +7239,27 @@ export function CesiumDigitalTwinViewer({
             </span>
           </div>
 
-          {/* Flood Arrival Time Highlight Banner */}
-          <div className="mt-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 px-3 py-2 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-base">🌊</span>
-              <div>
-                <div className="text-[9px] font-semibold text-cyan-300 uppercase tracking-wider">Flood Reach Time</div>
-                <div className="text-xs font-bold text-white">
-                  {selectedBuilding.flood_arrival_time || (
-                    (typeof selectedBuilding.distance_to_river_m === "number" || typeof selectedBuilding.distance_from_river === "string")
-                      ? `~${Math.max(15, Math.round((Number(selectedBuilding.distance_to_river_m) || (parseFloat(String(selectedBuilding.distance_from_river || "")) || 350)) / 1.8))}s`
-                      : "Calculating…"
-                  )}
+          {/* Flood Arrival Time Highlight Banner - only shown during simulation */}
+          {waterSimActive && (isFloodRunning || isFloodPaused) && (
+            <div className="mt-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 px-3 py-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🌊</span>
+                <div>
+                  <div className="text-[9px] font-semibold text-cyan-300 uppercase tracking-wider">Flood Reach Time</div>
+                  <div className="text-xs font-bold text-white">
+                    {selectedBuilding.flood_arrival_time || (
+                      (typeof selectedBuilding.distance_to_river_m === "number" || typeof selectedBuilding.distance_from_river === "string")
+                        ? `~${Math.max(15, Math.round((Number(selectedBuilding.distance_to_river_m) || (parseFloat(String(selectedBuilding.distance_from_river || "")) || 350)) / 1.8))}s`
+                        : "Calculating…"
+                    )}
+                  </div>
                 </div>
               </div>
+              <span className="text-[10px] font-mono text-cyan-400/90 bg-cyan-900/40 px-2 py-0.5 rounded border border-cyan-700/50">
+                {selectedBuilding.flood_risk || "MONITORED"}
+              </span>
             </div>
-            <span className="text-[10px] font-mono text-cyan-400/90 bg-cyan-900/40 px-2 py-0.5 rounded border border-cyan-700/50">
-              {selectedBuilding.flood_risk || "MONITORED"}
-            </span>
-          </div>
+          )}
 
           {/* Comprehensive 8-Metric Grid */}
           <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] bg-slate-950/60 rounded-lg p-2.5 border border-slate-800/80">

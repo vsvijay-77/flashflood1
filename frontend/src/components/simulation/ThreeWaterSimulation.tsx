@@ -1503,22 +1503,24 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           </div>
         )}
 
-        {/* Billboard labels hovering over buildings in 3D Cesium view */}
+        {/* Billboard labels hovering over buildings in 3D Cesium view - only shown during active simulation */}
         <BuildingArrivalLabels
           viewer={cesiumViewer}
           buildings={buildingFeatures || []}
           exposures={buildingExposure}
           elapsed={elapsedSeconds}
           forecast={arrivalForecast}
+          visible={Boolean(isRunning || isPaused || elapsedSeconds > 0)}
         />
 
-        <HouseArrivalPanel
-          buildings={buildingExposure}
-          elapsed={elapsedSeconds}
-          forecast={arrivalForecast}
-          error={forecastError}
-          onRetry={() => setForecastRevision(value => value + 1)}
-          onSelectBuilding={(building) => {
+        {Boolean(isRunning || isPaused || elapsedSeconds > 0) && (
+          <HouseArrivalPanel
+            buildings={buildingExposure}
+            elapsed={elapsedSeconds}
+            forecast={arrivalForecast}
+            error={forecastError}
+            onRetry={() => setForecastRevision(value => value + 1)}
+            onSelectBuilding={(building) => {
             const feature = (buildingFeatures || []).find((b, i) => String(b.id ?? b.properties?.id ?? i) === building.id);
             const bProps = (feature?.properties || {}) as any;
             let lat = building.lat ?? bProps.lat;
@@ -1572,6 +1574,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             });
           }}
         />
+        )}
 
         {/* Floating Control Panel HUD */}
         <FloodImpactReport

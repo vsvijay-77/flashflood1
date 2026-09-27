@@ -110,13 +110,13 @@ export function DigitalTwinPage() {
   const [twinViewMode, setTwinViewMode] = useState<"3d" | "gis">("3d");
 
   const [lat, setLat] = useState<number>(
-    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : (customAreas[0]?.lat ? Number(customAreas[0].lat) : 10.6608))
+    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : (customAreas[0]?.lat ? Number(customAreas[0].lat) : 31.039))
   );
   const [lng, setLng] = useState<number>(
-    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : (customAreas[0]?.lng ? Number(customAreas[0].lng) : 77.0048))
+    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : (customAreas[0]?.lng ? Number(customAreas[0].lng) : 78.8938))
   );
   const [areaTitle, setAreaTitle] = useState<string>(
-    location.state?.area?.name || location.state?.name || customAreas[0]?.name || "Pollachi Basin"
+    location.state?.area?.name || location.state?.name || customAreas[0]?.name || "Monitored Area 1"
   );
 
   // Fetch monitored areas — try API first, fall back gracefully
@@ -151,9 +151,9 @@ export function DigitalTwinPage() {
             }));
             setCustomAreas(loaded);
             setActiveArea((current) => {
-              const next = loaded.find(area => area.id === current?.id) || loaded[0] || null;
+              const next = loaded.find(area => area.id === current?.id || area.name.toLowerCase().includes("monitored area 1") || area.id === "b3e2c3ce-e6b0-4c37-8f85-5595d23f5d40") || loaded[0] || null;
               setSelectedAreaId(next?.id || "");
-              setAreaTitle(next?.name || "");
+              setAreaTitle(next?.name || "Monitored Area 1");
               if (next) { setLat(Number(next.lat)); setLng(Number(next.lng)); }
               return next;
             });
@@ -3008,17 +3008,17 @@ export function SettingsPage() {
 
   const [allowFloodAlerts, setAllowFloodAlerts] = useState<boolean>(() => {
     try {
-      return localStorage.getItem("settings_allow_flood_alerts") !== "false";
+      return localStorage.getItem("settings_allow_flood_alerts") === "true";
     } catch {
-      return true;
+      return false;
     }
   });
 
   const [allowLandslideAlerts, setAllowLandslideAlerts] = useState<boolean>(() => {
     try {
-      return localStorage.getItem("settings_allow_landslide_alerts") !== "false";
+      return localStorage.getItem("settings_allow_landslide_alerts") === "true";
     } catch {
-      return true;
+      return false;
     }
   });
 

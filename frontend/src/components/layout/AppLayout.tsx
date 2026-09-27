@@ -176,8 +176,8 @@ export default function AppLayout() {
     };
   }, []);
 
-  const allowFloodAlerts = localStorage.getItem("settings_allow_flood_alerts") !== "false";
-  const allowLandslideAlerts = localStorage.getItem("settings_allow_landslide_alerts") !== "false";
+  const allowFloodAlerts = localStorage.getItem("settings_allow_flood_alerts") === "true";
+  const allowLandslideAlerts = localStorage.getItem("settings_allow_landslide_alerts") === "true";
 
   const isAlertAllowed = Boolean(
     crossTabAlert &&

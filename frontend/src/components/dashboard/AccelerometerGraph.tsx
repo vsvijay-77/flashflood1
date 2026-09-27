@@ -155,15 +155,10 @@ export function AccelerometerGraph() {
           {/* IMU Landslide & Movement Status Indicator */}
           {latestPoint && (
             <div className="flex items-center gap-2">
-              {latestPoint.landslideStatus === "landslide" ? (
-                <span className="inline-flex items-center gap-1.5 rounded-md bg-rose-950 border border-rose-600 px-2.5 py-1 text-xs font-bold text-rose-200 animate-pulse">
-                  <AlertTriangle className="size-3.5 text-rose-400" />
-                  🚨 Movement Detected (All ~10) – Landslide Active
-                </span>
-              ) : latestPoint.x <= -5 && latestPoint.y <= -5 && latestPoint.z <= -5 ? (
+              {latestPoint.x <= -5 && latestPoint.y <= -5 && latestPoint.z <= -5 ? (
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-950 border border-emerald-600 px-2.5 py-1 text-xs font-semibold text-emerald-200">
                   <ShieldCheck className="size-3.5 text-emerald-400" />
-                  🛡️ No Movement (All ~-10) – No Landslide
+                  🛡️ No Movement (All ~-10) – Baseline
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-950 border border-emerald-600 px-2.5 py-1 text-xs font-semibold text-emerald-200">
@@ -235,8 +230,8 @@ export function AccelerometerGraph() {
             </div>
             <div className="p-2 rounded bg-indigo-50/70 border border-indigo-200 flex flex-col">
               <span className="text-indigo-800 text-[10px] font-semibold">Combined 3-Axis Motion Status</span>
-              <span className={`font-mono text-base font-bold ${latestPoint.isMoving ? "text-rose-600 animate-pulse" : "text-emerald-700"}`}>
-                {latestPoint.isMoving ? "🚨 Movement Detected" : "🛡️ No Movement"}
+              <span className={`font-mono text-base font-bold ${latestPoint.isMoving ? "text-indigo-600" : "text-emerald-700"}`}>
+                {latestPoint.isMoving ? "Active Motion Tracking" : "🛡️ No Movement"}
               </span>
             </div>
           </div>
@@ -260,8 +255,8 @@ export function AccelerometerGraph() {
               />
 
               {/* Threshold indicator lines */}
-              <ReferenceLine y={10} stroke="#e11d48" strokeDasharray="4 4" label={{ value: "+10: Movement Detected (Landslide Trigger)", fill: "#e11d48", fontSize: 10, position: "insideTopLeft" }} />
-              <ReferenceLine y={-10} stroke="#059669" strokeDasharray="4 4" label={{ value: "-10: Baseline (No Movement / Static)", fill: "#059669", fontSize: 10, position: "insideBottomLeft" }} />
+              <ReferenceLine y={10} stroke="#e11d48" strokeDasharray="4 4" label={{ value: "+10: Upper Threshold", fill: "#e11d48", fontSize: 10, position: "insideTopLeft" }} />
+              <ReferenceLine y={-10} stroke="#059669" strokeDasharray="4 4" label={{ value: "-10: Baseline (Static)", fill: "#059669", fontSize: 10, position: "insideBottomLeft" }} />
 
               {/* Data lines - static, no jitter or bouncing */}
               <Line type="monotone" dataKey="x" name="IMU X Axis" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={false} />

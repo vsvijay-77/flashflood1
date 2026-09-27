@@ -68,6 +68,7 @@ import { toast } from "sonner";
 import { generateCirclePolygon } from "@/lib/gisUtils";
 import { buildingTouchesArea, buildingCenter, prepareBuildingFootprints } from "./buildingGeometry";
 import { loadSelectedAreaBuildings } from "@/services/selectedAreaBuildings";
+import { loadBundledArea } from "@/services/bundledArea";
 import { saveDigitalTwinEvacPoint, removeDigitalTwinEvacPoint } from "@/lib/digitalTwinEvacuation";
 import { MULTI_HAZARD_COLORS } from "@/lib/multiHazard";
 import { useMultiHazard } from "@/lib/useMultiHazard";
@@ -3242,11 +3243,11 @@ export function CesiumDigitalTwinViewer({
 
           // ─── 🚨 DISASTER DETECTION & CROSS-TAB BROADCAST ───
           // "in setting add a option like allow flood alerts on or off like that for landslide"
-          let allowFlood = true;
-          let allowLandslide = true;
+          let allowFlood = false;
+          let allowLandslide = false;
           try {
-            allowFlood = localStorage.getItem("settings_allow_flood_alerts") !== "false";
-            allowLandslide = localStorage.getItem("settings_allow_landslide_alerts") !== "false";
+            allowFlood = localStorage.getItem("settings_allow_flood_alerts") === "true";
+            allowLandslide = localStorage.getItem("settings_allow_landslide_alerts") === "true";
           } catch (e) {}
 
           const rawFlashFlood = telemetry.soilMoisture > 50 || telemetry.waterLevelMm > 50;
@@ -3386,7 +3387,9 @@ export function CesiumDigitalTwinViewer({
             setSimRainIntensity(currentRainfall);
             if (!lastAutoStartedRainRef.current) {
               lastAutoStartedRainRef.current = true;
-              toast.success(`🌧️ Sensor rainfall detected (${currentRainfall.toFixed(1)} mm/h > 40)! Atmospheric rain active.`);
+              if (allowFlood) {
+                toast.success(`🌧️ Sensor rainfall detected (${currentRainfall.toFixed(1)} mm/h > 40)! Atmospheric rain active.`);
+              }
             }
           }
           prevRainfallRef.current = currentRainfall;
@@ -3416,7 +3419,9 @@ export function CesiumDigitalTwinViewer({
               setIsFloodPaused(false);
               setIsFloodReady(false);
               flashFloodRef.current?.resetSimulation();
-              toast.info(`🌊 Water level (${currentWaterLevel.toFixed(0)} mm) dropped below threshold (≤50 mm) — flood simulation stopped.`);
+              if (allowFlood) {
+                toast.info(`🌊 Water level (${currentWaterLevel.toFixed(0)} mm) dropped below threshold (≤50 mm) — flood simulation stopped.`);
+              }
             }
           } else {
             // currentWaterLevel > 50
@@ -3454,7 +3459,9 @@ export function CesiumDigitalTwinViewer({
 
                 if (!lastAutoStartedFloodRef.current) {
                   lastAutoStartedFloodRef.current = true;
-                  toast.success(`🌊 Water level rise detected (${currentWaterLevel.toFixed(0)} mm > 50): Flood simulation started at ${targetSpeed.toFixed(1)}x speed!`);
+                  if (allowFlood) {
+                    toast.success(`🌊 Water level rise detected (${currentWaterLevel.toFixed(0)} mm > 50): Flood simulation started at ${targetSpeed.toFixed(1)}x speed!`);
+                  }
                 }
               }
             } else {
@@ -4870,7 +4877,7 @@ export function CesiumDigitalTwinViewer({
   useEffect(() => {
     if (!loading && viewerRef.current && !viewerRef.current.isDestroyed()) {
       // Small delay to ensure terrain tiles are loaded before rendering ground-clamped polylines
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         if (!viewerRef.current || viewerRef.current.isDestroyed()) return;
         try {
           const raw = localStorage.getItem(networksStorageKey);
@@ -4904,18 +4911,28 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem(networksStorageKey);
           }
         } catch (e) {}
-        // No valid cache — load local Pollachi buildings immediately as fallback
-        // so the Digital Twin shows buildings right away without waiting for network
+        // Load bundled buildings immediately for fast display on mount without waiting for network
         if (buildingFeatures.length === 0) {
           try {
-            const localFeatures = (localBuildingsData as any).features as BuildingFeature[];
-            if (localFeatures && localFeatures.length > 0) {
-              const prepared = prepareBuildingFootprints(localFeatures, getActivePolygon() || undefined);
+            const activePoly = getActivePolygon();
+            const bundled = await loadBundledArea({ polygon: activePoly, area_id: areaId }, AbortSignal.timeout(3000));
+            if (bundled?.buildings?.geojson?.features && bundled.buildings.geojson.features.length > 0) {
+              const prepared = prepareBuildingFootprints(bundled.buildings.geojson.features as BuildingFeature[], activePoly || undefined);
               if (prepared.length > 0) {
-                console.log(`[DT] Loaded ${prepared.length} buildings from local dataset`);
+                console.log(`[DT] Loaded ${prepared.length} buildings from bundled dataset`);
                 setBuildingFeatures(prepared);
                 void render3DBuildings(prepared);
                 setOsmTileStatus(prev => ({ ...prev, buildings: prepared.length }));
+              }
+            } else {
+              const localFeatures = (localBuildingsData as any).features as BuildingFeature[];
+              if (localFeatures && localFeatures.length > 0) {
+                const prepared = prepareBuildingFootprints(localFeatures, activePoly || undefined);
+                if (prepared.length > 0) {
+                  setBuildingFeatures(prepared);
+                  void render3DBuildings(prepared);
+                  setOsmTileStatus(prev => ({ ...prev, buildings: prepared.length }));
+                }
               }
             }
           } catch (e) {}
@@ -5687,6 +5704,7 @@ export function CesiumDigitalTwinViewer({
           onFrameTimesChange={setForecastTimes}
           viewer={cesiumViewer || viewerRef.current}
           polygon={getActivePolygon()}
+          rivers={riverFeatures}
           selectedHour={forecastHour}
           onSelectedHourChange={setForecastHour}
           opacity={forecastOpacity}
@@ -8452,7 +8470,7 @@ export function CesiumDigitalTwinViewer({
       )}
 
       {/* 🚨 ACTIVE DISASTER ALERT BANNER WITH "X" DISMISS & DB ALERTS */}
-      {activeDisasterAlert && !isAlertDismissed && (
+      {activeDisasterAlert && !isAlertDismissed && ((activeDisasterAlert.type === "flash_flood" && localStorage.getItem("settings_allow_flood_alerts") === "true") || (activeDisasterAlert.type === "landslide" && localStorage.getItem("settings_allow_landslide_alerts") === "true") || (activeDisasterAlert.type !== "flash_flood" && activeDisasterAlert.type !== "landslide")) && (
         <div
           data-testid="disaster-alert-banner"
           className="absolute top-3 left-1/2 -translate-x-1/2 z-50 w-[94%] sm:w-auto max-w-2xl bg-red-950/95 border-2 border-red-500 rounded-2xl px-4 py-3 shadow-[0_0_35px_rgba(239,68,68,0.7)] text-white backdrop-blur-md flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-3 duration-300"

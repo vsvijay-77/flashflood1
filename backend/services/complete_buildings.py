@@ -7,8 +7,12 @@ import io
 import urllib.request
 import os
 import threading
-from shapely.geometry import shape, Polygon, box
-from shapely.strtree import STRtree
+try:
+    from shapely.geometry import shape, Polygon, box
+    from shapely.strtree import STRtree
+    _HAS_SHAPELY = True
+except ImportError:
+    _HAS_SHAPELY = False
 from services.ms_building_service import bbox_to_quadkeys, TILES_DIR, CACHE_DIR, DATASET_LINKS_URL, load_quadkey_index
 
 BUILDING_VERSION = 3
@@ -58,6 +62,8 @@ def tile_parts(key):
 
 
 def enrich_buildings(mapped, bbox, polygon):
+    if not _HAS_SHAPELY:
+        return mapped
     area = Polygon([(p[1], p[0]) for p in polygon]) if polygon else box(bbox['west'], bbox['south'], bbox['east'], bbox['north'])
     if not area.is_valid:
         area = area.buffer(0)

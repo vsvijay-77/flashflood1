@@ -126,6 +126,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const waterMeshRef = useRef<THREE.Mesh | null>(null);
     const waterMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
     const waterwayTextureRef = useRef<THREE.DataTexture | null>(null);
+    const lastLoadedPolyKeyRef = useRef<string>("");
 
     // Physics Engine Ref
     const physicsSimRef = useRef<WaterPhysicsSimulation | null>(null);
@@ -329,6 +330,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     // ─── 1. INITIALIZE TERRAIN & OSM WATER BODIES ────────────────────────────
     useEffect(() => {
       if (!active || !cesiumViewer || cesiumViewer.isDestroyed()) return;
+
+      // Do NOT reset if the simulation is currently active and running on the same polygon area
+      if (isRunningRef.current && polygonKey === lastLoadedPolyKeyRef.current && physicsSimRef.current) {
+        return;
+      }
+      lastLoadedPolyKeyRef.current = polygonKey;
 
       const abortController = new AbortController();
       let isMounted = true;
@@ -746,7 +753,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         isMounted = false;
         abortController.abort();
       };
-    }, [active, cesiumViewer, centerLat, centerLng, polygonCoords]);
+    }, [active, cesiumViewer, centerLat, centerLng, polygonKey]);
 
     // ─── 2. BUILD THREE.JS WATER MESH WITH SHADERMATERIAL ────────────────────
     const buildThreeWaterMesh = (

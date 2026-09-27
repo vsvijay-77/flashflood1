@@ -38,7 +38,7 @@ export class CesiumTinTerrainLayer {
     wireframeVisible: false,
     elevationColoring: true,
     gnnNodesVisible: true,
-    opacity: 0.85,
+    opacity: 1.0,
     verticalExaggeration: 1.0,
   };
 
@@ -134,7 +134,7 @@ export class CesiumTinTerrainLayer {
       verticalExaggeration,
     } = this.options;
 
-    // 1. Build Cartesian3 positions array applying vertical exaggeration
+    // 1. Build Cartesian3 positions array clamped directly onto the terrain surface
     const positions = new Float64Array(vertexCount * 3);
     const surfaceColors = new Uint8Array(vertexCount * 4);
     const wireframeColors = new Uint8Array(vertexCount * 4);
@@ -143,10 +143,24 @@ export class CesiumTinTerrainLayer {
     const alphaByte = Math.round(Math.max(0.05, Math.min(1.0, opacity)) * 255);
     const wireframeAlphaByte = Math.round(Math.min(1.0, opacity + 0.15) * 255);
 
+    const globe = this.viewer?.scene?.globe;
+
     for (let i = 0; i < vertexCount; i++) {
       const [lon, lat, elev] = vertices[i];
-      const scaledElev = elev * verticalExaggeration;
-      const cart = Cesium.Cartesian3.fromDegrees(lon, lat, scaledElev);
+      let groundH: number | undefined;
+
+      if (globe && typeof globe.getHeight === "function") {
+        const carto = Cesium.Cartographic.fromDegrees(lon, lat);
+        const gh = globe.getHeight(carto);
+        if (typeof gh === "number" && Number.isFinite(gh)) {
+          groundH = gh;
+        }
+      }
+
+      // Sit directly on the top of the terrain surface (+1.2m offset eliminates z-fighting without flying)
+      const baseElev = groundH !== undefined ? groundH : elev;
+      const finalElev = baseElev + (verticalExaggeration > 1.0 ? 1.5 * verticalExaggeration : 1.2);
+      const cart = Cesium.Cartesian3.fromDegrees(lon, lat, finalElev);
 
       positions[i * 3] = cart.x;
       positions[i * 3 + 1] = cart.y;
@@ -314,9 +328,7 @@ export class CesiumTinTerrainLayer {
     const stride = vertexCount > 15000 ? Math.ceil(vertexCount / 10000) : 1;
 
     for (let i = 0; i < vertexCount; i += stride) {
-      const [lon, lat, elev] = vertices[i];
-      const scaledElev = elev * verticalExaggeration + 1.2;
-      const cart = Cesium.Cartesian3.fromDegrees(lon, lat, scaledElev);
+      const cart = new Cesium.Cartesian3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
 
       const score = gnnScores && gnnScores[i] !== undefined ? gnnScores[i] : 0.5;
       let ptColor;

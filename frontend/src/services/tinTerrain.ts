@@ -61,10 +61,13 @@ export interface TinBoundingBox {
  */
 export function generateClientSideTin(
   bounds: TinBoundingBox,
-  maxVertices = 2500
+  maxVertices = 25000
 ): TinTerrainData {
   const gridDim = Math.min(45, Math.max(20, Math.floor(Math.sqrt(maxVertices))));
-  const { north, south, east, west } = bounds;
+  const south = Math.min(bounds.south, bounds.north);
+  const north = Math.max(bounds.south, bounds.north);
+  const west = Math.min(bounds.west, bounds.east);
+  const east = Math.max(bounds.west, bounds.east);
   const centerLat = (north + south) / 2;
   const centerLng = (east + west) / 2;
   const dLat = Math.max(1e-5, north - south);
@@ -143,7 +146,7 @@ export function generateClientSideTin(
 
 /**
  * Fetch TIN terrain data for the given bounding box from the FastAPI backend.
- * Falls back to client-side TIN terrain synthesis if the backend is unavailable.
+ * Falls back to client-side TIN terrain synthesis if the backend is unavailable or times out.
  */
 export async function fetchTinTerrain(
   bounds: TinBoundingBox,
@@ -151,11 +154,16 @@ export async function fetchTinTerrain(
   maxVertices = 25000,
   demType = "COP30"
 ): Promise<TinTerrainData> {
+  const south = Math.min(bounds.south, bounds.north);
+  const north = Math.max(bounds.south, bounds.north);
+  const west = Math.min(bounds.west, bounds.east);
+  const east = Math.max(bounds.west, bounds.east);
+
   const params = new URLSearchParams({
-    north: bounds.north.toFixed(6),
-    south: bounds.south.toFixed(6),
-    east: bounds.east.toFixed(6),
-    west: bounds.west.toFixed(6),
+    north: north.toFixed(6),
+    south: south.toFixed(6),
+    east: east.toFixed(6),
+    west: west.toFixed(6),
     dem_type: demType,
     max_vertices: maxVertices.toString(),
   });
@@ -164,8 +172,14 @@ export async function fetchTinTerrain(
     params.set("refresh", "true");
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3500);
+
   try {
-    const res = await fetch(`/api/digital-twin/tin?${params.toString()}`);
+    const res = await fetch(`/api/digital-twin/tin?${params.toString()}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data?.vertices) && data.vertices.length > 0) {
@@ -173,8 +187,9 @@ export async function fetchTinTerrain(
       }
     }
   } catch (err) {
-    console.warn("[TIN] Backend fetch error, falling back to client-side TIN generator:", err);
+    clearTimeout(timeoutId);
+    console.warn("[TIN] Backend fetch timeout/error, using instant client TIN:", err);
   }
 
-  return generateClientSideTin(bounds, maxVertices);
+  return generateClientSideTin({ north, south, east, west }, maxVertices);
 }

@@ -361,7 +361,7 @@ export function CesiumDigitalTwinViewer({
   const [tinSurfaceActive, setTinSurfaceActive] = useState<boolean>(true);
   const [tinElevationColoring, setTinElevationColoring] = useState<boolean>(true);
   const [tinGnnNodesActive, setTinGnnNodesActive] = useState<boolean>(true);
-  const [tinOpacity, setTinOpacity] = useState<number>(0.85);
+  const [tinOpacity, setTinOpacity] = useState<number>(1.0);
   const [tinExaggeration, setTinExaggeration] = useState<number>(1.0);
   const tinLayerRef = useRef<CesiumTinTerrainLayer | null>(null);
   const lastTinAoiKeyRef = useRef<string>("");
@@ -3407,22 +3407,10 @@ export function CesiumDigitalTwinViewer({
           const isWaterLevelIncreasing = prevWaterLevel !== null && currentWaterLevel > prevWaterLevel;
           const isFirstFloodReading = prevWaterLevel === null && currentWaterLevel > 50;
 
-          // Rule: "threshhold for flood is water level is >50" (stop if <= 50 or no data)
+          // User requirement: "until the user clicks end not stop the flood simulation"
+          // Keep active flood simulation running continuously; do not terminate or reset it here!
           if (!telemetry.hasData || currentWaterLevel <= 50) {
             manuallyStoppedFloodRef.current = false;
-            if (waterSimActive || sensorAutoFlood || autoStartedBySensorRef.current || isFloodRunning) {
-              setWaterSimActive(false);
-              setSensorAutoFlood(false);
-              autoStartedBySensorRef.current = false;
-              lastAutoStartedFloodRef.current = false;
-              setIsFloodRunning(false);
-              setIsFloodPaused(false);
-              setIsFloodReady(false);
-              flashFloodRef.current?.resetSimulation();
-              if (allowFlood) {
-                toast.info(`🌊 Water level (${currentWaterLevel.toFixed(0)} mm) dropped below threshold (≤50 mm) — flood simulation stopped.`);
-              }
-            }
           } else {
             // currentWaterLevel > 50
             // Rule: "speed based on the values if more than 90 10x speed"
@@ -3491,17 +3479,7 @@ export function CesiumDigitalTwinViewer({
           prevSoilMoistureRef.current = 0;
           manuallyStoppedFloodRef.current = false;
 
-          // Stop simulation if values are 0 (< 30)
-          if (waterSimActive || sensorAutoFlood || autoStartedBySensorRef.current || isFloodRunning) {
-            setWaterSimActive(false);
-            setSensorAutoFlood(false);
-            autoStartedBySensorRef.current = false;
-            lastAutoStartedFloodRef.current = false;
-            setIsFloodRunning(false);
-            setIsFloodPaused(false);
-            setIsFloodReady(false);
-            flashFloodRef.current?.resetSimulation();
-          }
+          // Keep active flood simulation running until user clicks End
         }
       } catch (err) {
         if (isMounted) {
@@ -3520,17 +3498,7 @@ export function CesiumDigitalTwinViewer({
           prevWaterLevelRef.current = 0;
           prevSoilMoistureRef.current = 0;
           manuallyStoppedFloodRef.current = false;
-
-          if (waterSimActive || sensorAutoFlood || autoStartedBySensorRef.current || isFloodRunning) {
-            setWaterSimActive(false);
-            setSensorAutoFlood(false);
-            autoStartedBySensorRef.current = false;
-            lastAutoStartedFloodRef.current = false;
-            setIsFloodRunning(false);
-            setIsFloodPaused(false);
-            setIsFloodReady(false);
-            flashFloodRef.current?.resetSimulation();
-          }
+          // Keep active flood simulation running until user clicks End
         }
       }
     };
@@ -3751,11 +3719,7 @@ export function CesiumDigitalTwinViewer({
     setTerrainMode(mode);
     if (mode === "tin") {
       setTinActive(true);
-      if (tinLayerRef.current && tinData) {
-        tinLayerRef.current.updateOptions({ visible: true });
-      } else {
-        void loadTinTerrainData(false);
-      }
+      void loadTinTerrainData(false);
     } else if (mode === "satellite") {
       tinLayerRef.current?.updateOptions({ visible: false });
       switchToTopDown();

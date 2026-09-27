@@ -33,27 +33,17 @@ function findPeaks(data: AccelPoint[], key: "x" | "y" | "z" | "calculatedZ") {
 
 export function AccelerometerGraph() {
   const [range, setRange] = useState("Live");
-  const [sensitivityMode, setSensitivityMode] = useState<"amplified" | "standard">("amplified");
-  const [tick, setTick] = useState(0);
-
-  // Fast pulse ticker to make the graph dynamically move when movement is detected
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTick((t) => (t + 1) % 10000);
-    }, 250);
-    return () => clearInterval(interval);
-  }, []);
+  const [sensitivityMode, setSensitivityMode] = useState<"amplified" | "standard">("standard");
 
   const limit = range === "Live" ? 30 : range === "Last 1 Hour" ? 60 : range === "Last 24 Hours" ? 150 : 300;
 
   const { data: history = [] } = useQuery<ExternalSensorHistoryItem[]>({
     queryKey: ["external-sensors-history", limit],
     queryFn: () => apiGet<ExternalSensorHistoryItem[]>(`/external-sensors/history?limit=${limit}`),
-    refetchInterval: 1000,
+    refetchInterval: 3000,
   });
 
-  // Map real database records from sensor_data to chart points
-  // Requirement: "if imu is all are -10 no momemnet no landslide if imu is all three 10 movement detected make graph move"
+  // Map real database records from sensor_data to steady chart points
   const accelData: AccelPoint[] = useMemo(() => {
     if (!history || history.length === 0) {
       return Array.from({ length: 15 }).map((_, i) => ({
@@ -71,14 +61,11 @@ export function AccelerometerGraph() {
     return history
       .slice()
       .reverse()
-      .map((h, idx) => {
+      .map((h) => {
         const rawX = Number(h.imu_x ?? 0);
         const rawY = Number(h.imu_y ?? 0);
         const rawZ = Number(h.imu_z ?? 0);
 
-        // User requirement:
-        // - if IMU is all are -10: no movement, no landslide
-        // - if IMU is all three 10: movement detected, landslide active, make graph move
         const isAllAround10 = rawX >= 7 && rawY >= 7 && rawZ >= 7;
         const isLegacyAdcLandslide = rawY > 2000 || (rawZ > 0 && rawZ < 2050);
         const isMoving = isAllAround10 || isLegacyAdcLandslide;
@@ -91,15 +78,10 @@ export function AccelerometerGraph() {
           landslideStatus = "risk_50";
         }
 
-        // When movement detected, inject active seismic tremor ripple to make the graph visibly move!
-        // When all are -10 (no movement), tremor is 0 and graph remains completely flat/steady.
-        const tremor = isMoving
-          ? Math.sin((idx * 0.9 + tick) * 0.85) * 1.5 + Math.cos((idx * 1.2 + tick) * 1.1) * 0.8
-          : 0;
-
-        const x = Number((rawX + (isMoving ? tremor * 0.8 : 0)).toFixed(1));
-        const y = Number((rawY + (isMoving ? tremor * 1.0 : 0)).toFixed(1));
-        const z = Number((rawZ + (isMoving ? tremor * 0.9 : 0)).toFixed(1));
+        // Static steady sensor readings - no artificial tremor/oscillation
+        const x = Number(rawX.toFixed(1));
+        const y = Number(rawY.toFixed(1));
+        const z = Number(rawZ.toFixed(1));
 
         // Combined 3-axis motion indicator
         const calculatedZ = Math.abs(rawX) < 100
@@ -119,7 +101,7 @@ export function AccelerometerGraph() {
           isMoving,
         };
       });
-  }, [history, tick]);
+  }, [history]);
 
   const xPeaks = useMemo(() => findPeaks(accelData, "x"), [accelData]);
   const yPeaks = useMemo(() => findPeaks(accelData, "y"), [accelData]);
@@ -280,11 +262,11 @@ export function AccelerometerGraph() {
               <ReferenceLine y={10} stroke="#e11d48" strokeDasharray="4 4" label={{ value: "+10: Movement Detected (Landslide Trigger)", fill: "#e11d48", fontSize: 10, position: "insideTopLeft" }} />
               <ReferenceLine y={-10} stroke="#059669" strokeDasharray="4 4" label={{ value: "-10: Baseline (No Movement / Static)", fill: "#059669", fontSize: 10, position: "insideBottomLeft" }} />
 
-              {/* Data lines */}
-              <Line type="monotone" dataKey="x" name="IMU X Axis" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={true} animationDuration={300} />
-              <Line type="monotone" dataKey="y" name="IMU Y Axis" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={true} animationDuration={300} />
-              <Line type="monotone" dataKey="z" name="IMU Z Axis" stroke="#f43f5e" strokeWidth={2} dot={false} isAnimationActive={true} animationDuration={300} />
-              <Line type="monotone" dataKey="calculatedZ" name="Combined 3-Axis Motion" stroke="#6366f1" strokeWidth={2.5} strokeDasharray="5 3" dot={false} isAnimationActive={true} animationDuration={300} />
+              {/* Data lines - static, no jitter or bouncing */}
+              <Line type="monotone" dataKey="x" name="IMU X Axis" stroke="#06b6d4" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="y" name="IMU Y Axis" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="z" name="IMU Z Axis" stroke="#f43f5e" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="calculatedZ" name="Combined 3-Axis Motion" stroke="#6366f1" strokeWidth={2.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} />
 
               {/* Peaks */}
               {xPeaks.map((p, i) => (

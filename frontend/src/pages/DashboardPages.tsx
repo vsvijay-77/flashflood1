@@ -114,6 +114,13 @@ export function EnvironmentalMonitoringSection() {
 }
 
 export function DashboardPage() {
+  useEffect(() => {
+    toast.success("Logged in successfully in test account", {
+      id: "test-account-login",
+      duration: 5000,
+    });
+  }, []);
+
   return (
     <div className="flex flex-col gap-8 bg-slate-50 min-h-screen pb-12" data-testid="dashboard-page">
       <SystemStatusHeader />

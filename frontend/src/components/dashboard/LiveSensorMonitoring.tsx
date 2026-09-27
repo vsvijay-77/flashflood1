@@ -239,9 +239,9 @@ export function LiveSensorMonitoring() {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={trendData}>
                   <Tooltip contentStyle={{ fontSize: "10px" }} />
-                  <Line type="monotone" dataKey="x" stroke="#06b6d4" strokeWidth={1.5} dot={false} isAnimationActive={true} animationDuration={300} />
-                  <Line type="monotone" dataKey="y" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={true} animationDuration={300} />
-                  <Line type="monotone" dataKey="z" stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={true} animationDuration={300} />
+                  <Line type="monotone" dataKey="x" stroke="#06b6d4" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="y" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="z" stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

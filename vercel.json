@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build",
+  "buildCommand": "npm run build && echo '=== Prebaked zones in dist ===' && ls -la dist/prebaked_zones/ 2>/dev/null || echo 'No prebaked_zones in dist'",
   "outputDirectory": "dist",
   "functions": {
     "api/index.py": {

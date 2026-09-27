@@ -34,12 +34,13 @@ export default function App() {
     <>
       <Suspense fallback={<LoadingOverlay message="Loading platform module..." />}>
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/home" element={<Home />} />
           <Route path="/about" element={<AboutPlatform />} />
           <Route path="/platform" element={<PlatformPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/register" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/forgot-password" element={<Navigate to="/dashboard" replace />} />
           <Route path="/oauth/consent" element={<OAuthConsentPage />} />
 
           <Route

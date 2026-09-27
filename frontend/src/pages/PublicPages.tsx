@@ -503,11 +503,8 @@ export function PlatformPage() {
             A modular environmental intelligence architecture designed to transform distributed environmental signals into predictive insights, simulated outcomes, and actionable decisions.
           </p>
           <div className="mt-10 flex flex-wrap justify-center gap-4">
-            <Link to="/login" className={buttonVariants({ variant: "outline", size: "lg", className: "border-2 border-white/40 text-white hover:bg-white/10 hover:border-white font-bold transition-all shadow-sm" })}>
-              Explore Live Monitoring
-            </Link>
-            <Link to="/register" className={buttonVariants({ size: "lg", className: "bg-emerald-400 text-[#0A192F] hover:bg-emerald-300 font-bold shadow-lg" })}>
-              Request Departmental Access
+            <Link to="/dashboard" className={buttonVariants({ size: "lg", className: "bg-emerald-400 text-[#0A192F] hover:bg-emerald-300 font-bold shadow-lg" })}>
+              Launch Live Dashboard
             </Link>
           </div>
         </div>

@@ -58,11 +58,8 @@ export function LandingNavbar() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2 lg:ml-0">
-          <Link to="/login" className={buttonVariants({ variant: "outline", size: "default", className: "hidden sm:inline-flex font-semibold" })} data-testid="navbar-login-btn">
-            Login
-          </Link>
-          <Link to="/register" className={buttonVariants({ size: "default", className: "hidden sm:inline-flex font-semibold" })} data-testid="navbar-register-btn">
-            Register
+          <Link to="/dashboard" className={buttonVariants({ size: "default", className: "hidden sm:inline-flex font-semibold bg-[#0F4C81] text-white hover:bg-[#0B3A61]" })} data-testid="navbar-login-btn">
+            Enter Dashboard
           </Link>
           <Button variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setOpen((v) => !v)} data-testid="navbar-mobile-toggle" aria-label="Toggle navigation">
             {open ? <X className="size-5" /> : <Menu className="size-5" />}
@@ -83,8 +80,7 @@ export function LandingNavbar() {
             </Link>
           ))}
           <div className="mt-2 flex gap-2">
-            <Link to="/login" className={buttonVariants({ variant: "outline", size: "sm", className: "flex-1" })}>Login</Link>
-            <Link to="/register" className={buttonVariants({ size: "sm", className: "flex-1" })}>Register</Link>
+            <Link to="/dashboard" className={buttonVariants({ size: "sm", className: "flex-1 bg-[#0F4C81] text-white" })}>Enter Dashboard</Link>
           </div>
         </div>
       ) : null}
@@ -115,9 +111,9 @@ export function GovernmentFooter() {
           <ul className="mt-4 space-y-3 text-sm">
             <li><Link to="/about" className="text-slate-400 hover:text-white transition-colors">About the Platform</Link></li>
             <li><Link to="/platform" className="text-slate-400 hover:text-white transition-colors">Platform Architecture</Link></li>
-            <li><Link to="/login" className="text-slate-400 hover:text-white transition-colors">Live Monitoring</Link></li>
-            <li><Link to="/login" className="text-slate-400 hover:text-white transition-colors">GIS Intelligence</Link></li>
-            <li><Link to="/login" className="text-emerald-400 hover:text-emerald-300 transition-colors font-medium">Officer Sign In</Link></li>
+            <li><Link to="/dashboard" className="text-slate-400 hover:text-white transition-colors">Live Monitoring</Link></li>
+            <li><Link to="/gis" className="text-slate-400 hover:text-white transition-colors">GIS Intelligence</Link></li>
+            <li><Link to="/dashboard" className="text-emerald-400 hover:text-emerald-300 transition-colors font-medium">Dashboard</Link></li>
           </ul>
         </div>
         <div>

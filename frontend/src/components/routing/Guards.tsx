@@ -39,17 +39,9 @@ export function AccessRestricted() {
 }
 
 export function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { user, isResolved } = useSession();
-  const location = useLocation();
-  if (!isResolved) return <Booting />;
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   return <>{children}</>;
 }
 
-export function RoleBasedRoute({ allow, children }: { allow: Role[]; children: ReactNode }) {
-  const { user, isResolved } = useSession();
-  if (!isResolved) return <Booting />;
-  if (!user) return <Navigate to="/login" replace />;
-  if (!allow.includes(user.role)) return <AccessRestricted />;
+export function RoleBasedRoute({ children }: { allow?: Role[]; children: ReactNode }) {
   return <>{children}</>;
 }

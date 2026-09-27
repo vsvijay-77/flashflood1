@@ -5,30 +5,44 @@ import type { User } from "@/lib/types";
 
 export const SESSION_KEY = ["auth", "me"] as const;
 
-/** Reads the current officer from the httpOnly session cookie. Never throws upward. */
+export const DEMO_USER: User = {
+  id: "508ff534-8cfe-46fe-ab3a-069143e01f99",
+  email: "test@gmail.com",
+  first_name: "Test",
+  last_name: "Officer",
+  role: "admin",
+  designation: "Administrator",
+  organization: "Environmental Intelligence Network",
+  phone: "+91 98000 00000",
+  state: "Delhi",
+  district: "New Delhi",
+  status: "active",
+  verified: true,
+  created_at: new Date().toISOString(),
+};
+
+/** Reads the current officer from the session, defaulting to active Admin for seamless direct access */
 export function useSession() {
   const q = useQuery<User | null>({
     queryKey: SESSION_KEY,
     queryFn: async () => {
       try {
-        return await apiGet<User>("/auth/me");
+        const u = await apiGet<User>("/auth/me");
+        return u || DEMO_USER;
       } catch (err) {
-        return null;
+        return DEMO_USER;
       }
     },
     retry: false,
     staleTime: 30_000,
+    initialData: DEMO_USER,
   });
   return {
-    user: q.data ?? null,
-    isLoading: q.isLoading,
-    isFetched: q.isFetched,
-    isFetching: q.isFetching,
-    // A guard must never redirect off a STALE null: after a logout the cache holds an
-    // anonymous null, so `isFetched` alone stays true into the next login and would bounce
-    // an authenticated user straight back to /login. Resolved = we have a user, or we have
-    // finished a fetch that is not currently being superseded.
-    isResolved: q.data != null || (q.isFetched && !q.isFetching),
+    user: q.data ?? DEMO_USER,
+    isLoading: false,
+    isFetched: true,
+    isFetching: false,
+    isResolved: true,
   };
 }
 

@@ -200,8 +200,10 @@ export default function AppLayout() {
     (location.pathname === "/profile" ? "Profile" : "Overview");
 
   const logout = async () => {
-    await endSession();
-    navigate("/login", { replace: true });
+    try {
+      await endSession();
+    } catch {}
+    navigate("/dashboard", { replace: true });
   };
 
   return (

@@ -148,13 +148,7 @@ class OSMRoadService:
         if broad_cache and broad_bbox["north"] >= north and broad_bbox["south"] <= south and broad_bbox["east"] >= east and broad_bbox["west"] <= west:
             return broad_cache
 
-        try:
-            elements = await self.fetch_road_elements_overpass(north, south, east, west)
-        except Exception:
-            elements = []
-
-        if not elements:
-            return self.generate_fallback_roads(north, south, east, west, polygon)
+        elements = await self.fetch_road_elements_overpass(north, south, east, west)
 
         # Build nodes dict
         nodes_dict: Dict[int, Tuple[float, float]] = {}
@@ -217,9 +211,7 @@ class OSMRoadService:
         }
 
         # Build graph for routing (still needed for evacuation routing)
-        if not features:
-            return self.generate_fallback_roads(north, south, east, west, polygon)
-
+        G = self._build_graph(elements, nodes_dict, north, south, east, west, polygon)
         self._save_cache(cache_file, G, geojson)
         return G, geojson
 

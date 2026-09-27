@@ -33,3 +33,33 @@ it("stops requests when the selected area changes", async () => {
   await expect(loadSelectedAreaNetworks({}, controller.signal)).rejects.toThrow();
   expect(extractNetworks).not.toHaveBeenCalled();
 });
+
+it("shows available geometry while retrying and preserves it if retries fail", async () => {
+  const partial = {
+    status: "success", osm_loading: { complete: false },
+    roads: { geojson: { features: [{ properties: { id: "way-1" } }] } },
+    rivers: { geojson: { features: [] } },
+  } as never;
+  vi.mocked(extractNetworks).mockResolvedValueOnce(partial).mockRejectedValue(new Error("timeout"));
+  const onProgress = vi.fn();
+  const resultPromise = loadSelectedAreaNetworks({}, new AbortController().signal, onProgress);
+  await vi.runAllTimersAsync();
+  expect(await resultPromise).toBe(partial);
+  expect(onProgress).toHaveBeenCalledWith(partial);
+});
+
+it("retains roads when a later instance returns only rivers", async () => {
+  const roads = { geojson: { features: [{ properties: { id: "road" } }] } };
+  const rivers = { geojson: { features: [{ properties: { id: "river" } }] } };
+  const empty = { geojson: { features: [] } };
+  vi.mocked(extractNetworks)
+    .mockResolvedValueOnce({ status: "success", osm_loading: { complete: false }, roads, rivers: empty } as never)
+    .mockResolvedValueOnce({ status: "success", osm_loading: { complete: false }, roads: empty, rivers } as never)
+    .mockRejectedValue(new Error("timeout"));
+  const promise = loadSelectedAreaNetworks({}, new AbortController().signal);
+  await vi.runAllTimersAsync();
+  const result = await promise;
+  expect(result.roads).toBe(roads);
+  expect(result.rivers).toBe(rivers);
+  expect(result.osm_loading?.complete).toBe(false);
+});

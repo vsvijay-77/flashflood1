@@ -161,27 +161,21 @@ async def extract_networks(payload: LocationRequest = Body(...)):
         cached = {}
 
     async def load_layer(name, service):
-        if name in cached and cached[name].get("features"):
+        # An authoritative empty layer is still a complete cache entry.
+        if name in cached:
             return cached[name], None
         try:
             _, geojson = await asyncio.wait_for(service(
                 bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
-            ), timeout=14)
-            if geojson and geojson.get("features"):
-                try:
-                    await asyncio.to_thread(area_map_store.save_layer, area_id, key, name, geojson)
-                except Exception:
-                    pass
-                return geojson, None
+            ), timeout=180)
+        except Exception as exc:
+            return {"type": "FeatureCollection", "features": []}, type(exc).__name__
+        # Persistence is optional: a cache outage must not hide fetched geometry.
+        try:
+            await asyncio.to_thread(area_map_store.save_layer, area_id, key, name, geojson)
         except Exception:
             pass
-
-        # Fallback generator for realistic roads and rivers when OSM times out or fails
-        if name == "roads":
-            _, fallback_gj = road_service.generate_fallback_roads(bbox["north"], bbox["south"], bbox["east"], bbox["west"], payload.polygon)
-        else:
-            _, fallback_gj = river_service.generate_fallback_rivers(bbox["north"], bbox["south"], bbox["east"], bbox["west"], payload.polygon)
-        return fallback_gj, None
+        return geojson, None
 
     (roads, road_error), (rivers, river_error) = await asyncio.gather(
         load_layer("roads", road_service.get_road_network),
@@ -191,8 +185,8 @@ async def extract_networks(payload: LocationRequest = Body(...)):
     result = {
         "status": "success", "bbox": bbox,
         "osm_loading": {
-            "complete": True, "total_tiles": 2, "loaded_tiles": 2,
-            "failed_tiles": [], "failed_layers": failed,
+            "complete": not failed, "total_tiles": 2, "loaded_tiles": 2 - len(failed),
+            "failed_tiles": failed, "failed_layers": failed,
             "source": "supabase_cache" if "roads" in cached and "rivers" in cached else "OpenStreetMap",
         },
         "roads": {"geojson": roads, "total_nodes": roads.get("metadata", {}).get("total_nodes", 0), "total_edges": len(roads.get("features", []))},
@@ -269,33 +263,22 @@ async def extract_buildings(payload: LocationRequest = Body(...)):
     key = area_map_store.boundary_key(payload.polygon, bbox)
     try:
         cached = await asyncio.to_thread(area_map_store.load_layers, area_id, key)
-        if "buildings" in cached and cached["buildings"].get("features"):
+        if "buildings" in cached and cached["buildings"].get("metadata", {}).get("building_version") == BUILDING_VERSION:
             geojson = cached["buildings"]
             status = {"complete": True, "source": "supabase_cache", "loaded_tiles": 1, "total_tiles": 1, "failed_tiles": []}
         else:
-            try:
-                geojson, status = await asyncio.wait_for(building_service.get_buildings(
-                    bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
-                ), timeout=14)
-            except Exception:
-                geojson = None
-                status = {"complete": True, "source": "fallback", "loaded_tiles": 1, "total_tiles": 1, "failed_tiles": []}
-
-            if not geojson or not geojson.get("features"):
-                geojson = _generate_fallback_buildings(bbox, payload.polygon)
-
-            if geojson.get("metadata", {}).get("building_version") != BUILDING_VERSION:
-                try:
-                    geojson = await asyncio.to_thread(enrich_buildings, geojson, bbox, payload.polygon)
-                except Exception:
-                    pass
-            try:
-                await asyncio.to_thread(area_map_store.save_layer, area_id, key, "buildings", geojson)
-            except Exception:
-                pass
-    except Exception:
-        geojson = _generate_fallback_buildings(bbox, payload.polygon)
-        status = {"complete": True, "source": "fallback", "loaded_tiles": 1, "total_tiles": 1, "failed_tiles": []}
+            geojson, status = await asyncio.wait_for(building_service.get_buildings(
+                bbox["north"], bbox["south"], bbox["east"], bbox["west"], polygon=payload.polygon
+            ), timeout=180)
+            if not status.get("complete"):
+                raise RuntimeError("Building provider returned an incomplete layer")
+            if geojson.get("features") and geojson.get("metadata", {}).get("building_version") != BUILDING_VERSION:
+                geojson = await asyncio.wait_for(
+                    asyncio.to_thread(enrich_buildings, geojson, bbox, payload.polygon), timeout=60,
+                )
+            await asyncio.to_thread(area_map_store.save_layer, area_id, key, "buildings", geojson)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Building data is unavailable. Retry this area.") from exc
 
     return {
         "status": "success", "bbox": bbox,

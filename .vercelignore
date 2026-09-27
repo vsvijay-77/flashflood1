@@ -13,7 +13,8 @@ __pycache__/
 
 # Large datasets, model weights, and checkpoints
 dataset/
-backend/ml/
+# Keep ML Python schemas/loaders: routers import them even without model weights.
+backend/ml/checkpoints/
 backend/tests/
 tests/
 *.csv
@@ -28,3 +29,9 @@ tests/
 # Frontend node_modules (re-installed during Vercel build if needed, not bundled in Python lambda)
 frontend/node_modules/
 node_modules/
+
+# Runtime credentials come from Vercel Environment Variables.
+.env
+.env.local
+backend/.env
+frontend/.env

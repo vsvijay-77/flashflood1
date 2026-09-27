@@ -2314,7 +2314,14 @@ export function CesiumDigitalTwinViewer({
 
       console.log(`[DT] Fetching complete selected-area network: ${selectedPolygon ? `${selectedPolygon.length} boundary points` : viewportBbox ? `${viewportBbox.south.toFixed(3)},${viewportBbox.west.toFixed(3)} → ${viewportBbox.north.toFixed(3)},${viewportBbox.east.toFixed(3)}` : `center ${latitude},${longitude} r=${searchRadiusKm}km`}`);
 
-      const res = await loadSelectedAreaNetworks(params, controller.signal);
+      const res = await loadSelectedAreaNetworks(params, controller.signal, (partial) => {
+        if (requestId !== networkRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) return;
+        const roads = partial.roads.geojson.features;
+        const rivers = partial.rivers.geojson.features;
+        if (roads.length) { setRoadFeatures(roads); render3DRoads(roads, showRoads); }
+        if (rivers.length) { setRiverFeatures(rivers); render3DRivers(rivers, showRivers); }
+        setNetworkError("Some map layers are still loading. Available paths and waterways are shown.");
+      });
 
       // Never let a late response from an older request clear the completed selected-area scene.
       if (requestId !== networkRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) {

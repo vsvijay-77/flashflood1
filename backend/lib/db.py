@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from dotenv import load_dotenv
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 from motor.motor_asyncio import AsyncIOMotorClient
 
 import threading
@@ -54,7 +54,11 @@ def get_supabase() -> Client:
             load_dotenv(ROOT_DIR / ".env")
             url = os.environ.get("SUPABASE_URL") or DEFAULT_SUPABASE_URL
             key = os.environ.get("SUPABASE_SECRET_KEY") or DEFAULT_SUPABASE_KEY
-        client = create_client(url, key)
+        # A stalled optional cache read must not consume the whole function's
+        # lifetime (the SDK default is 120 seconds).
+        client = create_client(url, key, options=ClientOptions(
+            postgrest_client_timeout=10,
+        ))
         _thread_local.client = client
     return client
 

@@ -92,8 +92,11 @@ Backend API: http://localhost:8001/api
 
 | Variable | Description | Required |
 |---|---|---|
-| `MONGO_URL` | MongoDB connection string | ✅ |
-| `DB_NAME` | MongoDB database name | ✅ |
+| `SUPABASE_URL` | Supabase project URL | ✅ |
+| `SUPABASE_SECRET_KEY` | Backend secret key (`SUPABASE_SERVICE_ROLE_KEY` is also supported) | ✅ |
+| `SENSOR_DB_URL` | External PostgreSQL connection string for LoRa telemetry | ✅ |
+| `MONGO_URL` | Optional local legacy MongoDB fallback | Optional |
+| `DB_NAME` | Legacy MongoDB database name | Optional |
 | `JWT_SECRET` | JWT signing secret (min 32 chars) | ✅ |
 | `CORS_ORIGINS` | Allowed origins (comma-separated or `*`) | ✅ |
 | `APP_URL` | Public app URL | ✅ |
@@ -111,7 +114,29 @@ Backend API: http://localhost:8001/api
 | `VITE_SUPABASE_URL` | Supabase project URL | Optional |
 | `VITE_SUPABASE_ANON_KEY` | Supabase anon key | Optional |
 
-> The app works fully without Supabase — areas are loaded from the backend API. Supabase is only used as a secondary fallback for OAuth SSO and real-time features.
+The backend stores application data and saved map layers in Supabase. The frontend
+Supabase variables are optional for OAuth; they do not replace backend credentials.
+
+### Deploying to Vercel
+
+Use the repository root as the Vercel Root Directory, with the root `vercel.json`.
+Deploying only `frontend/` omits the Python API. Set `SUPABASE_URL`,
+`SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`), `SENSOR_DB_URL`, and
+`JWT_SECRET` in Vercel's Environment Variables for the deployment environment.
+Set `APP_URL` to the deployed URL. Local `.env` files are excluded from deployment.
+Keep secret/service-role keys on the backend; never prefix them with `VITE_`.
+The `area_map_layers` table requires the backend key to access saved geometry.
+
+Keep the lightweight `backend/ml` Python source in the function bundle: API routers
+import its schemas and loaders even when inference is disabled. Only checkpoints
+are excluded. Heavy ML packages remain optional. A missing imported module causes
+`FUNCTION_INVOCATION_FAILED` on every API route, including `/api/health`.
+
+Redeploy after code or environment changes. Verify `/api/health`, `/api/stats`,
+`/api/external-sensors/history?limit=1`, and `/api/external-sensors/packets?limit=1`,
+then open a saved digital twin area. Map requests allow up to 180 seconds to fetch
+OSM data within the configured 300-second function limit, and reuse saved Supabase
+layers. A sensor outage returns 503 for history/packets and an offline summary.
 
 ---
 

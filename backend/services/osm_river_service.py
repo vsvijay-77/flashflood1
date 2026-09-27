@@ -140,13 +140,7 @@ class OSMRiverService:
         if broad_cache and broad_bbox["north"] >= north and broad_bbox["south"] <= south and broad_bbox["east"] >= east and broad_bbox["west"] <= west:
             return broad_cache
 
-        try:
-            elements = await self.fetch_waterway_elements_overpass(north, south, east, west)
-        except Exception:
-            elements = []
-
-        if not elements:
-            return self.generate_fallback_rivers(north, south, east, west, polygon)
+        elements = await self.fetch_waterway_elements_overpass(north, south, east, west)
 
         # Propagate tags from water relations to their member ways
         relation_way_tags: Dict[int, Dict[str, Any]] = {}
@@ -270,9 +264,6 @@ class OSMRiverService:
             "features": features,
             "metadata": {"total_nodes": len(nodes_dict), "total_edges": len(features)},
         }
-
-        if not features:
-            return self.generate_fallback_rivers(north, south, east, west, polygon)
 
         # Build NetworkX graph for risk/routing analysis
         G = self._build_graph(elements, nodes_dict, north, south, east, west, polygon)

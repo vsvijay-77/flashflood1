@@ -1,8 +1,12 @@
-import { extractNetworks } from "@/lib/routingApi";
+import { extractNetworks, type NetworkExtractionResponse } from "@/lib/routingApi";
 
 /** Retry failed layers; the backend reuses each successfully saved layer. */
-export async function loadSelectedAreaNetworks(params: Parameters<typeof extractNetworks>[0], signal: AbortSignal) {
+export async function loadSelectedAreaNetworks(
+  params: Parameters<typeof extractNetworks>[0], signal: AbortSignal,
+  onProgress?: (result: NetworkExtractionResponse) => void,
+) {
   let lastError: unknown;
+  let partial: NetworkExtractionResponse | undefined;
   for (let attempt = 0; attempt < 3; attempt++) {
     signal.throwIfAborted();
     if (attempt > 0) {
@@ -17,7 +21,19 @@ export async function loadSelectedAreaNetworks(params: Parameters<typeof extract
     }
     try {
       const result = await extractNetworks(params, signal);
+      signal.throwIfAborted();
       if (result.status === "success" && result.osm_loading?.complete === true) return result;
+      if (result.status === "success" && (result.roads?.geojson.features.length || result.rivers?.geojson.features.length)) {
+        // A cache outage can put retries on different serverless instances.
+        // Retain geometry already received even if the next partial response
+        // contains only the other layer.
+        partial = partial ? {
+          ...result,
+          roads: result.roads.geojson.features.length ? result.roads : partial.roads,
+          rivers: result.rivers.geojson.features.length ? result.rivers : partial.rivers,
+        } : result;
+        onProgress?.(partial);
+      }
       // Partial success — all saved layers will be reused on the next attempt
       lastError = new Error("Some network layers are incomplete");
     } catch (error) {
@@ -25,5 +41,6 @@ export async function loadSelectedAreaNetworks(params: Parameters<typeof extract
       lastError = error;
     }
   }
+  if (partial) return partial;
   throw lastError;
 }

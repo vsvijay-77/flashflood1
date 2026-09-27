@@ -6,9 +6,27 @@ import networkx as nx
 from routers import routing_and_rivers
 from services.osm_geometry import geometry_intersects_polygon, join_rings
 from services.osm_river_service import OSMRiverService
+from services.osm_road_service import OSMRoadService
 
 
 BOUNDARY = [[10, 77], [10, 77.01], [10.01, 77.01], [10.01, 77]]
+
+
+def test_real_road_download_builds_graph_and_caches_geometry(monkeypatch, tmp_path):
+    service = OSMRoadService()
+    monkeypatch.setattr(service, "_cache_key", lambda *args: tmp_path / "roads.json")
+    provider = AsyncMock(return_value=[
+        {"type": "node", "id": 1, "lat": 10.002, "lon": 77.002},
+        {"type": "node", "id": 2, "lat": 10.008, "lon": 77.008},
+        {"type": "way", "id": 3, "nodes": [1, 2], "tags": {"highway": "primary"}},
+    ])
+    monkeypatch.setattr(service, "fetch_road_elements_overpass", provider)
+    graph, layer = asyncio.run(service.get_road_network(10.01, 10, 77.01, 77))
+    assert graph.has_edge(1, 2)
+    assert layer["features"][0]["properties"]["id"] == "way-3"
+    _, cached = asyncio.run(service.get_road_network(10.01, 10, 77.01, 77))
+    assert cached == layer
+    provider.assert_awaited_once()
 
 
 def test_selected_polygon_overrides_place_name_and_viewport(monkeypatch):

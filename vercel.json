@@ -3,8 +3,8 @@
   "outputDirectory": "dist",
   "functions": {
     "api/index.py": {
-      "maxDuration": 30,
-      "excludeFiles": "{frontend/**,node_modules/**,dataset/**,tests/**,dist/**,backend/cache/**,backend/ml/**,backend/tests/**}"
+      "maxDuration": 300,
+      "excludeFiles": "{frontend/**,node_modules/**,dataset/**,tests/**,dist/**,backend/cache/**,backend/ml/checkpoints/**,backend/tests/**,**/__pycache__/**,**/.env,**/.env.local}"
     }
   },
   "rewrites": [

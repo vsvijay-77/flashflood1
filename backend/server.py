@@ -22,6 +22,12 @@ from lib.db import db
 # Startup runs before the yield, shutdown after it. Add your own setup/teardown here.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # In Vercel serverless environment, background daemon threads and async tasks
+    # are not supported and would freeze lambda execution.
+    if os.environ.get("VERCEL"):
+        yield
+        return
+
     async def _seed_chat_knowledge():
         try:
             from services.qdrant_service import knowledge_store
@@ -115,8 +121,26 @@ api_router.include_router(telephony_router)
 
 
 
-# Include the router in the main app
+# Include the router in the main app (with /api prefix)
 app.include_router(api_router)
+
+# Also mount feature routers directly on app (without prefix)
+# This guarantees that if Vercel strips /api or sends /auth/..., it matches 100%
+app.include_router(auth_router)
+app.include_router(network_router)
+app.include_router(alerts_router)
+app.include_router(intelligence_router)
+app.include_router(admin_router)
+app.include_router(satellite_router)
+app.include_router(gee_router)
+app.include_router(digital_twin_router)
+app.include_router(routing_and_rivers_router)
+app.include_router(buildings_router)
+app.include_router(chat_router)
+app.include_router(external_sensors_router)
+app.include_router(simulation_pg_router)
+app.include_router(weather_router)
+app.include_router(telephony_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -134,10 +158,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Health endpoint ────────────────────────────────────────────────────────────
+# ── Health endpoints ───────────────────────────────────────────────────────────
 @api_router.get("/health")
-async def health_check():
-    """Lightweight liveness probe — used by Vercel and load-balancers."""
+async def api_health_check():
+    """Lightweight liveness probe under /api/health."""
+    return {"status": "online", "system": "NEXGI"}
+
+
+@app.get("/health")
+async def root_health_check():
+    """Lightweight liveness probe under /health."""
     return {"status": "online", "system": "NEXGI"}
 
 

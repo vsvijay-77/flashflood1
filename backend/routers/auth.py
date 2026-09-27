@@ -49,10 +49,16 @@ class RegisterRequest(BaseModel):
 
 @router.post("/login")
 async def login(req: LoginRequest, response: Response):
-    user = await db.users.find_one({"email": req.email.strip().lower()})
-    if not user:
-        # Fallback case-insensitive check
-        user = await db.users.find_one({"email": {"$regex": f"^{req.email.strip()}$", "$options": "i"}})
+    try:
+        user = await db.users.find_one({"email": req.email.strip().lower()})
+        if not user:
+            # Fallback case-insensitive check
+            user = await db.users.find_one({"email": {"$regex": f"^{req.email.strip()}$", "$options": "i"}})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Database service connection error. Please ensure SUPABASE_URL and SUPABASE_SECRET_KEY are set in Vercel environment variables."
+        )
 
     if not user or not verify_password(req.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
@@ -113,7 +119,10 @@ async def supabase_session(req: SupabaseSessionRequest, response: Response):
         raise HTTPException(status_code=401, detail=f"Supabase verification failed: {exc}")
 
     email = sb_user.email.strip().lower()
-    user = await db.users.find_one({"email": email})
+    try:
+        user = await db.users.find_one({"email": email})
+    except Exception:
+        user = None
 
     if not user:
         # Create user record in our users table for OAuth sign-in

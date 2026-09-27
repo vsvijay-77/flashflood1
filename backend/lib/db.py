@@ -37,15 +37,21 @@ def get_supabase() -> Client:
             url = os.environ.get("SUPABASE_URL", "")
             key = os.environ.get("SUPABASE_SECRET_KEY", "")
         if not url or not key:
-            raise ValueError("SUPABASE_URL or SUPABASE_SECRET_KEY not set")
+            raise ValueError(
+                "SUPABASE_URL or SUPABASE_SECRET_KEY is not set. "
+                "Please configure these in your Vercel Project Settings -> Environment Variables."
+            )
         client = create_client(url, key)
         _thread_local.client = client
     return client
 
 
 def _is_fallback_error(e: Exception) -> bool:
+    # On Vercel, if Mongo is localhost, never fallback to Mongo (prevents 500 connection refused)
+    if os.environ.get("VERCEL") and ("localhost" in MONGO_URL or "127.0.0.1" in MONGO_URL):
+        return False
     if not os.environ.get("SUPABASE_URL") or not os.environ.get("SUPABASE_SECRET_KEY"):
-        return True
+        return False
     err = str(e).lower()
     return "pgrst205" in err or "not find the table" in err or isinstance(e, (ValueError, KeyError, AttributeError))
 
@@ -66,7 +72,7 @@ def _run_with_retry(fn, retries=2):
 def get_mongo_fallback():
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=1500)
+        _mongo_client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=800)
     return _mongo_client[DB_NAME]
 
 

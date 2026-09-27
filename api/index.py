@@ -31,8 +31,7 @@ try:
 except ImportError:
     pass
 
-# Import the FastAPI app — Vercel serves this as a serverless function
-from backend.server import app  # noqa: E402
+from backend.main import app  # noqa: E402
 
 # `app` is the ASGI application Vercel will call for every /api/* request.
 # Do NOT call uvicorn.run() here — Vercel manages the server lifecycle.

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "build": "cd frontend && npm install && npm run build",
+    "build": "cd frontend && npm install --legacy-peer-deps && npm run build && cd .. && rm -rf dist && cp -r frontend/dist dist",
     "dev": "cd frontend && npm run dev",
     "install:backend": "pip install -r requirements.txt"
   }

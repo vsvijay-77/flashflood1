@@ -192,15 +192,15 @@ export default function OAuthConsentPage() {
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur-md px-6 py-4">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="grid size-9 place-items-center rounded-lg bg-[#0B2545] text-white shadow-sm">
-              <ShieldCheck className="size-5" />
+            <span className="flex size-9 items-center justify-center rounded-lg bg-[#0B2545] p-1 shadow-sm">
+              <img src="/logo.png" alt="NEXGI Logo" className="size-full object-contain" />
             </span>
             <div>
               <div className="text-[12px] font-black uppercase tracking-[0.18em] text-sky-700">
                 NEXGI
               </div>
               <div className="text-xs font-semibold text-slate-800">
-                Supabase OAuth 2.1 Identity Server
+                NEXGI OAuth 2.1 Identity Server
               </div>
             </div>
           </div>
@@ -252,11 +252,11 @@ export default function OAuthConsentPage() {
                   <div>
                     <span className="font-bold">OAuth Server Authorization UI (Preview Mode)</span>
                     <p className="mt-0.5 text-amber-800">
-                      This page implements the Supabase OAuth 2.1 Consent Screen at{" "}
+                      This page implements the NEXGI OAuth 2.1 Consent Screen at{" "}
                       <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px]">
                         /oauth/consent
                       </code>
-                      . When an external client initiates authorization, Supabase provides an{" "}
+                      . When an external client initiates authorization, the identity server provides an{" "}
                       <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px]">
                         authorization_id
                       </code>{" "}
@@ -394,7 +394,7 @@ export default function OAuthConsentPage() {
 
           {/* Footer Information */}
           <div className="mt-6 text-center text-xs text-slate-500 space-y-1">
-            <p>Protected by Supabase OAuth 2.1 Identity Server</p>
+            <p>Protected by NEXGI OAuth 2.1 Identity Server</p>
             <p className="font-mono text-[11px] text-slate-400">
               OIDC Discovery:{" "}
               <a

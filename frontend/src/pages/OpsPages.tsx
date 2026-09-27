@@ -119,12 +119,61 @@ export function DigitalTwinPage() {
     location.state?.area?.name || location.state?.name || customAreas[0]?.name || "Pollachi Basin"
   );
 
-  // Fetch monitored areas from Supabase
+  // Fetch monitored areas — try API first, fall back gracefully
   useEffect(() => {
-    supabase
-      .from("custom_areas")
-      .select("*")
-      .then(({ data }) => {
+    // If navigated with area state, use it immediately — no loading needed
+    if (location.state?.area) {
+      setLoadingAreas(false);
+      return;
+    }
+
+    const loadAreas = async () => {
+      try {
+        // Try backend API first
+        const res = await fetch("/api/areas");
+        if (res.ok) {
+          const apiData = await res.json();
+          if (Array.isArray(apiData) && apiData.length > 0) {
+            const loaded: CustomArea[] = apiData.map((d: any) => ({
+              id: d.id,
+              name: d.name,
+              district: d.district,
+              type: d.area_type || "Forest",
+              risk: d.risk_category || "Medium",
+              priority: d.priority || "Normal",
+              description: d.description || "",
+              date: new Date(d.created_at).toLocaleDateString(),
+              lat: Number(d.lat),
+              lng: Number(d.lng),
+              shape: d.shape || "Polygon",
+              polygon: parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng)),
+              areaSqMeters: 0,
+            }));
+            setCustomAreas(loaded);
+            setActiveArea((current) => {
+              const next = loaded.find(area => area.id === current?.id) || loaded[0] || null;
+              setSelectedAreaId(next?.id || "");
+              setAreaTitle(next?.name || "");
+              if (next) { setLat(Number(next.lat)); setLng(Number(next.lng)); }
+              return next;
+            });
+            try {
+              const lightweight = loaded.map(({ id, name, district, type, risk, priority, date, lat, lng, shape, polygon }) => ({
+                id, name, district, type, risk, priority, date, lat, lng, shape, polygon, areaSqMeters: 0,
+              }));
+              localStorage.setItem("cached_custom_areas", JSON.stringify(lightweight));
+            } catch {}
+            setLoadingAreas(false);
+            return;
+          }
+        }
+      } catch {
+        // API unavailable, try Supabase
+      }
+
+      // Fallback: try Supabase
+      try {
+        const { data } = await supabase.from("custom_areas").select("*");
         setLoadingAreas(false);
         if (data) {
           const loaded: CustomArea[] = data.map((d: any) => ({
@@ -166,10 +215,12 @@ export function DigitalTwinPage() {
             } catch {}
           }
         }
-      },
-      () => {
+      } catch {
         setLoadingAreas(false);
-      });
+      }
+    };
+
+    loadAreas();
   }, []);
 
   // Sync state from location navigation
@@ -470,7 +521,7 @@ export function RiskAssessmentPage() {
 
   return (
     <div data-testid="risk-assessment-page">
-      <PageHeader title="AI Risk Assessment" description="Multi-agent risk scoring derived from live telemetry, satellite intelligence and historical hazard datasets." />
+      <PageHeader title="Risk Assessment" description="Automated risk scoring derived from live telemetry, satellite intelligence and historical hazard datasets." />
 
       {isLoading ? (
         <LoadingRows rows={4} />
@@ -536,7 +587,7 @@ export function RiskAssessmentPage() {
               </div>
             </SectionCard>
 
-            <SectionCard testId="risk-recommendation-card" title="AI recommendation" description={`Confidence ${active.confidence}%`}>
+            <SectionCard testId="risk-recommendation-card" title="System Recommendation" description={`Confidence ${active.confidence}%`}>
               <p className="flex items-start gap-3 rounded-lg border border-[#0F4C81]/20 bg-[#0F4C81]/[0.05] px-4 py-3 text-sm leading-relaxed text-slate-800" data-testid="risk-recommendation-text">
                 <Brain className="mt-0.5 size-4 shrink-0 text-[#0F4C81]" />
                 {active.recommendation}
@@ -1232,6 +1283,30 @@ export function UserManagementPage() {
     onError: (err) => toast.error(apiErrorMessage(err, "Failed to delete alert record")),
   });
 
+  // Telephony Live Dispatch State & Mutation
+  const [telephonyTestPhone, setTelephonyTestPhone] = useState("+919003899180");
+  const [telephonyTestMsg, setTelephonyTestMsg] = useState("Flood in area evacuate now. Seek high ground immediately.");
+
+  const telephonyStatusQuery = useQuery({
+    queryKey: ["telephony-status"],
+    queryFn: () => apiGet<any>("/telephony/status"),
+    refetchInterval: 60000,
+  });
+
+  const testTelephonyMutation = useMutation({
+    mutationFn: (payload: { phone_number: string; message: string; make_call: boolean; send_message: boolean }) =>
+      apiPost("/telephony/test-alert", payload),
+    onSuccess: (res: any) => {
+      const phone = res?.results?.phone || telephonyTestPhone;
+      const callStatus = res?.results?.call?.success ? "Call placed 📞" : res?.results?.call ? "Call error" : null;
+      const smsStatus = res?.results?.sms?.success ? "SMS sent 💬" : res?.results?.sms ? "SMS error" : null;
+      const summary = [callStatus, smsStatus].filter(Boolean).join(" & ");
+      toast.success(summary ? `Alert dispatched to ${phone}: ${summary}` : `Telephony alert dispatched to ${phone}`);
+      qc.invalidateQueries({ queryKey: ["telephony-status"] });
+    },
+    onError: (err) => toast.error(apiErrorMessage(err, "Telephony dispatch failed")),
+  });
+
   const mobUsersList = mobUsersQuery.data ?? [];
   const mobAlertsList = mobAlertsQuery.data ?? [];
   const officersList = officersQuery.data ?? [];
@@ -1259,7 +1334,7 @@ export function UserManagementPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PageHeader
           title="User & Citizen Management"
-          description="Manage mobile app citizens (mob_users) in Supabase, dispatch targeted emergency alerts, assign evacuation shelters, and manage departmental officers."
+          description="Manage mobile app citizens, dispatch targeted emergency alerts, assign evacuation shelters, and manage departmental officers."
         />
         <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
           <button
@@ -1319,7 +1394,7 @@ export function UserManagementPage() {
                 <span className="font-mono text-3xl font-extrabold text-rose-950">
                   {mobUsersList.length}
                 </span>
-                <span className="text-xs text-rose-700">Supabase mob_users</span>
+                <span className="text-xs text-rose-700">Mobile Citizens</span>
               </div>
               <p className="mt-1 text-[11px] text-rose-800/80">
                 Connected directly to citizen mobile handsets
@@ -1366,7 +1441,7 @@ export function UserManagementPage() {
           {/* Citizen Table */}
           <SectionCard
             testId="mob-users-card"
-            title="Mobile Citizens Directory (Supabase mob_users)"
+            title="Mobile Citizens Directory"
             description="Real-time geo-located citizen handsets in the flash flood basin. Send emergency warnings and designated evacuation shelters directly."
             actions={
               <Button
@@ -1388,7 +1463,7 @@ export function UserManagementPage() {
             ) : mobUsersList.length === 0 ? (
               <EmptyState
                 testId="mob-users-empty"
-                title="No Citizens Registered in Supabase"
+                title="No Citizens Registered"
                 description="When citizens launch the mobile application, their profiles will synchronize here automatically."
               />
             ) : (
@@ -1958,6 +2033,28 @@ export function UserManagementPage() {
                       <BellRing className="size-3.5 text-rose-600 shrink-0" />
                       <span>In-App Notification</span>
                     </label>
+                  </div>
+
+                  {/* Twilio Live Line Status */}
+                  <div className="mt-2 rounded-lg bg-emerald-50/80 border border-emerald-200/90 p-2.5 flex items-center justify-between text-xs" data-testid="twilio-live-line-indicator">
+                    <div className="flex items-center gap-2">
+                      <span className="relative flex size-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
+                      </span>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-emerald-950">Twilio Telephony Dispatch:</span>
+                          <span className="font-mono text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded font-semibold text-[11px]">+1 (563) 239-3112</span>
+                        </div>
+                        <span className="text-[10px] text-emerald-700 block mt-0.5">
+                          Voice IVR calls (Speaking: &quot;Flood in area, evacuate now&quot;) &amp; SMS texts dispatched in real-time.
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold bg-emerald-200/80 text-emerald-900 px-2 py-0.5 rounded shrink-0">
+                      LIVE ACTIVE
+                    </span>
                   </div>
                 </div>
 
@@ -2536,6 +2633,91 @@ export function UserManagementPage() {
             </Button>
           }
         >
+          {/* Twilio Emergency Telephony & Instant Test Console */}
+          <div className="mb-4 rounded-xl border border-slate-200 bg-gradient-to-r from-slate-900 to-[#0B2545] p-4 text-white shadow-sm" data-testid="twilio-telephony-console">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="flex size-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="font-bold text-sm text-white flex items-center gap-1.5">
+                    <PhoneCall className="size-4 text-cyan-400" />
+                    Twilio Emergency Telephony Live
+                  </span>
+                  <span className="rounded bg-emerald-500/20 px-2 py-0.5 font-mono text-[10px] font-bold text-emerald-300 border border-emerald-500/30">
+                    VOICE &amp; SMS READY
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300">
+                  Outbound line: <strong className="font-mono text-cyan-300">+1 (563) 239-3112</strong> · Voice speech: &quot;Flood in area evacuate now&quot; · SID: <span className="font-mono text-slate-400">AC71d2...fb46</span>
+                </p>
+              </div>
+
+              {/* Direct Quick Test Inputs & Triggers */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={telephonyTestPhone}
+                  onChange={(e) => setTelephonyTestPhone(e.target.value)}
+                  placeholder="+919003899180"
+                  className="h-8 w-36 bg-white/10 border-white/20 text-xs font-mono text-white placeholder:text-slate-400 focus:bg-white/20"
+                  data-testid="telephony-test-phone-input"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-testid="telephony-test-call-btn"
+                  disabled={testTelephonyMutation.isPending || !telephonyTestPhone}
+                  onClick={() =>
+                    testTelephonyMutation.mutate({
+                      phone_number: telephonyTestPhone,
+                      message: telephonyTestMsg,
+                      make_call: true,
+                      send_message: false,
+                    })
+                  }
+                  className="h-8 bg-white/10 border-white/20 text-xs text-white hover:bg-white/20 hover:text-white cursor-pointer"
+                >
+                  <Phone className="size-3.5 mr-1 text-cyan-300" />
+                  Call Now
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-testid="telephony-test-sms-btn"
+                  disabled={testTelephonyMutation.isPending || !telephonyTestPhone}
+                  onClick={() =>
+                    testTelephonyMutation.mutate({
+                      phone_number: telephonyTestPhone,
+                      message: telephonyTestMsg,
+                      make_call: false,
+                      send_message: true,
+                    })
+                  }
+                  className="h-8 bg-white/10 border-white/20 text-xs text-white hover:bg-white/20 hover:text-white cursor-pointer"
+                >
+                  <MessageSquare className="size-3.5 mr-1 text-sky-300" />
+                  SMS Now
+                </Button>
+                <Button
+                  size="sm"
+                  data-testid="telephony-test-both-btn"
+                  disabled={testTelephonyMutation.isPending || !telephonyTestPhone}
+                  onClick={() =>
+                    testTelephonyMutation.mutate({
+                      phone_number: telephonyTestPhone,
+                      message: telephonyTestMsg,
+                      make_call: true,
+                      send_message: true,
+                    })
+                  }
+                  className="h-8 bg-rose-600 hover:bg-rose-700 text-xs font-bold text-white shadow-xs cursor-pointer"
+                >
+                  <ShieldAlert className="size-3.5 mr-1" />
+                  {testTelephonyMutation.isPending ? "Alerting…" : "Call + SMS Both"}
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {mobAlertsQuery.isLoading ? (
             <LoadingRows rows={4} />
           ) : mobAlertsList.length === 0 ? (
@@ -2895,7 +3077,7 @@ export function SettingsPage() {
                   </span>
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
-                  Allow automated Landslide detection when Gyro Y &gt; 2000 (50% risk) or Gyro Z &lt; 2050
+                  Allow automated Landslide detection when IMU Movement is detected (all ~+10 m/s²) or Tilt drops to ≤99%
                 </div>
               </div>
               <input
@@ -2914,7 +3096,7 @@ export function SettingsPage() {
             {([
               ["critical", "Critical hazard alerts"],
               ["sensorOffline", "Sensor offline notices"],
-              ["aiPrediction", "AI prediction updates"],
+              ["aiPrediction", "Prediction updates"],
               ["weekly", "Weekly report digest"],
             ] as const).map(([key, label]) => (
               <label key={key} className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm text-slate-700">

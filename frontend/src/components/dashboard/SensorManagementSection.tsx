@@ -393,17 +393,37 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
                   <Compass className="size-5 text-indigo-600" />
                 </div>
                 <div className="mt-2 flex items-baseline gap-2">
-                  <span className="font-mono text-3xl font-extrabold text-indigo-950">
-                    {activeDevice?.latest?.tilt_deg?.toFixed(1) ?? "0.0"}°
+                  <span className={`font-mono text-2xl font-extrabold ${
+                    activeDevice?.latest?.tilt_deg != null && activeDevice.latest.tilt_deg <= 99 && activeDevice.latest.tilt_deg > 0
+                      ? "text-rose-700"
+                      : "text-emerald-700"
+                  }`}>
+                    {activeDevice?.latest?.tilt_deg != null && activeDevice.latest.tilt_deg <= 99 && activeDevice.latest.tilt_deg > 0
+                      ? "Tilt"
+                      : "No Tilt"}
                   </span>
-                  <span className="text-sm font-bold text-indigo-700">Tilt</span>
+                  <span className="text-sm font-semibold text-slate-500 font-mono">
+                    ({activeDevice?.latest?.tilt_deg?.toFixed(1) ?? "100.0"}°)
+                  </span>
                 </div>
                 <div className="mt-2 flex items-center justify-between font-mono text-[11px] text-indigo-900">
                   <span>
                     IMU [X:{activeDevice?.latest?.imu_x ?? 0}, Y:{activeDevice?.latest?.imu_y ?? 0}, Z:
                     {activeDevice?.latest?.imu_z ?? 0}]
                   </span>
-                  <span className="text-emerald-700 font-semibold">Stable</span>
+                  <span className={
+                    (activeDevice?.latest?.imu_x ?? 0) >= 7 && (activeDevice?.latest?.imu_y ?? 0) >= 7 && (activeDevice?.latest?.imu_z ?? 0) >= 7
+                      ? "text-rose-600 font-bold animate-pulse"
+                      : (activeDevice?.latest?.imu_x ?? 0) <= -5 && (activeDevice?.latest?.imu_y ?? 0) <= -5 && (activeDevice?.latest?.imu_z ?? 0) <= -5
+                      ? "text-emerald-700 font-semibold"
+                      : "text-slate-600 font-medium"
+                  }>
+                    {(activeDevice?.latest?.imu_x ?? 0) >= 7 && (activeDevice?.latest?.imu_y ?? 0) >= 7 && (activeDevice?.latest?.imu_z ?? 0) >= 7
+                      ? "Movement Detected"
+                      : (activeDevice?.latest?.imu_x ?? 0) <= -5 && (activeDevice?.latest?.imu_y ?? 0) <= -5 && (activeDevice?.latest?.imu_z ?? 0) <= -5
+                      ? "No Movement"
+                      : "Stable"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -562,10 +582,25 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
                             <span className="text-slate-700">{item.soil_moisture}%</span>
                           </TableCell>
                           <TableCell>
-                            <span className="text-slate-700">{item.tilt}°</span>
+                            {item.tilt <= 99 && item.tilt > 0 ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-2 py-0.5 font-bold text-rose-800">
+                                Tilt ({item.tilt}°)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 font-bold text-emerald-800">
+                                No Tilt ({item.tilt}°)
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell className="text-slate-500 text-[11px]">
-                            [{item.imu_x}, {item.imu_y}, {item.imu_z}]
+                            <div className="flex flex-col gap-0.5">
+                              <span>[{item.imu_x}, {item.imu_y}, {item.imu_z}]</span>
+                              {item.imu_x >= 7 && item.imu_y >= 7 && item.imu_z >= 7 ? (
+                                <span className="text-[10px] font-bold text-rose-600 animate-pulse">Movement Detected</span>
+                              ) : item.imu_x <= -5 && item.imu_y <= -5 && item.imu_z <= -5 ? (
+                                <span className="text-[10px] font-semibold text-emerald-700">No Movement</span>
+                              ) : null}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <span className="text-slate-700 font-semibold">{item.rssi} dBm</span>{" "}

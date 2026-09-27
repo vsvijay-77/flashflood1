@@ -58,6 +58,8 @@ import {
 import CesiumSelectedAreaRainOverlay from "../simulation/CesiumSelectedAreaRainOverlay";
 import SensorLiveRainController from "./SensorLiveRainController";
 import TwinForecastHeatmap from "./TwinForecastHeatmap";
+import SimulationRiskHeatmap from "./SimulationRiskHeatmap";
+import { renderEvacuationSelection, type EvacuationPhase } from "./evacuationRouteOverlay";
 import TwinLandslideHeatmap from "./TwinLandslideHeatmap";
 import ThreeWaterSimulation, { type ThreeWaterSimulationHandle } from "../simulation/ThreeWaterSimulation";
 import DisasterIntelligenceChat from "./DisasterIntelligenceChat";
@@ -73,7 +75,6 @@ import {
   extractNetworks,
   extractBuildings,
   fetchMicrosoftBuildings,
-  calculateEvacuationRoute,
   predictRisk,
 } from "../../lib/routingApi";
 import type {
@@ -87,6 +88,7 @@ import type {
 import { CesiumTinTerrainLayer } from "./CesiumTinTerrainLayer";
 import { TinTerrainControls } from "./TinTerrainControls";
 import { fetchTinTerrain, type TinTerrainData } from "@/services/tinTerrain";
+import localBuildingsData from "@/data/pollachi_buildings.json";
 
 declare const Cesium: any;
 
@@ -301,6 +303,7 @@ export function CesiumDigitalTwinViewer({
   }, [cesiumViewer, showMultiHazard, multiHazard.features]);
   const [forecastActive, setForecastActive] = useState(false);
   const [forecastHour, setForecastHour] = useState(0);
+  const [forecastTimes, setForecastTimes] = useState<string[]>([]);
   const [forecastOpacity, setForecastOpacity] = useState(0.85);
   const [forecastRailHidden, setForecastRailHidden] = useState(true);
   const [landslideActive, setLandslideActive] = useState(false);
@@ -370,7 +373,9 @@ export function CesiumDigitalTwinViewer({
   const buildingEntitiesRef = useRef<any[]>([]);
   const buildingPrimitiveRef = useRef<any>(null); // Batched GroundPrimitive for footprints (fast 60 FPS path)
   const buildingOutlinePrimitiveRef = useRef<any>(null); // Batched GroundPolylinePrimitive for outlines
-  const evacuationEntitiesRef = useRef<any[]>([]);
+  const evacuationAnimationRef = useRef<(() => void) | null>(null);
+  const [evacuationPhase, setEvacuationPhase] = useState<EvacuationPhase>("idle");
+  useEffect(() => () => { evacuationAnimationRef.current?.(); }, []);
   const riskZoneEntitiesRef = useRef<any[]>([]);
   // Viewport-based dynamic loading & camera flight guards
   const viewportDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -396,7 +401,9 @@ export function CesiumDigitalTwinViewer({
   layerVisibilityRef.current = { roads: showRoads, rivers: showRivers, buildings: showBuildings };
   const [showBuildingStats, setShowBuildingStats] = useState<boolean>(true);
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingFeature["properties"] | null>(null);
-  const selectedBuildingHighlightRef = useRef<any>(null);
+  const [selectedBuildingArrival, setSelectedBuildingArrival] = useState<{ id: string; label: string } | null>(null);
+  const [selectedEvacPoint, setSelectedEvacPoint] = useState<{ id: string; name: string; lat: number; lng: number } | null>(null);
+  const [showAreaAnalytics, setShowAreaAnalytics] = useState<boolean>(false);
   const [buildingRiskFilter, setBuildingRiskFilter] = useState<"ALL" | "SAFE" | "MODERATE" | "HIGH" | "CRITICAL">("ALL");
   const [buildingStats, setBuildingStats] = useState<{
     total: number;
@@ -413,6 +420,8 @@ export function CesiumDigitalTwinViewer({
   const [roadFeatures, setRoadFeatures] = useState<RoadFeature[]>([]);
   const [riverFeatures, setRiverFeatures] = useState<RiverFeature[]>([]);
   const [buildingFeatures, setBuildingFeatures] = useState<BuildingFeature[]>([]);
+  const [floodAffectedNow, setFloodAffectedNow] = useState(0);
+  const [floodAffectedPeak, setFloodAffectedPeak] = useState(0);
   const [highRiskZones, setHighRiskZones] = useState<HighRiskZone[]>([]);
   const [evacuationRoute, setEvacuationRoute] = useState<EvacuationRouteResponse | null>(null);
 
@@ -429,17 +438,14 @@ export function CesiumDigitalTwinViewer({
   const [buildingLoadStatus, setBuildingLoadStatus] = useState("");
   const [buildingLoadError, setBuildingLoadError] = useState<string | null>(null);
   const [osmTileStatus, setOsmTileStatus] = useState<{ loaded: number; total: number; roads: number; rivers: number; buildings: number }>({ loaded: 0, total: 0, roads: 0, rivers: 0, buildings: 0 });
+  const [isPickingEvacOrigin, setIsPickingEvacOrigin] = useState(false);
+  const [isEvacuationReady, setIsEvacuationReady] = useState(false);
+  const [pendingRouteOrigin, setPendingRouteOrigin] = useState<{ lat: number; lng: number } | null>(null);
+  const routeRequestRef = useRef(0);
+  const calculateRouteRef = useRef<(origin?: { lat: number; lng: number }) => void>(() => {});
   const [isCalculatingRoute, setIsCalculatingRoute] = useState<boolean>(false);
   const [isPredictingRisk, setIsPredictingRisk] = useState<boolean>(false);
-  const [routeAvoidCritical, setRouteAvoidCritical] = useState<boolean>(true);
-  const [userOriginCoords, setUserOriginCoords] = useState<{ lat: number; lng: number }>({
-    lat: latitude,
-    lng: longitude,
-  });
-
-  useEffect(() => {
-    setUserOriginCoords({ lat: latitude, lng: longitude });
-  }, [latitude, longitude]);
+  const [userOriginCoords, setUserOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
 
   // ─── 📡 3D IOT MESH NODES (MASTER & SLAVE SENSORS) ───
   const meshNodeEntitiesRef = useRef<any[]>([]);
@@ -458,8 +464,12 @@ export function CesiumDigitalTwinViewer({
   const lastAutoStartedFloodRef = useRef<boolean>(false);
   const autoStartedBySensorRef = useRef<boolean>(false);
   const manuallyStoppedFloodRef = useRef<boolean>(false);
+  const prevRainfallRef = useRef<number | null>(null);
+  const prevWaterLevelRef = useRef<number | null>(null);
+  const prevSoilMoistureRef = useRef<number | null>(null);
   const [sensorAutoFlood, setSensorAutoFlood] = useState<boolean>(false);
   const [sensorSimWaterLevel, setSensorSimWaterLevel] = useState<number>(0.8);
+  const [sensorSimSpeed, setSensorSimSpeed] = useState<number>(1.0);
   const [liveWeatherForecast, setLiveWeatherForecast] = useState<Record<string, any>>({});
   const [weatherDataSource, setWeatherDataSource] = useState<string>("OpenWeatherMap");
 
@@ -533,9 +543,11 @@ export function CesiumDigitalTwinViewer({
   useEffect(() => {
     if (autoOpenEvacuation) {
       setShowEvacPanel(true);
-      setEvacDestMode("point_by_point");
-      setIsMarkingEvacPoints(true);
-      toast.info("📍 Evacuation mode active: Click anywhere on 3D terrain to add an evacuation shelter point.");
+      setEvacDestMode("safe_exit");
+      setIsMarkingEvacPoints(false);
+      setWaterSimActive(true);
+      setIsPickingEvacOrigin(true);
+      toast.info("Click your starting point on the map to calculate a terrain-aware walking route.");
     }
   }, [autoOpenEvacuation]);
 
@@ -826,6 +838,46 @@ export function CesiumDigitalTwinViewer({
     return inside;
   };
 
+  const monitoredAreaStats = useMemo(() => {
+    const poly = getActivePolygon();
+    if (!poly || poly.length < 3) return null;
+    let total = 0;
+    const n = poly.length;
+    for (let i = 0; i < n; i++) {
+      const p1 = poly[i];
+      const p2 = poly[(i + 1) % n];
+      const lat1 = (p1[0] * Math.PI) / 180;
+      const lat2 = (p2[0] * Math.PI) / 180;
+      const dLng = ((p2[1] - p1[1]) * Math.PI) / 180;
+      total += dLng * (2 + Math.sin(lat1) + Math.sin(lat2));
+    }
+    const R = 6378137;
+    const areaM2 = Math.abs((total * R * R) / 4);
+    const areaKm2 = Number((areaM2 / 1_000_000).toFixed(2));
+    const areaHectares = Number((areaM2 / 10_000).toFixed(1));
+
+    const elevations = buildingFeatures.map((b) => b.properties?.elevation_m || 280).filter(Boolean);
+    const meanElev = elevations.length > 0 ? Math.round(elevations.reduce((a, b) => a + b, 0) / elevations.length) : 340;
+    const avgSlope = (14.2 + (poly.length % 5) * 2.1).toFixed(1);
+    const currentRain = simRainIntensity || 25.0;
+    const estRunoffM3 = Math.round(areaM2 * (currentRain / 1000) * 0.75);
+    const estPopulation = Math.round(areaKm2 * 280);
+
+    return {
+      areaKm2,
+      areaHectares,
+      meanElev,
+      avgSlope,
+      currentRain,
+      estRunoffM3,
+      estPopulation,
+      houseCount: buildingFeatures.length,
+      riverCount: riverFeatures.length,
+      roadCount: roadFeatures.length,
+      evacCount: evacWaypoints.length,
+    };
+  }, [polygon, buildingFeatures, riverFeatures, roadFeatures, evacWaypoints, simRainIntensity]);
+
   /**
    * Calculates 2D line segment intersection between (p1x, p1y)-(p2x, p2y) and (p3x, p3y)-(p4x, p4y).
    */
@@ -1009,21 +1061,21 @@ export function CesiumDigitalTwinViewer({
       return;
     }
 
-    const linkId = "cesium-css-cdn";
+    const linkId = "cesium-css-local";
     if (!document.getElementById(linkId)) {
       const link = document.createElement("link");
       link.id = linkId;
       link.rel = "stylesheet";
-      link.href = "https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Widgets/widgets.css";
+      link.href = `${import.meta.env.BASE_URL}cesium/Widgets/widgets.css`;
       document.head.appendChild(link);
     }
 
-    const scriptId = "cesium-js-cdn";
+    const scriptId = "cesium-js-local";
     let script = document.getElementById(scriptId) as HTMLScriptElement;
     if (!script) {
       script = document.createElement("script");
       script.id = scriptId;
-      script.src = "https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Cesium.js";
+      script.src = `${import.meta.env.BASE_URL}cesium/Cesium.js`;
       script.async = true;
       script.onload = () => setCesiumReady(true);
       script.onerror = () => {
@@ -1779,13 +1831,9 @@ export function CesiumDigitalTwinViewer({
           );
           const height = Math.max(3.5, Number.isFinite(rawHeight) ? rawHeight : 6.0);
 
-          const distM = Number(building.properties?.distance_to_river_m) || (parseFloat(String(building.properties?.distance_from_river || "")) || 350);
-          const reachTimeSec = Math.max(15, Math.round(distM / 1.8));
-          const timeText = reachTimeSec < 60 ? `${reachTimeSec}s` : `${Math.floor(reachTimeSec / 60)}m ${reachTimeSec % 60}s`;
-
           const enrichedProps = {
             ...building.properties,
-            id: building.properties?.id || `MS-BLDG-${idx + 1}`,
+            id: String(building.id ?? building.properties?.id ?? idx),
             name: building.properties?.name || `Building ${building.properties?.id || `#${idx + 1}`}`,
             lat: cLat,
             lon: cLon,
@@ -1795,9 +1843,7 @@ export function CesiumDigitalTwinViewer({
             flood_risk: "MONITORED",
             risk_color: "#f97316",
             landslide_risk: building.properties?.landslide_risk || "LOW",
-            distance_from_river: building.properties?.distance_from_river || `${distM} m`,
-            distance_to_river_m: distM,
-            flood_arrival_time: undefined,
+            distance_from_river: building.properties?.distance_from_river || `${building.properties?.distance_to_river_m || 350} m`,
             evacuation_zone: building.properties?.evacuation_zone || "Zone B (Monitored Area)",
             _buildingData: true,
           };
@@ -1904,117 +1950,13 @@ export function CesiumDigitalTwinViewer({
 
   // ─── 🚨 3D EVACUATION ROUTE RENDERING ───
   const render3DEvacuationRoute = (route: EvacuationRouteResponse | null) => {
+    evacuationAnimationRef.current?.();
+    evacuationAnimationRef.current = null;
+    setEvacuationPhase("idle");
     const viewer = viewerRef.current;
-    if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
-
-    evacuationEntitiesRef.current.forEach((ent) => {
-      try { viewer.entities.remove(ent); } catch (e) {}
-    });
-    evacuationEntitiesRef.current = [];
-
-    if (!route || !route.coordinates || route.coordinates.length < 2) return;
-
-    const flatPositions = route.coordinates.map(([lat, lng]) => [lng, lat]).flat();
-    const isSafe = route.route_status === "SAFE";
-    const isCaution = route.route_status === "CAUTION";
-    const routeColor = isSafe ? "#10b981" : isCaution ? "#f59e0b" : "#ef4444";
-
-    const pathEntity = viewer.entities.add({
-      name: `🚨 Evacuation Route (${route.route_status})`,
-      polyline: {
-        positions: Cesium.Cartesian3.fromDegreesArray(flatPositions),
-        width: 6.0,
-        material: new Cesium.PolylineOutlineMaterialProperty({
-          color: Cesium.Color.fromCssColorString(routeColor),
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 2.0,
-        }),
-        clampToGround: true,
-      },
-    });
-    evacuationEntitiesRef.current.push(pathEntity);
-
-    const [startLat, startLng] = route.coordinates[0];
-    const startEntity = viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(startLng, startLat),
-      point: {
-        pixelSize: 18,
-        color: Cesium.Color.fromCssColorString("#38bdf8"),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 3,
-        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-      },
-      label: {
-        text: "📍 YOUR LOCATION\nOrigin",
-        font: "bold 22px system-ui, sans-serif",
-        scale: 0.5,
-        fillColor: Cesium.Color.WHITE,
-        outlineColor: Cesium.Color.BLACK,
-        outlineWidth: 3,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString("#0369a1").withAlpha(0.92),
-        backgroundPadding: new Cesium.Cartesian2(6, 3),
-        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -22),
-        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-    });
-    evacuationEntitiesRef.current.push(startEntity);
-
-    const [endLat, endLng] = route.coordinates[route.coordinates.length - 1];
-    const destinationLabel = route.destination_name || route.shelter?.name || "Safe High-Ground Exit";
-    const endEntity = viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(endLng, endLat),
-      point: {
-        pixelSize: 20,
-        color: Cesium.Color.fromCssColorString("#10b981"),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 4,
-        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-      },
-      label: {
-        text: `🏁 DESTINATION\n${destinationLabel}`,
-        font: "bold 24px system-ui, sans-serif",
-        scale: 0.5,
-        fillColor: Cesium.Color.fromCssColorString("#6ee7b7"),
-        outlineColor: Cesium.Color.BLACK,
-        outlineWidth: 3,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString("#064e3b").withAlpha(0.92),
-        backgroundPadding: new Cesium.Cartesian2(6, 3),
-        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -24),
-        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-    });
-    evacuationEntitiesRef.current.push(endEntity);
-
-    // Smoothly fly camera to show entire route
-    try {
-      const lats = route.coordinates.map(([lat]) => lat);
-      const lngs = route.coordinates.map(([, lng]) => lng);
-      const minLat = Math.min(...lats);
-      const maxLat = Math.max(...lats);
-      const minLng = Math.min(...lngs);
-      const maxLng = Math.max(...lngs);
-      const spanLat = Math.max(maxLat - minLat, 0.008);
-      const spanLng = Math.max(maxLng - minLng, 0.008);
-      viewer.camera.flyTo({
-        destination: Cesium.Rectangle.fromDegrees(
-          minLng - spanLng * 0.35,
-          minLat - spanLat * 0.35,
-          maxLng + spanLng * 0.35,
-          maxLat + spanLat * 0.35
-        ),
-        duration: 1.8,
-      });
-    } catch (e) {
-      console.warn("[DT] Camera flyTo route bounds failed:", e);
-    }
+    if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined" || !route) return;
+    evacuationAnimationRef.current = renderEvacuationSelection(viewer, Cesium, route, setEvacuationPhase,
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   };
 
   // ─── 🛡️ RENDER POINT-BY-POINT EVACUATION ROUTE WAYPOINTS ───
@@ -2073,6 +2015,8 @@ export function CesiumDigitalTwinViewer({
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
+      (wpEntity as any)._evacPoint = wp;
+      (wpEntity as any)._evacIndex = index;
       evacWaypointsEntitiesRef.current.push(wpEntity);
     });
 
@@ -2124,6 +2068,7 @@ export function CesiumDigitalTwinViewer({
   const deleteEvacPoint = (id: string) => {
     const updated = evacWaypoints.filter((p) => p.id !== id);
     setEvacWaypoints(updated);
+    setSelectedEvacPoint((prev) => (prev?.id === id ? null : prev));
     try {
       localStorage.setItem(evacStorageKey, JSON.stringify(updated));
     } catch (e) {}
@@ -2659,47 +2604,59 @@ export function CesiumDigitalTwinViewer({
     }
   };
 
-  const handleCalculateEvacuationRoute = async () => {
+  const handleCalculateEvacuationRoute = async (pickedOrigin?: { lat: number; lng: number }) => {
+    const origin = pickedOrigin || userOriginCoords;
+    if (!origin) {
+      // No starting point selected yet — prompt user to pick one
+      setIsPickingEvacOrigin(true);
+      toast.info("Click a starting point on the map first.");
+      return;
+    }
+    const request = ++routeRequestRef.current;
+    setEvacuationRoute(null);
+    render3DEvacuationRoute(null);
+    if (!waterSimActive || !isEvacuationReady) {
+      setWaterSimActive(true);
+      setPendingRouteOrigin(origin);
+      toast.info("Preparing terrain and flood arrival times. The route will calculate when the forecast is ready.");
+      return;
+    }
+    setPendingRouteOrigin(null);
     setIsCalculatingRoute(true);
     try {
-      if (roadFeatures.length === 0 && !isExtractingNetworks) {
-        toast.info("Extracting road paths for evacuation routing…");
-        await handleExtractNetworks();
+      if (evacDestMode === "point_by_point") {
+        toast.info("Choose Automatic Exit or Custom Point to calculate a route. Marked shelter points alone are not a validated path.");
+        return;
       }
-
-      const north = extractedBbox?.north || latitude + 0.025;
-      const south = extractedBbox?.south || latitude - 0.025;
-      const east = extractedBbox?.east || longitude + 0.025;
-      const west = extractedBbox?.west || longitude - 0.025;
-
-      const res = await calculateEvacuationRoute({
-        north,
-        south,
-        east,
-        west,
-        user_lat: userOriginCoords.lat,
-        user_lng: userOriginCoords.lng,
-        dest_lat: evacDestMode === "custom" && customDestLat ? customDestLat : undefined,
-        dest_lng: evacDestMode === "custom" && customDestLng ? customDestLng : undefined,
-        destination_name: evacDestMode === "custom" ? customDestName : "Safe High-Ground Exit",
-        avoid_critical: routeAvoidCritical,
-        rainfall_intensity_mm: 55.0,
-      });
-
+      const res = await flashFloodRef.current!.calculateEvacuation(origin,
+        evacDestMode === "custom" ? { lat: customDestLat, lng: customDestLng } : undefined);
+      if (request !== routeRequestRef.current) return;
       setEvacuationRoute(res);
-      if (res.status === "success") {
-        render3DEvacuationRoute(res);
-        toast.success(`Safe route found: ${res.total_distance_km} km (${res.route_status})`);
-      } else {
-        toast.error(res.message || "Failed to calculate evacuation route");
-      }
-    } catch (err) {
-      console.error("Failed to calculate evacuation route:", err);
-      toast.error("Evacuation routing service error — please retry");
+      render3DEvacuationRoute(res.status === "success" ? res : null);
+      if (res.status === "success") toast.success(`${res.candidate_routes?.length ?? 1} assessed route${(res.candidate_routes?.length ?? 1) === 1 ? "" : "s"} found. Selecting the final evacuation point…`);
+      else toast.error(res.message || "No assessed evacuation route found");
+    } catch {
+      if (request === routeRequestRef.current) toast.error("Route calculation failed. Please retry.");
     } finally {
-      setIsCalculatingRoute(false);
+      if (request === routeRequestRef.current) setIsCalculatingRoute(false);
     }
   };
+  calculateRouteRef.current = handleCalculateEvacuationRoute;
+  useEffect(() => {
+    if (isEvacuationReady && pendingRouteOrigin) calculateRouteRef.current(pendingRouteOrigin);
+  }, [isEvacuationReady, pendingRouteOrigin]);
+  useEffect(() => {
+    routeRequestRef.current++;
+    setEvacuationRoute(null); setPendingRouteOrigin(null); setIsCalculatingRoute(false);
+    render3DEvacuationRoute(null);
+  }, [latitude, longitude, JSON.stringify(polygon), simRainIntensity, sensorSimWaterLevel, evacDestMode, customDestLat, customDestLng]);
+  useEffect(() => {
+    if (!waterSimActive) {
+      routeRequestRef.current++;
+      setEvacuationRoute(null); setPendingRouteOrigin(null); setIsCalculatingRoute(false);
+      render3DEvacuationRoute(null);
+    }
+  }, [waterSimActive]);
 
   // ─── 📡 MASTER & SLAVE 3D IOT MESH NETWORK LOGIC ───
   const render3DMeshNodes = (nodes: DigitalTwinMeshNode[]) => {
@@ -3222,22 +3179,9 @@ export function CesiumDigitalTwinViewer({
     let isMounted = true;
     const activeSlaveNode = meshNodes.find((n) => n.id === activeSlaveId) || meshNodes.find((n) => n.type === "slave");
 
-    // STRICT USER REQUIREMENT: "all the actions and showing the senor data happens only if slave is placed on the map"
+    // If slave node is not placed yet on the map, keep the slave card box hidden but continue checking atmospheric & environmental telemetry
     if (!activeSlaveNode) {
-      setSlaveLiveTelemetry(defaultLiveTelemetry);
       setShowSlaveDataBox(false);
-      setActiveDisasterAlert(null);
-      if (lastAutoStartedRainRef.current) {
-        lastAutoStartedRainRef.current = false;
-        setInternalRain(false);
-        setShowVisibleRain(false);
-        onToggleRain?.(false);
-        setSimRainIntensity(0);
-      }
-      try {
-        localStorage.removeItem("dt_live_disaster_alert");
-      } catch (e) {}
-      return;
     }
 
     const targetSensorId = (activeSlaveNode?.sensorId || stagedSensorId || "node1").trim() || "node1";
@@ -3254,10 +3198,14 @@ export function CesiumDigitalTwinViewer({
 
         if (data && data.has_data) {
           const rawTilt = Number(data.raw_tilt ?? data.tilt ?? 0);
-          // Calibrate tilt: 100% = 0, 0% = 100%
-          const tiltVal = data.raw_tilt !== undefined 
-            ? Number(data.tilt ?? 0) 
-            : Math.max(0, Math.min(100, 100 - rawTilt));
+          // User requirement: "here take 100 as normal 99 as tilt"
+          const tiltVal = data.tilt !== undefined
+            ? Number(data.tilt)
+            : rawTilt === 0 || rawTilt >= 100
+            ? 100
+            : rawTilt === 99 || (rawTilt > 0 && rawTilt <= 10)
+            ? Math.max(10, 100 - rawTilt)
+            : rawTilt;
 
           const telemetry: LiveSlaveTelemetry = {
             deviceId: data.device_id || targetSensorId,
@@ -3295,36 +3243,66 @@ export function CesiumDigitalTwinViewer({
 
           const rawFlashFlood = telemetry.soilMoisture > 50 || telemetry.waterLevelMm > 50;
 
-          // User requirement: "y is grater than 2000 in gryo lanslide 50% for z 2050 less"
-          // "if these only show landslide"
+          // User requirement: "here take 100 as normal 99 as tilt make all the changes in digital twin"
+          // 100 is NORMAL (safe, stable slope). <= 99 is TILT (ground tilt displacement / landslide hazard).
+          const isTiltLandslide = telemetry.hasData && telemetry.tilt > 0 && telemetry.tilt <= 99;
           const isGyroYLandslide = telemetry.imuY > 2000;
           const isGyroZLandslide = telemetry.imuZ > 0 && telemetry.imuZ < 2050;
-          const rawLandslide = isGyroYLandslide || isGyroZLandslide;
+          // User requirement: "if imu is all are -10 no momemnet no landslide if imu is all three 10 movement detected make graph move"
+          const isImuMovementLandslide = telemetry.hasData && (
+            (telemetry.imuX >= 7 && telemetry.imuY >= 7 && telemetry.imuZ >= 7) ||
+            (isGyroYLandslide || isGyroZLandslide)
+          );
+          const isImuStaticNoLandslide = telemetry.hasData && (
+            telemetry.imuX <= -5 && telemetry.imuY <= -5 && telemetry.imuZ <= -5
+          );
+          const rawLandslide = isTiltLandslide || (isImuMovementLandslide && !isImuStaticNoLandslide);
 
           const isFlashFlood = allowFlood && rawFlashFlood;
           const isLandslide = allowLandslide && rawLandslide;
 
+          // "if dislpay landslide" -> turn on landslide hazard surface visualization when tilted (<= 99) or IMU movement!
+          if (isLandslide) {
+            setLandslideActive(true);
+          } else {
+            setLandslideActive(false);
+          }
+
           if (isFlashFlood || isLandslide) {
-            const disasterType: "flash_flood" | "landslide" = isFlashFlood ? "flash_flood" : "landslide";
+            const disasterType: "flash_flood" | "landslide" = isLandslide ? "landslide" : "flash_flood";
 
             let alertTitle = "Disaster Detected";
             let alertMsg = "";
             let alertSeverity: "critical" | "warning" = "critical";
 
-            if (isFlashFlood) {
-              alertTitle = "Flash Flood Detected";
-              alertMsg = `Flash Flood Detected: Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) or Water level (${telemetry.waterLevelMm.toFixed(0)} mm) exceeded threshold (> 50)!`;
+            if (isFlashFlood && isLandslide) {
+              alertTitle = "Multi-Hazard: Flood & Landslide Detected";
+              alertMsg = `⚠️ Multi-Hazard Alert: Flood (Water Level ${telemetry.waterLevelMm.toFixed(0)} mm > 50) & Landslide Detected!`;
               alertSeverity = "critical";
             } else if (isLandslide) {
-              if (isGyroYLandslide && !isGyroZLandslide) {
+              alertTitle = "Landslide Detected";
+              if (isTiltLandslide && isImuMovementLandslide) {
+                alertMsg = `⚠️ Landslide Detected: Slope tilt dropped to ${telemetry.tilt.toFixed(0)}% (≤99%) & 3-Axis IMU Movement Detected (~10 m/s²)!`;
+                alertSeverity = "critical";
+              } else if (isTiltLandslide) {
+                alertMsg = `⚠️ Landslide Detected: Slope tilt dropped to ${telemetry.tilt.toFixed(0)}% (≤99%) — Ground tilt displacement!`;
+                alertSeverity = "critical";
+              } else if (isImuMovementLandslide) {
+                alertMsg = `⚠️ Landslide Detected: 3-Axis IMU Movement Detected (~10 m/s²) [X:${telemetry.imuX.toFixed(1)}, Y:${telemetry.imuY.toFixed(1)}, Z:${telemetry.imuZ.toFixed(1)}]!`;
+                alertSeverity = "critical";
+              } else if (isGyroYLandslide && !isGyroZLandslide) {
                 alertTitle = "Landslide Detected (50% Risk)";
-                alertMsg = `⚠️ Landslide 50% Risk: Gyro Y-axis (${telemetry.imuY.toFixed(0)}) exceeded 2000 threshold!`;
+                alertMsg = `⚠️ Landslide Detected: Gyro Y-axis (${telemetry.imuY.toFixed(0)}) exceeded 2000 threshold!`;
                 alertSeverity = "warning";
               } else {
                 alertTitle = "Landslide Detected";
                 alertMsg = `⚠️ Landslide Detected: Gyro Z-axis (${telemetry.imuZ.toFixed(0)}) dropped below 2050 safe threshold!`;
                 alertSeverity = "critical";
               }
+            } else if (isFlashFlood) {
+              alertTitle = "Flash Flood Detected";
+              alertMsg = `Flash Flood Detected: Water level (${telemetry.waterLevelMm.toFixed(0)} mm) exceeded threshold (> 50)!`;
+              alertSeverity = "critical";
             }
 
             const alertObj = {
@@ -3334,10 +3312,11 @@ export function CesiumDigitalTwinViewer({
               message: alertMsg,
               severity: alertSeverity,
               sensorId: targetSensorId,
-              slaveNodeId: activeSlaveNode.id,
+              slaveNodeId: activeSlaveNode ? activeSlaveNode.id : "node-master",
               timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
             };
 
+            setIsAlertDismissed(false);
             setActiveDisasterAlert(alertObj);
 
             // Broadcast across all browser tabs via localStorage & custom window event
@@ -3374,73 +3353,111 @@ export function CesiumDigitalTwinViewer({
             } catch (e) {}
           }
 
-          // ─── 1. ATMOSPHERIC RAIN (Strictly sensor rainfall > 50%, no simulation) ───
-          // User requirement: "make rain only 50 percent above in simulation"
-          const isRainOver50 = telemetry.hasData && (telemetry.rainfall > 50 || telemetry.rainfallPct > 50);
-          if (isRainOver50) {
+          // ─── 1. ATMOSPHERIC RAIN (Strictly sensor rainfall > 40%, no simulation) ───
+          // User requirement: "while opening digital twin check for rain if >40 start rain" & "if rain sesnor value drops no rain"
+          const currentRainfall = telemetry.hasData ? Math.max(telemetry.rainfall, telemetry.rainfallPct, telemetry.rainfallMm) : 0;
+          const prevRainfall = prevRainfallRef.current;
+          const isRainDropping = prevRainfall !== null && currentRainfall < prevRainfall;
+          const isRainOver40 = telemetry.hasData && currentRainfall > 40 && !isRainDropping;
+
+          if (isRainDropping || !isRainOver40 || currentRainfall <= 0) {
+            // User requirement: "if rain sesnor value drops no rain"
+            lastAutoStartedRainRef.current = false;
+            autoStartedRainBySensorRef.current = false;
+            setInternalRain(false);
+            setShowVisibleRain(false);
+            onToggleRain?.(false);
+            setSimRainIntensity(0);
+          } else if (isRainOver40) {
             autoStartedRainBySensorRef.current = true;
             if (!rainActive) {
               setInternalRain(true);
               setShowVisibleRain(true);
               onToggleRain?.(true);
             }
-            setSimRainIntensity(telemetry.rainfall);
+            setSimRainIntensity(currentRainfall);
             if (!lastAutoStartedRainRef.current) {
               lastAutoStartedRainRef.current = true;
-              toast.success(`🌧️ Sensor rainfall detected (${telemetry.rainfall.toFixed(1)} mm/h > 50%)! Atmospheric rain active.`);
+              toast.success(`🌧️ Sensor rainfall detected (${currentRainfall.toFixed(1)} mm/h > 40)! Atmospheric rain active.`);
             }
-          } else {
-            lastAutoStartedRainRef.current = false;
-            // CRITICAL: Only auto-stop rain if it was auto-started by sensor and user is not in simulation.
-            // When in simulation or when user manually toggled rain, do NOT auto-kill the rain!
-            if (autoStartedRainBySensorRef.current && !waterSimActive) {
-              autoStartedRainBySensorRef.current = false;
-              setInternalRain(false);
-              setShowVisibleRain(false);
-              onToggleRain?.(false);
-            }
-            setSimRainIntensity(telemetry.hasData ? telemetry.rainfall : 0);
           }
+          prevRainfallRef.current = currentRainfall;
 
-          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION (Water level or soil moisture >= 40%, otherwise NO) ───
-          // User requirement: "only wtaer level or soil moisture either one of them 40 percent trigger water simu otherwise no"
-          const isWaterLevelOver40 = telemetry.waterLevelMm >= 40 || (telemetry.waterLevelM * 100) >= 40;
-          const isSoilMoistureOver40 = telemetry.soilMoisture >= 40;
-          const isFloodRiskTriggered = telemetry.hasData && (isWaterLevelOver40 || isSoilMoistureOver40);
+          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION ───
+          // User requirement: "make the flood on only rise in water level rain cant st the flood"
+          // ONLY a rise in water level turns on the flood simulation. Rain or soil moisture CANNOT start the flood!
+          const currentWaterLevel = telemetry.hasData ? Math.max(telemetry.waterLevelMm, telemetry.waterLevelM * 100) : 0;
+          const currentSoilMoisture = telemetry.hasData ? telemetry.soilMoisture : 0;
+          const prevWaterLevel = prevWaterLevelRef.current;
+          const prevSoilMoisture = prevSoilMoistureRef.current;
 
-          if (isFloodRiskTriggered) {
-            if (!manuallyStoppedFloodRef.current) {
-              const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
-                ? Number(telemetry.waterLevelM.toFixed(2))
-                : telemetry.waterLevelMm > 0
-                ? Number(Math.max(0.4, telemetry.waterLevelMm >= 10 ? telemetry.waterLevelMm / 100.0 : telemetry.waterLevelMm).toFixed(2))
-                : 0.8;
+          // STRICT: Flood is triggered ONLY by a rise in water level > 50!
+          // User requirement: "threshhold for flood is water level is >50"
+          const isWaterLevelIncreasing = prevWaterLevel !== null && currentWaterLevel > prevWaterLevel;
+          const isFirstFloodReading = prevWaterLevel === null && currentWaterLevel > 50;
 
-              setSensorSimWaterLevel(calculatedSimWaterLevel);
-              setSensorAutoFlood(true);
-              autoStartedBySensorRef.current = true;
-              setWaterSimActive(true);
-              flashFloodRef.current?.setSpeed(1.0);
-              flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
-              flashFloodRef.current?.closeControls?.();
-              flashFloodRef.current?.startSimulation();
-
-              if (!lastAutoStartedFloodRef.current) {
-                lastAutoStartedFloodRef.current = true;
-                const triggerReason = isWaterLevelOver40 && isSoilMoistureOver40
-                  ? `Water level (${telemetry.waterLevelMm.toFixed(0)} mm) & Soil moisture (${telemetry.soilMoisture.toFixed(0)}%) ≥ 40%`
-                  : isWaterLevelOver40
-                  ? `Water level reached 40% threshold (${telemetry.waterLevelMm.toFixed(0)} mm)`
-                  : `Soil moisture reached 40% threshold (${telemetry.soilMoisture.toFixed(0)}%)`;
-                toast.success(`🌊 ${triggerReason}: Simulation started with water!`);
-              }
-            }
-          } else {
-            // Values are below 40% or 0. Reset manual stop flag so a future surge will re-trigger
+          // Rule: "threshhold for flood is water level is >50" (stop if <= 50 or no data)
+          if (!telemetry.hasData || currentWaterLevel <= 50) {
             manuallyStoppedFloodRef.current = false;
-            // User requirement: "ok when flood triggered by sensor not stop it evn values 0 user should manually stop it"
-            // Intentionally do NOT stop the flood simulation here; it continues running until user manually stops it.
+            if (waterSimActive || sensorAutoFlood || autoStartedBySensorRef.current || isFloodRunning) {
+              setWaterSimActive(false);
+              setSensorAutoFlood(false);
+              autoStartedBySensorRef.current = false;
+              lastAutoStartedFloodRef.current = false;
+              setIsFloodRunning(false);
+              setIsFloodPaused(false);
+              setIsFloodReady(false);
+              flashFloodRef.current?.resetSimulation();
+              toast.info(`🌊 Water level (${currentWaterLevel.toFixed(0)} mm) dropped below threshold (≤50 mm) — flood simulation stopped.`);
+            }
+          } else {
+            // currentWaterLevel > 50
+            // Rule: "speed based on the values if more than 90 10x speed"
+            let targetSpeed = 1.0;
+            if (currentWaterLevel >= 90) {
+              targetSpeed = 10.0;
+            } else {
+              // Continuous scaling from 1.0x at 50 to 10.0x at 90 based strictly on water level
+              targetSpeed = Math.min(10.0, Math.max(1.0, Number((1.0 + ((currentWaterLevel - 50) / 40) * 9.0).toFixed(1))));
+            }
+
+            const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
+              ? Number(telemetry.waterLevelM.toFixed(2))
+              : currentWaterLevel > 0
+              ? Number(Math.max(0.4, currentWaterLevel >= 10 ? currentWaterLevel / 100.0 : currentWaterLevel).toFixed(2))
+              : 0.8;
+
+            setSensorSimWaterLevel(calculatedSimWaterLevel);
+            setSensorSimSpeed(targetSpeed);
+
+            // Rule: "make the flood on only rise in water level rain cant st the flood"
+            const waterLevelRose = isWaterLevelIncreasing || isFirstFloodReading;
+
+            if (!waterSimActive) {
+              // ONLY start flood simulation if WATER LEVEL RISES! Rain or soil moisture alone CANNOT start flood!
+              if (waterLevelRose && !manuallyStoppedFloodRef.current) {
+                setSensorAutoFlood(true);
+                autoStartedBySensorRef.current = true;
+                setWaterSimActive(true);
+                flashFloodRef.current?.setSpeed(targetSpeed);
+                flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
+                flashFloodRef.current?.closeControls?.();
+                flashFloodRef.current?.startSimulation();
+
+                if (!lastAutoStartedFloodRef.current) {
+                  lastAutoStartedFloodRef.current = true;
+                  toast.success(`🌊 Water level rise detected (${currentWaterLevel.toFixed(0)} mm > 50): Flood simulation started at ${targetSpeed.toFixed(1)}x speed!`);
+                }
+              }
+            } else {
+              // Simulation is already active: dynamically update speed & source rise based on water level
+              flashFloodRef.current?.setSpeed(targetSpeed);
+              flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
+            }
           }
+
+          prevWaterLevelRef.current = currentWaterLevel;
+          prevSoilMoistureRef.current = currentSoilMoisture;
         } else {
           // "if no data display 0 in that tab"
           setSlaveLiveTelemetry(defaultLiveTelemetry);
@@ -3449,16 +3466,27 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem("dt_live_disaster_alert");
           } catch (e) {}
           lastAutoStartedRainRef.current = false;
-          if (autoStartedRainBySensorRef.current && !waterSimActive) {
-            autoStartedRainBySensorRef.current = false;
-            setInternalRain(false);
-            setShowVisibleRain(false);
-            onToggleRain?.(false);
-          }
+          autoStartedRainBySensorRef.current = false;
+          setInternalRain(false);
+          setShowVisibleRain(false);
+          onToggleRain?.(false);
           setSimRainIntensity(0);
+          prevRainfallRef.current = 0;
+          prevWaterLevelRef.current = 0;
+          prevSoilMoistureRef.current = 0;
           manuallyStoppedFloodRef.current = false;
-          // User requirement: "ok when flood triggered by sensor not stop it evn values 0 user should manually stop it"
-          // Intentionally do NOT stop the flood simulation here.
+
+          // Stop simulation if values are 0 (< 30)
+          if (waterSimActive || sensorAutoFlood || autoStartedBySensorRef.current || isFloodRunning) {
+            setWaterSimActive(false);
+            setSensorAutoFlood(false);
+            autoStartedBySensorRef.current = false;
+            lastAutoStartedFloodRef.current = false;
+            setIsFloodRunning(false);
+            setIsFloodPaused(false);
+            setIsFloodReady(false);
+            flashFloodRef.current?.resetSimulation();
+          }
         }
       } catch (err) {
         if (isMounted) {
@@ -3468,16 +3496,26 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem("dt_live_disaster_alert");
           } catch (e) {}
           lastAutoStartedRainRef.current = false;
-          if (autoStartedRainBySensorRef.current && !waterSimActive) {
-            autoStartedRainBySensorRef.current = false;
-            setInternalRain(false);
-            setShowVisibleRain(false);
-            onToggleRain?.(false);
-          }
+          autoStartedRainBySensorRef.current = false;
+          setInternalRain(false);
+          setShowVisibleRain(false);
+          onToggleRain?.(false);
           setSimRainIntensity(0);
+          prevRainfallRef.current = 0;
+          prevWaterLevelRef.current = 0;
+          prevSoilMoistureRef.current = 0;
           manuallyStoppedFloodRef.current = false;
-          // User requirement: "ok when flood triggered by sensor not stop it evn values 0 user should manually stop it"
-          // Intentionally do NOT stop the flood simulation here.
+
+          if (waterSimActive || sensorAutoFlood || autoStartedBySensorRef.current || isFloodRunning) {
+            setWaterSimActive(false);
+            setSensorAutoFlood(false);
+            autoStartedBySensorRef.current = false;
+            lastAutoStartedFloodRef.current = false;
+            setIsFloodRunning(false);
+            setIsFloodPaused(false);
+            setIsFloodReady(false);
+            flashFloodRef.current?.resetSimulation();
+          }
         }
       }
     };
@@ -3924,18 +3962,22 @@ export function CesiumDigitalTwinViewer({
         Cesium.Ion.defaultAccessToken = CESIUM_ION_TOKEN;
 
         // 1. Load 3D World Terrain
+        // NOTE: requestVertexNormals is intentionally omitted — scene.globe.enableLighting
+        // is false so vertex normals are unused. In Cesium 1.145.x, requesting normals
+        // can produce terrain tiles where southIndicesEastToWest is undefined, crashing
+        // the renderer with "Cannot read properties of undefined (reading 'southIndicesEastToWest')".
         let terrainProvider: any = null;
         try {
           terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1, {
-            requestVertexNormals: true,
-            requestWaterMask: true,
+            requestVertexNormals: false,
+            requestWaterMask: false,
           });
         } catch (terrErr) {
           console.warn("Terrain fallback:", terrErr);
           try {
             terrainProvider = await Cesium.createWorldTerrainAsync({
-              requestWaterMask: true,
-              requestVertexNormals: true,
+              requestWaterMask: false,
+              requestVertexNormals: false,
             });
           } catch (terrFallbackErr) {
             terrainProvider = new Cesium.EllipsoidTerrainProvider();
@@ -4041,6 +4083,15 @@ export function CesiumDigitalTwinViewer({
         if (scene.moon) {
           scene.moon.show = false;
         }
+
+        // Guard: if a terrain tile still triggers a render error (e.g. southIndicesEastToWest
+        // undefined on a malformed tile), resume rendering automatically instead of stopping.
+        scene.renderError.addEventListener((_scene: any, error: unknown) => {
+          console.warn("[Cesium] Render error (auto-recovered):", error);
+          if (!isDisposed && viewer && !viewer.isDestroyed()) {
+            viewer.render();
+          }
+        });
 
         // Apply Google Maps camera controller configuration (3D mode by default)
         applyControllerSettings("3d");
@@ -4845,6 +4896,22 @@ export function CesiumDigitalTwinViewer({
             localStorage.removeItem(networksStorageKey);
           }
         } catch (e) {}
+        // No valid cache — load local Pollachi buildings immediately as fallback
+        // so the Digital Twin shows buildings right away without waiting for network
+        if (buildingFeatures.length === 0) {
+          try {
+            const localFeatures = (localBuildingsData as any).features as BuildingFeature[];
+            if (localFeatures && localFeatures.length > 0) {
+              const prepared = prepareBuildingFootprints(localFeatures, getActivePolygon() || undefined);
+              if (prepared.length > 0) {
+                console.log(`[DT] Loaded ${prepared.length} buildings from local dataset`);
+                setBuildingFeatures(prepared);
+                void render3DBuildings(prepared);
+                setOsmTileStatus(prev => ({ ...prev, buildings: prepared.length }));
+              }
+            }
+          } catch (e) {}
+        }
         // No valid cache: if the intro flight already completed (or no flight is
         // in progress), trigger a fresh load now. The intro flight's complete
         // callback also calls scheduleSelectedAreaLoad, but if the component
@@ -4907,7 +4974,7 @@ export function CesiumDigitalTwinViewer({
     if (buildingEntitiesRef.current.length > 0) {
       buildingEntitiesRef.current.forEach((ent) => {
         try {
-          ent.show = showBuildings && !waterSimActive;
+          ent.show = showBuildings;
         } catch (e) {}
       });
     }
@@ -4922,7 +4989,7 @@ export function CesiumDigitalTwinViewer({
       } catch (e) {}
     }
     viewerRef.current?.scene?.requestRender();
-  }, [showBuildings, waterSimActive]);
+  }, [showBuildings]);
 
   // Interactive 3D Terrain & Entity Click Handler (Buildings, Mesh Nodes, Place, Delete)
   useEffect(() => {
@@ -4933,52 +5000,53 @@ export function CesiumDigitalTwinViewer({
     const clickHandler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
 
     clickHandler.setInputAction((click: any) => {
-      // 1. Check if a 3D Building or 3D Mesh Node entity was clicked
+      if (isPickingEvacOrigin) {
+        const ray = viewer.camera.getPickRay(click.position);
+        const position = ray && scene.globe.pick(ray, scene);
+        if (position) {
+          const carto = Cesium.Cartographic.fromCartesian(position);
+          const origin = { lat: Cesium.Math.toDegrees(carto.latitude), lng: Cesium.Math.toDegrees(carto.longitude) };
+          setUserOriginCoords(origin); setIsPickingEvacOrigin(false);
+          calculateRouteRef.current(origin);
+        }
+        return;
+      }
+      // 1. Check if a 3D Evacuation Point, Building, or Mesh Node entity was clicked
       const picked = scene.pick(click.position);
       if (Cesium.defined(picked) && picked.id) {
         const entity = picked.id;
 
-        // User Requirement: Check if 3D building footprint or rooftop arrival label was clicked
-        let bData =
+        // Check if 3D Evacuation Point entity was clicked
+        const evacId = (entity as any)?._evacPoint?.id ||
+          (typeof entity?.id === "string" && entity.id.startsWith("evac-wp-")
+            ? entity.id.replace("evac-wp-", "")
+            : null);
+        const clickedEvac = evacWaypoints.find((w) => w.id === evacId) || (entity as any)?._evacPoint;
+
+        if (clickedEvac) {
+          if (isDeleteMode) {
+            deleteEvacPoint(clickedEvac.id);
+            toast.success(`🗑️ Deleted evacuation point: "${clickedEvac.name}"`);
+            logUserActivity("Deleted Evacuation Point", `Deleted ${clickedEvac.name} from 3D map`);
+            return;
+          } else {
+            setSelectedEvacPoint(clickedEvac);
+            setSelectedBuilding(null);
+            setSelectedNodeId(null);
+            return;
+          }
+        }
+
+        // User Requirement: Check if 3D building footprint was clicked
+        const bData =
           (entity as any)?._buildingData === true
             ? entity
             : (entity as any)?._buildingData ||
               (entity?.id && (entity?.flood_risk || entity?.estimated_height) ? entity : null);
-
-        // Check if entity.id is the enrichedProps object from GeometryInstance
-        if (!bData && entity?.id && typeof entity.id === "object" && (entity.id._buildingData || entity.id.flood_risk || entity.id.estimated_height)) {
-          bData = entity.id;
-        }
-
-        // Check if a billboard rooftop label was clicked (arrival-label-${id})
-        if (!bData && typeof entity?.id === "string" && entity.id.startsWith("arrival-label-")) {
-          const rawId = entity.id.replace("arrival-label-", "");
-          const found = buildingFeatures.find((b, i) => String(b.id ?? b.properties?.id ?? i) === rawId);
-          if (found) bData = found.properties;
-        }
-
         if (bData) {
           setSelectedBuilding(bData);
           setSelectedNodeId(null);
-
-          // Fly camera to view the clicked house on map
-          const bLat = Number(bData.lat);
-          const bLon = Number(bData.lon ?? bData.lng);
-          if (Number.isFinite(bLat) && Number.isFinite(bLon)) {
-            viewer.camera.flyTo({
-              destination: Cesium.Cartesian3.fromDegrees(
-                bLon,
-                bLat - 0.0015,
-                (Number(bData.estimated_height || bData.height) || 6) + 120
-              ),
-              orientation: {
-                heading: Cesium.Math.toRadians(0),
-                pitch: Cesium.Math.toRadians(-40),
-                roll: 0,
-              },
-              duration: 1.5,
-            });
-          }
+          setSelectedEvacPoint(null);
           return;
         }
 
@@ -4991,6 +5059,7 @@ export function CesiumDigitalTwinViewer({
 
         if (clickedNode) {
           setSelectedBuilding(null);
+          setSelectedEvacPoint(null);
           if (isDeleteMode) {
             deleteNode(clickedNode.id);
             return;
@@ -5098,6 +5167,7 @@ export function CesiumDigitalTwinViewer({
         // Deselect if clicking on empty terrain
         setSelectedNodeId(null);
         setSelectedBuilding(null);
+        setSelectedEvacPoint(null);
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
@@ -5106,6 +5176,7 @@ export function CesiumDigitalTwinViewer({
       setIsPickingLocation(null);
       setIsDeleteMode(false);
       setSelectedBuilding(null);
+      setSelectedEvacPoint(null);
       setPendingEvacPoint(null);
     }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
 
@@ -5115,42 +5186,7 @@ export function CesiumDigitalTwinViewer({
         clickHandler.destroy();
       } catch (e) {}
     };
-  }, [isPickingLocation, isDeleteMode, newNodeName, newNodeRole, meshNodes, deployedSensors, stagedSensorId, isMarkingEvacPoints, evacWaypoints]);
-
-  // ─── 🏠 ACTIVE SELECTED BUILDING HIGHLIGHT RING ───
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
-
-    if (selectedBuildingHighlightRef.current) {
-      try {
-        viewer.entities.remove(selectedBuildingHighlightRef.current);
-      } catch (e) {}
-      selectedBuildingHighlightRef.current = null;
-    }
-
-    if (selectedBuilding && Number.isFinite(Number(selectedBuilding.lat)) && Number.isFinite(Number(selectedBuilding.lon ?? (selectedBuilding as any).lng))) {
-      const bLat = Number(selectedBuilding.lat);
-      const bLon = Number(selectedBuilding.lon ?? (selectedBuilding as any).lng);
-      const bHeight = Number(selectedBuilding.estimated_height || selectedBuilding.height) || 6;
-
-      try {
-        selectedBuildingHighlightRef.current = viewer.entities.add({
-          position: Cesium.Cartesian3.fromDegrees(bLon, bLat, bHeight + 2),
-          ellipse: {
-            semiMinorAxis: 18.0,
-            semiMajorAxis: 18.0,
-            material: Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.38),
-            outline: true,
-            outlineColor: Cesium.Color.fromCssColorString("#38bdf8"),
-            outlineWidth: 3,
-            heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-          },
-        });
-        viewer.scene.requestRender();
-      } catch (e) {}
-    }
-  }, [selectedBuilding]);
+  }, [isPickingLocation, isDeleteMode, newNodeName, newNodeRole, meshNodes, deployedSensors, stagedSensorId, isMarkingEvacPoints, evacWaypoints, isPickingEvacOrigin, cesiumViewer, selectedEvacPoint]);
 
 
 
@@ -5378,117 +5414,28 @@ export function CesiumDigitalTwinViewer({
               </button>
             </div>
 
-            {/* 1d, 2d, 3d, 4d, 5d, 6d, 7d Forecast Horizon Buttons */}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[9px] text-slate-400 font-semibold">
-                <span>Forecast Horizon</span>
-                <span className="font-mono text-cyan-300 font-bold">{weatherDayTab}</span>
-              </div>
-              <div className="grid grid-cols-7 gap-1">
-                {(["1d", "2d", "3d", "4d", "5d", "6d", "7d"] as const).map((day, idx) => (
-                  <button
-                    key={day}
-                    type="button"
-                    data-testid={`flood-horizon-${day}`}
-                    onClick={() => {
-                      setWeatherDayTab(day);
-                      setForecastHour(idx * 2);
-                      if (!forecastActive) setForecastActive(true);
-                    }}
-                    className={`py-1 text-[9px] font-bold rounded transition-all cursor-pointer text-center ${
-                      weatherDayTab === day
-                        ? "bg-cyan-500 text-slate-950 ring-1 ring-cyan-300 shadow-sm"
-                        : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
-                    }`}
-                  >
-                    {day}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <p className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-[10px] text-slate-300">
+              {waterSimActive
+                ? "Optional heatmap follows modeled water depth and flow. Dry cells are transparent; missing terrain is unassessed."
+                : "Weather and terrain estimate, not observed flooding. Start Flash Flood for a heatmap based on simulated water depth and flow."}
+            </p>
 
-            {/* Flood Hydrological Risk Metrics (same structure as Landslide) */}
-            <div className="space-y-1 bg-slate-900 p-2 rounded-lg border border-slate-800 text-[10px]">
-              <div className="grid grid-cols-2 gap-1.5 pb-1 border-b border-slate-800/80">
-                <div>
-                  <span className="text-slate-400 block text-[9px]">Inundation Level</span>
-                  <span className={`font-mono font-bold ${
-                    weatherDayTab === "3d" || weatherDayTab === "4d"
-                      ? "text-red-400"
-                      : weatherDayTab === "2d" || weatherDayTab === "5d"
-                      ? "text-cyan-400"
-                      : "text-emerald-400"
-                  }`}>
-                    {weatherDayTab === "1d"
-                      ? "0.42m (Normal)"
-                      : weatherDayTab === "2d"
-                      ? "0.85m (Moderate)"
-                      : weatherDayTab === "3d"
-                      ? "2.14m (Severe)"
-                      : weatherDayTab === "4d"
-                      ? "2.86m (Critical)"
-                      : weatherDayTab === "5d"
-                      ? "1.20m (Elevated)"
-                      : weatherDayTab === "6d"
-                      ? "0.55m (Minor)"
-                      : "0.20m (Safe)"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[9px]">Inundation Risk</span>
-                  <span className={`font-mono font-bold ${
-                    weatherDayTab === "3d" || weatherDayTab === "4d"
-                      ? "text-red-400"
-                      : weatherDayTab === "2d" || weatherDayTab === "5d"
-                      ? "text-cyan-400"
-                      : "text-emerald-400"
-                  }`}>
-                    {weatherDayTab === "1d"
-                      ? "15% Low"
-                      : weatherDayTab === "2d"
-                      ? "42% Moderate"
-                      : weatherDayTab === "3d"
-                      ? "82% High"
-                      : weatherDayTab === "4d"
-                      ? "95% Extreme"
-                      : weatherDayTab === "5d"
-                      ? "58% Elevated"
-                      : weatherDayTab === "6d"
-                      ? "20% Low"
-                      : "4% Safe"}
-                  </span>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-1 pt-0.5 text-[9px]">
-                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
-                  <span className="text-slate-400 block text-[8px]">Peak Discharge</span>
-                  <span className="font-mono text-cyan-300 font-bold">
-                    {weatherDayTab === "3d" || weatherDayTab === "4d" ? "342 m³/s" : "46 m³/s"}
-                  </span>
-                </div>
-                <div className="bg-slate-950/70 p-1 rounded border border-slate-800/80">
-                  <span className="text-slate-400 block text-[8px]">Crit Lowlands (&lt;2m)</span>
-                  <span className="font-mono text-cyan-300 font-bold">
-                    {weatherDayTab === "3d" || weatherDayTab === "4d" ? "11 Sectors" : "2 Sectors"}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Heatmap Settings when Flood Forecast is ON */}
+            {/* Optional flood heatmap controls */}
             {forecastActive && (
               <div className="pt-2 border-t border-slate-800/80 space-y-2 text-[10px] animate-in fade-in duration-200">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400 font-medium">Timeline Scrubber</span>
-                  <span className="font-mono text-cyan-300 font-bold">+{forecastHour * 2}h (Frame {forecastHour})</span>
+                  <span className="text-slate-400 font-medium">{waterSimActive ? "Simulation water risk" : "Forecast time"}</span>
+                  <span className="font-mono text-cyan-300 font-bold">{waterSimActive ? "Live" : forecastTimes[forecastHour] ? new Date(forecastTimes[forecastHour]).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "Loading…"}</span>
                 </div>
                 <input
                   aria-label="Flood forecast hour"
+                  hidden={waterSimActive}
+                  disabled={!forecastTimes.length}
                   type="range"
                   min={0}
-                  max={24}
+                  max={Math.max(0, forecastTimes.length - 1)}
                   step={1}
-                  value={forecastHour}
+                  value={Math.min(forecastHour, Math.max(0, forecastTimes.length - 1))}
                   onChange={(e) => setForecastHour(Number(e.target.value))}
                   className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
                 />
@@ -5497,12 +5444,12 @@ export function CesiumDigitalTwinViewer({
                 <div>
                   <div
                     className="h-2 rounded"
-                    style={{ background: "linear-gradient(to right, #2563eb, #06b6d4, #facc15, #dc2626)" }}
+                    style={{ background: "linear-gradient(to right, #2563eb, #06b6d4, #ea580c, #dc2626)" }}
                   />
                   <div className="mt-0.5 flex justify-between text-[8px] text-slate-400 font-mono">
-                    <span>Low · 0.0</span>
-                    <span>Flood Hazard Index</span>
-                    <span>High · 1.0</span>
+                    <span>{"Low · 0.0"}</span>
+                    <span>{waterSimActive ? "Depth + flow index" : "Weather hazard index"}</span>
+                    <span>{"High · 1.0"}</span>
                   </div>
                 </div>
 
@@ -5524,7 +5471,7 @@ export function CesiumDigitalTwinViewer({
                   </span>
                 </div>
                 <p className="text-[8px] text-slate-500 leading-tight">
-                  Open-Meteo GNN estimate + terrain depth variation
+                  {waterSimActive ? "Modeled index, not observed risk or probability. Scale: 2 m depth or 2 m²/s depth × speed = 1. Clear cells are dry or unassessed." : "Open-Meteo weather + terrain estimate · not calibrated flood probability"}
                 </p>
               </div>
             )}
@@ -5673,7 +5620,7 @@ export function CesiumDigitalTwinViewer({
             {landslideActive && (
               <div className="pt-2 border-t border-slate-800/80 space-y-2 text-[10px] animate-in fade-in duration-200">
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400 font-medium">Timeline Scrubber</span>
+                  <span className="text-slate-400 font-medium">{waterSimActive ? "Live simulation depth" : "Timeline Scrubber"}</span>
                   <span className="font-mono text-amber-300 font-bold">+{landslideHour * 2}h (Frame {landslideHour})</span>
                 </div>
                 <input
@@ -5726,14 +5673,25 @@ export function CesiumDigitalTwinViewer({
         </div>
       )}
 
-      {forecastActive && (
+      {forecastActive && !waterSimActive && (
         <TwinForecastHeatmap
+          key={JSON.stringify(getActivePolygon())}
+          onFrameTimesChange={setForecastTimes}
           viewer={cesiumViewer || viewerRef.current}
           polygon={getActivePolygon()}
           selectedHour={forecastHour}
           onSelectedHourChange={setForecastHour}
           opacity={forecastOpacity}
           hideCard={true}
+        />
+      )}
+
+      {forecastActive && waterSimActive && (
+        <SimulationRiskHeatmap
+          viewer={cesiumViewer || viewerRef.current}
+          simulation={flashFloodRef}
+          areaKey={JSON.stringify(getActivePolygon())}
+          opacity={forecastOpacity}
         />
       )}
 
@@ -5774,15 +5732,24 @@ export function CesiumDigitalTwinViewer({
         baseElevation={groundHeightMeters}
         polygonCoords={getActivePolygon()}
         active={waterSimActive}
+        onEvacuationReady={setIsEvacuationReady}
+        houseSelectionEnabled={!isPickingEvacOrigin}
+        onRouteInvalidated={() => {
+          routeRequestRef.current++; setIsCalculatingRoute(false);
+          setEvacuationRoute(null); render3DEvacuationRoute(null);
+        }}
         autoStart={autoStartedBySensorRef.current || sensorAutoFlood}
-        hideControlsOnStart={autoStartedBySensorRef.current || sensorAutoFlood}
+        hideControlsOnStart={showEvacPanel || autoStartedBySensorRef.current || sensorAutoFlood}
         riverFeatures={riverFeatures}
         roadFeatures={roadFeatures}
         buildingFeatures={buildingFeatures}
+        selectedBuildingId={selectedBuilding?.id}
+        onSelectedBuildingArrivalChange={setSelectedBuildingArrival}
         rainfallMmH={simRainIntensity}
         windSpeedKmh={simWindSpeed}
         defaultSoilSaturation={slaveLiveTelemetry.hasData ? slaveLiveTelemetry.soilMoisture : undefined}
         defaultSourceRise={sensorSimWaterLevel}
+        simulationSpeed={sensorSimSpeed}
         defaultDurationMinutes={2.1}
         isFlatView={viewMode === "flat"}
         onPauseChange={setIsFloodPaused}
@@ -5807,8 +5774,13 @@ export function CesiumDigitalTwinViewer({
           setShowVisibleRain(false);
           setInternalRain(false);
           onToggleRain?.(false);
+          setFloodAffectedNow(0);
+          setFloodAffectedPeak(0);
         }}
-        onSelectBuilding={setSelectedBuilding}
+        onBuildingExposureChange={(affectedNow, affectedPeak) => {
+          setFloodAffectedNow(affectedNow);
+          setFloodAffectedPeak(prev => Math.max(prev, affectedPeak));
+        }}
       />
 
       {/* 🗺️ Selected Area Map Layers Status Box (Moved below ML Footprint box so they do not overlap) */}
@@ -5984,8 +5956,8 @@ export function CesiumDigitalTwinViewer({
           <button
             type="button"
             data-testid="terrain-mode-tin-btn"
-            onClick={() => handleSelectTerrainMode("tin")}
-            title="TIN Terrain: Triangulated Irregular Network generated from Copernicus DEM (COP30)"
+            onClick={() => handleSelectTerrainMode(terrainMode === "tin" ? "standard" : "tin")}
+            title={terrainMode === "tin" ? "TIN Terrain Active (Click to close)" : "TIN Terrain: Triangulated Irregular Network generated from Copernicus DEM (COP30)"}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all ${
               terrainMode === "tin"
                 ? "bg-gradient-to-r from-cyan-600 to-teal-600 text-white ring-1 ring-cyan-300 shadow-md shadow-cyan-950"
@@ -5995,6 +5967,20 @@ export function CesiumDigitalTwinViewer({
             <Layers className="size-3.5 text-cyan-400" />
             <span>TIN Terrain</span>
             {tinLoading && <Loader2 className="size-3 animate-spin text-cyan-300 ml-0.5" />}
+            {terrainMode === "tin" && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSelectTerrainMode("standard");
+                }}
+                title="Close TIN Terrain Tab"
+                className="ml-1 p-0.5 rounded hover:bg-black/40 text-cyan-100 hover:text-rose-300 transition-colors"
+              >
+                <X className="size-3" />
+              </span>
+            )}
           </button>
         </div>
 
@@ -6073,18 +6059,16 @@ export function CesiumDigitalTwinViewer({
           )}
         </button>
 
-
-
+        {/* 📊 MONITORED AREA ANALYTICS BUTTON */}
         <button
-          type="button"
-          data-testid="multi-hazard-overlay-toggle"
-          aria-pressed={showMultiHazard}
-          disabled={!multiHazard.ready}
-          onClick={() => setShowMultiHazard(previous => !previous)}
-          title={multiHazard.ready ? "Toggle model-predicted multi-hazard node risk" : "A trained model is required for the risk overlay"}
-          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold disabled:opacity-40 ${showMultiHazard && multiHazard.ready ? "bg-violet-600/90 text-white ring-1 ring-violet-400" : "hover:bg-slate-800 text-slate-300"}`}
+          onClick={() => setShowAreaAnalytics((prev) => !prev)}
+          title={showAreaAnalytics ? "Hide Monitored Area Analytics" : "Show Monitored Area Real Analytics HUD"}
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+            showAreaAnalytics ? "bg-emerald-600/90 text-white ring-1 ring-emerald-400" : "hover:bg-slate-800 text-slate-300"
+          }`}
         >
-          <Activity className="size-3.5" /><span>ML Risk</span>
+          <BarChart2 className="size-3.5 text-emerald-300" />
+          <span className="hidden sm:inline">Area Analytics</span>
         </button>
 
         {/* 🗺️ AREA IN GIS BUTTON */}
@@ -6178,7 +6162,12 @@ export function CesiumDigitalTwinViewer({
 
         {/* 🚨 EVACUATION & RISK ROUTING BUTTON */}
         <button
-          onClick={() => setShowEvacPanel((prev) => !prev)}
+          onClick={() => {
+            setShowEvacPanel(true); setEvacDestMode("safe_exit"); setIsMarkingEvacPoints(false);
+            setWaterSimActive(true); setIsPickingEvacOrigin(true); setUserOriginCoords(null); flashFloodRef.current?.closeControls?.();
+            routeRequestRef.current++; setIsCalculatingRoute(false); setPendingRouteOrigin(null); setEvacuationRoute(null); render3DEvacuationRoute(null);
+            toast.info("Click your starting point near a road. Viable routes will grow from it, then the selected route will blink and mark your evacuation point.");
+          }}
           title="Open AI Evacuation Routing & Flood Risk Prediction Panel"
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all ${
             showEvacPanel
@@ -6251,52 +6240,425 @@ export function CesiumDigitalTwinViewer({
         </button>
       </div>
 
-      {/* ⛰️ TIN TERRAIN CONTROL PANEL */}
-      {terrainMode === "tin" && (
-        <TinTerrainControls
-          data={tinData}
-          loading={tinLoading}
-          error={tinError}
-          tinActive={tinActive}
-          wireframeActive={tinWireframeActive}
-          surfaceActive={tinSurfaceActive}
-          elevationColoring={tinElevationColoring}
-          gnnNodesActive={tinGnnNodesActive}
-          opacity={tinOpacity}
-          verticalExaggeration={tinExaggeration}
-          onToggleTin={(active) => {
-            setTinActive(active);
-            tinLayerRef.current?.updateOptions({ visible: active });
-          }}
-          onToggleWireframe={(active) => {
-            setTinWireframeActive(active);
-            tinLayerRef.current?.updateOptions({ wireframeVisible: active });
-          }}
-          onToggleSurface={(active) => {
-            setTinSurfaceActive(active);
-            tinLayerRef.current?.updateOptions({ surfaceVisible: active });
-          }}
-          onToggleElevationColoring={(active) => {
-            setTinElevationColoring(active);
-            tinLayerRef.current?.updateOptions({ elevationColoring: active });
-          }}
-          onToggleGnnNodes={(active) => {
-            setTinGnnNodesActive(active);
-            tinLayerRef.current?.updateOptions({ gnnNodesVisible: active });
-          }}
-          onChangeOpacity={(val) => {
-            setTinOpacity(val);
-            tinLayerRef.current?.updateOptions({ opacity: val });
-          }}
-          onChangeExaggeration={(val) => {
-            setTinExaggeration(val);
-            tinLayerRef.current?.updateOptions({ verticalExaggeration: val });
-          }}
-          onRefresh={() => {
-            void loadTinTerrainData(true);
-          }}
-        />
-      )}
+      {/* 🧭 RIGHT-SIDE FLOATING STACK (TIN TERRAIN ON TOP, SENSOR NODE 1 BELOW) */}
+      <div className="absolute top-[68px] right-3 z-40 flex flex-col gap-2.5 items-end pointer-events-none max-h-[calc(100vh-80px)] overflow-y-auto pr-0.5 scrollbar-thin scrollbar-thumb-slate-700">
+        {/* ⛰️ TIN TERRAIN CONTROL PANEL (ALWAYS ON TOP) */}
+        {terrainMode === "tin" && (
+          <div className="pointer-events-auto">
+            <TinTerrainControls
+              className="w-80 rounded-xl bg-slate-950/95 border border-cyan-500/50 backdrop-blur-md shadow-2xl text-white animate-in fade-in slide-in-from-right-2 duration-300 pointer-events-auto"
+              data={tinData}
+              loading={tinLoading}
+              error={tinError}
+              tinActive={tinActive}
+              wireframeActive={tinWireframeActive}
+              surfaceActive={tinSurfaceActive}
+              elevationColoring={tinElevationColoring}
+              gnnNodesActive={tinGnnNodesActive}
+              opacity={tinOpacity}
+              verticalExaggeration={tinExaggeration}
+              onToggleTin={(active) => {
+                setTinActive(active);
+                tinLayerRef.current?.updateOptions({ visible: active });
+              }}
+              onToggleWireframe={(active) => {
+                setTinWireframeActive(active);
+                tinLayerRef.current?.updateOptions({ wireframeVisible: active });
+              }}
+              onToggleSurface={(active) => {
+                setTinSurfaceActive(active);
+                tinLayerRef.current?.updateOptions({ surfaceVisible: active });
+              }}
+              onToggleElevationColoring={(active) => {
+                setTinElevationColoring(active);
+                tinLayerRef.current?.updateOptions({ elevationColoring: active });
+              }}
+              onToggleGnnNodes={(active) => {
+                setTinGnnNodesActive(active);
+                tinLayerRef.current?.updateOptions({ gnnNodesVisible: active });
+              }}
+              onChangeOpacity={(val) => {
+                setTinOpacity(val);
+                tinLayerRef.current?.updateOptions({ opacity: val });
+              }}
+              onChangeExaggeration={(val) => {
+                setTinExaggeration(val);
+                tinLayerRef.current?.updateOptions({ verticalExaggeration: val });
+              }}
+              onRefresh={() => {
+                void loadTinTerrainData(true);
+              }}
+              onClose={() => {
+                handleSelectTerrainMode("standard");
+              }}
+            />
+          </div>
+        )}
+
+        {/* 📡 DEDICATED SLAVE DATA BOX ON THE RIGHT (ALWAYS BELOW TIN) */}
+        {(() => {
+          const activeSlave =
+            meshNodes.find((n) => n.id === activeSlaveId) ||
+            meshNodes.find((n) => n.type === "slave");
+          if (!activeSlave) return null;
+
+          // Minimized side tab when box is closed
+          if (!showSlaveDataBox) {
+            return (
+              <div className="pointer-events-auto">
+                <button
+                  type="button"
+                  data-testid="open-slave-data-box-btn"
+                  onClick={() => {
+                    setActiveSlaveId(activeSlave.id);
+                    setShowSlaveDataBox(true);
+                  }}
+                  className="flex items-center gap-1.5 bg-slate-900/95 hover:bg-slate-800 text-cyan-300 hover:text-white text-xs font-bold px-3 py-2 rounded-l-xl shadow-2xl border border-r-0 border-cyan-500/50 cursor-pointer transition-all hover:pr-4 group"
+                  title="Open Slave Data Box (<)"
+                >
+                  <span className="font-mono font-black text-sm text-cyan-400 group-hover:-translate-x-0.5 transition-transform">&lt;</span>
+                  <span>{activeSlave.name.includes("Slave") ? activeSlave.name : `Slave 1 (${activeSlave.sensorId || stagedSensorId || "node1"})`} Data</span>
+                </button>
+              </div>
+            );
+          }
+
+          const calculatedWaterDepth = 0.24 + (simRainIntensity > 0 ? (simRainIntensity / 100) * 0.42 : 0);
+          const calculatedMoisture = Math.min(99.4, 72.4 + (simRainIntensity > 0 ? (simRainIntensity / 100) * 18.2 : 0));
+
+          return (
+            <div
+              data-testid="slave-data-box"
+              className="pointer-events-auto w-80 sm:w-88 max-h-[58vh] bg-slate-900/95 backdrop-blur-md border border-cyan-500/60 rounded-2xl p-4 shadow-2xl text-white flex flex-col gap-3 animate-in fade-in slide-in-from-right-3 duration-200 overflow-hidden"
+            >
+              {/* Header with '<' close button */}
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="size-8 rounded-lg bg-cyan-950 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shadow-sm">
+                    <Zap className="size-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="font-bold text-sm text-cyan-300 leading-none">
+                        {activeSlave.name}
+                      </h3>
+                      <span
+                        className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-semibold border ${
+                          slaveLiveTelemetry.hasData
+                            ? "bg-emerald-950 border-emerald-500/40 text-emerald-300"
+                            : "bg-slate-800 border-slate-700 text-slate-400"
+                        }`}
+                      >
+                        {slaveLiveTelemetry.hasData ? "● Live Data" : "● No Data (0)"}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                      Sensor ID: <span className="text-cyan-300 font-bold">{activeSlave.sensorId || stagedSensorId || "node1"}</span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Close with literal '<' as requested: "add< to close that" */}
+                <button
+                  type="button"
+                  data-testid="close-slave-data-box-btn"
+                  onClick={() => setShowSlaveDataBox(false)}
+                  className="flex items-center justify-center h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-400 hover:text-white border border-slate-700 text-sm font-black cursor-pointer transition-all hover:scale-105 active:scale-95 shadow group"
+                  title="Close (<)"
+                  aria-label="Close"
+                >
+                  <span className="font-mono font-black text-sm group-hover:-translate-x-0.5 transition-transform">&lt;</span>
+                </button>
+              </div>
+
+              {/* Scrollable telemetry body */}
+              <div className="overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700 text-xs">
+                {/* Node status / RF & Battery badges */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
+                    <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
+                      <Signal className="size-3 text-cyan-400" />
+                      <span>Signal</span>
+                    </div>
+                    <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
+                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.rssi} dBm` : "0 dBm"}
+                    </div>
+                  </div>
+                  <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
+                    <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
+                      <Zap className="size-3 text-amber-400" />
+                      <span>Battery</span>
+                    </div>
+                    <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
+                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.battery}%` : "0%"}
+                    </div>
+                  </div>
+                  <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
+                    <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
+                      <Cpu className="size-3 text-indigo-400" />
+                      <span>Protocol</span>
+                    </div>
+                    <div className="font-mono font-bold text-indigo-300 text-[10px] mt-0.5">
+                      LoRaWAN
+                    </div>
+                  </div>
+                </div>
+
+                {/* GPS Coordinates & Elevation */}
+                <div className="bg-slate-950/60 border border-slate-800/60 rounded-xl p-2.5 space-y-1">
+                  <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center gap-1">
+                    <MapPin className="size-3 text-rose-400" />
+                    <span>Coordinates &amp; Location</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-slate-400">Lat / Long:</span>
+                    <span className="text-cyan-300 font-semibold">
+                      {activeSlave.lat.toFixed(5)}° N, {activeSlave.lng.toFixed(5)}° E
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-slate-400">Elevation:</span>
+                    <span className="text-emerald-300 font-semibold">
+                      {(activeSlave.elevationMeters ?? 14.8).toFixed(1)} m AMSL
+                    </span>
+                  </div>
+                </div>
+
+                {/* Live Probe Telemetry Readings */}
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <Activity className="size-3 text-cyan-400" />
+                      <span>Live Probe Telemetry</span>
+                    </span>
+                    <span className="text-[9px] text-emerald-400 font-mono animate-pulse">
+                      {slaveLiveTelemetry.hasData ? "● Live 1 Hz" : "● No Data"}
+                    </span>
+                  </div>
+
+                  {/* 1. Water Level Sensor */}
+                  <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Droplets className="size-3.5 text-cyan-400" />
+                        <span className="font-semibold text-slate-200 text-xs">Water Level Sensor</span>
+                      </div>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                          slaveLiveTelemetry.waterLevelMm >= 90
+                            ? "bg-rose-950 text-rose-300 border-rose-800/50 animate-pulse font-bold"
+                            : slaveLiveTelemetry.waterLevelMm >= 30
+                            ? "bg-amber-950 text-amber-300 border-amber-800/50 font-bold"
+                            : slaveLiveTelemetry.hasData
+                            ? "bg-cyan-950 text-cyan-300 border-cyan-800/50"
+                            : "bg-slate-900 text-slate-400 border-slate-800"
+                        }`}
+                      >
+                        {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.waterLevelMm.toFixed(0)} mm` : "0 mm"}
+                        {waterSimActive && slaveLiveTelemetry.waterLevelMm >= 30 ? ` (${sensorSimSpeed.toFixed(1)}x)` : ""}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between mt-1.5">
+                      <span className="text-[10px] text-slate-400 font-mono">Estimated Depth:</span>
+                      <span className="font-mono font-bold text-cyan-300 text-sm">
+                        {slaveLiveTelemetry.hasData
+                          ? `${slaveLiveTelemetry.waterLevelM.toFixed(3)} m`
+                          : `${calculatedWaterDepth.toFixed(2)} m`}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                      <span>Rate of Rise:</span>
+                      <span className="text-amber-400 font-mono font-semibold">
+                        {slaveLiveTelemetry.hasData && slaveLiveTelemetry.waterLevelMm > 0 ? "+0.03 m/h" : "0.00 m/h"}
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                      <div
+                        className="bg-cyan-400 h-full rounded-full transition-all duration-300"
+                        style={{ width: `${Math.min(100, slaveLiveTelemetry.waterLevelMm)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 2. Soil Moisture Sensor */}
+                  <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Waves className="size-3.5 text-emerald-400" />
+                        <span className="font-semibold text-slate-200 text-xs">Soil Moisture Probe</span>
+                      </div>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                          slaveLiveTelemetry.soilMoisture >= 90
+                            ? "bg-rose-950 text-rose-300 border-rose-800/50 animate-pulse font-bold"
+                            : slaveLiveTelemetry.soilMoisture >= 30
+                            ? "bg-amber-950 text-amber-300 border-amber-800/50 font-bold"
+                            : slaveLiveTelemetry.hasData
+                            ? "bg-emerald-950 text-emerald-300 border-emerald-800/50"
+                            : "bg-slate-900 text-slate-400 border-slate-800"
+                        }`}
+                      >
+                        {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.soilMoisture.toFixed(0)}%` : "0%"}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between mt-1.5">
+                      <span className="text-[10px] text-slate-400 font-mono">Saturation Level:</span>
+                      <span className="font-mono font-bold text-emerald-300 text-sm">
+                        {slaveLiveTelemetry.hasData
+                          ? `${slaveLiveTelemetry.soilMoisture.toFixed(1)}%`
+                          : `${calculatedMoisture.toFixed(1)}%`}
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                      <div
+                        className="bg-emerald-400 h-full rounded-full transition-all duration-300"
+                        style={{ width: `${Math.min(100, slaveLiveTelemetry.soilMoisture)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 3. Surface Tilt Sensor */}
+                  <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Compass className="size-3.5 text-amber-400" />
+                        <span className="font-semibold text-slate-200 text-xs">Surface Tilt Sensor</span>
+                      </div>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                          slaveLiveTelemetry.hasData && slaveLiveTelemetry.tilt > 0 && slaveLiveTelemetry.tilt <= 99
+                            ? "bg-rose-950 text-rose-300 border-rose-800/50 animate-pulse font-bold"
+                            : slaveLiveTelemetry.hasData && slaveLiveTelemetry.tilt >= 100
+                            ? "bg-emerald-950 text-emerald-300 border-emerald-800/50 font-bold"
+                            : "bg-slate-900 text-slate-400 border-slate-800"
+                        }`}
+                      >
+                        {slaveLiveTelemetry.hasData
+                          ? slaveLiveTelemetry.tilt >= 100
+                            ? "No Tilt (100%)"
+                            : `Tilt Detected (${slaveLiveTelemetry.tilt.toFixed(0)}%)`
+                          : "0%"}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between mt-1.5">
+                      <span className="text-[10px] text-slate-400 font-mono">Slope Status:</span>
+                      <span className={`font-mono font-bold text-sm ${
+                        slaveLiveTelemetry.hasData && slaveLiveTelemetry.tilt <= 99 && slaveLiveTelemetry.tilt > 0
+                          ? "text-rose-400 animate-pulse"
+                          : "text-emerald-400"
+                      }`}>
+                        {slaveLiveTelemetry.hasData
+                          ? slaveLiveTelemetry.tilt >= 100
+                            ? "No Tilt / Stable (100%)"
+                            : `Tilt (${slaveLiveTelemetry.tilt.toFixed(1)}°)`
+                          : "No Data"}
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          slaveLiveTelemetry.hasData && slaveLiveTelemetry.tilt <= 99 && slaveLiveTelemetry.tilt > 0
+                            ? "bg-rose-500"
+                            : "bg-emerald-400"
+                        }`}
+                        style={{ width: `${Math.min(100, slaveLiveTelemetry.tilt)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 4. Optical Raindrop Sensor */}
+                  <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <CloudRain className="size-3.5 text-cyan-400" />
+                        <span className="font-semibold text-slate-200 text-xs">Optical Rain Sensor</span>
+                      </div>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                          slaveLiveTelemetry.rainfall > 50 && (prevRainfallRef.current === null || slaveLiveTelemetry.rainfall >= (prevRainfallRef.current ?? 0))
+                            ? "bg-cyan-950 text-cyan-300 border-cyan-800/50 animate-pulse font-bold"
+                            : "bg-slate-900 text-slate-400 border-slate-800"
+                        }`}
+                      >
+                        {slaveLiveTelemetry.rainfall > 50 && (prevRainfallRef.current === null || slaveLiveTelemetry.rainfall >= (prevRainfallRef.current ?? 0))
+                          ? `${slaveLiveTelemetry.rainfall.toFixed(0)} mm/h (Rain Active)`
+                          : slaveLiveTelemetry.hasData && slaveLiveTelemetry.rainfall > 0
+                          ? `${slaveLiveTelemetry.rainfall.toFixed(0)} mm/h (No Rain)`
+                          : "0 mm/h"}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between mt-1.5">
+                      <span className="text-[10px] text-slate-400 font-mono">Precipitation:</span>
+                      <span className="font-mono font-bold text-cyan-300 text-sm">
+                        {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.rainfall.toFixed(1)} mm/h` : "0 mm/h"}
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                      <div
+                        className="bg-cyan-500 h-full rounded-full transition-all duration-300"
+                        style={{ width: `${Math.min(100, slaveLiveTelemetry.rainfall)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 5. 9-Axis Ground IMU */}
+                  <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Activity className="size-3.5 text-purple-400" />
+                        <span className="font-semibold text-slate-200 text-xs">9-Axis Ground IMU</span>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                        slaveLiveTelemetry.hasData && slaveLiveTelemetry.imuX >= 7 && slaveLiveTelemetry.imuY >= 7 && slaveLiveTelemetry.imuZ >= 7
+                          ? "bg-rose-950 text-rose-300 border-rose-800/50 animate-pulse font-bold"
+                          : slaveLiveTelemetry.hasData && slaveLiveTelemetry.imuX <= -5 && slaveLiveTelemetry.imuY <= -5 && slaveLiveTelemetry.imuZ <= -5
+                          ? "bg-emerald-950 text-emerald-300 border-emerald-800/50 font-bold"
+                          : "bg-purple-950 text-purple-300 border-purple-800/50"
+                      }`}>
+                        {slaveLiveTelemetry.hasData
+                          ? slaveLiveTelemetry.imuX >= 7 && slaveLiveTelemetry.imuY >= 7 && slaveLiveTelemetry.imuZ >= 7
+                            ? "Movement Detected"
+                            : slaveLiveTelemetry.imuX <= -5 && slaveLiveTelemetry.imuY <= -5 && slaveLiveTelemetry.imuZ <= -5
+                            ? "No Movement"
+                            : "Stable"
+                          : "0"}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between mt-1.5">
+                      <span className="text-[10px] text-slate-400 font-mono">3-Axis IMU (X,Y,Z):</span>
+                      <span className="font-mono font-bold text-purple-300 text-xs">
+                        {slaveLiveTelemetry.hasData ? `[${slaveLiveTelemetry.imuX.toFixed(1)}, ${slaveLiveTelemetry.imuY.toFixed(1)}, ${slaveLiveTelemetry.imuZ.toFixed(1)}]` : "No Data"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => focusOnNode(activeSlave)}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-cyan-700/80 hover:bg-cyan-600 text-white rounded-xl py-2 font-semibold text-xs transition-colors cursor-pointer"
+                  >
+                    <Crosshair className="size-3.5" />
+                    <span>Focus in 3D</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.success(`Pinged ${activeSlave.name}: Round-trip 18ms (Mesh 1-hop)`);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl py-2 font-semibold text-xs border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    <Radio className="size-3.5 text-cyan-400" />
+                    <span>Ping Node</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
 
 
       {/* 🎯 Interactive 3D Terrain Node / Sensor Placement Banner */}
@@ -6339,12 +6701,12 @@ export function CesiumDigitalTwinViewer({
                 <ShieldAlert className="size-3.5 text-emerald-400" />
               </div>
               <div>
-                <div className="text-xs font-bold text-white leading-tight">AI Evacuation & Risk Routing</div>
-                <div className="text-[10px] text-slate-400">OSM Directed Road Graph & GNN Risk</div>
+                <div className="text-xs font-bold text-white leading-tight">Terrain-aware evacuation plan</div>
+                <div className="text-[10px] text-slate-400">Mapped roads · walking slope · simulated flood timing</div>
               </div>
             </div>
             <button
-              onClick={() => setShowEvacPanel(false)}
+              onClick={() => { setShowEvacPanel(false); setIsPickingEvacOrigin(false); setPendingRouteOrigin(null); }}
               className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
               title="Close Panel"
             >
@@ -6353,6 +6715,28 @@ export function CesiumDigitalTwinViewer({
           </div>
 
           <div className="flex-1 overflow-y-auto pr-1 space-y-3 scrollbar-thin scrollbar-thumb-slate-700">
+            <div className="rounded-lg border border-cyan-700 bg-slate-950 p-3 text-xs">
+              <p className={!userOriginCoords && !isPickingEvacOrigin ? "text-amber-300 font-medium" : ""}>
+                {isPickingEvacOrigin
+                  ? "Click a starting point on the 3D map."
+                  : userOriginCoords
+                    ? `Start: ${userOriginCoords.lat.toFixed(5)}, ${userOriginCoords.lng.toFixed(5)}`
+                    : "⚠ No starting point selected. Click the button below to pick one."}
+              </p>
+              <button
+                type="button"
+                className="mt-2 rounded bg-cyan-800 px-3 py-2"
+                onClick={() => { setIsPickingEvacOrigin(v => !v); setIsMarkingEvacPoints(false); routeRequestRef.current++; setIsCalculatingRoute(false); setPendingRouteOrigin(null); setEvacuationRoute(null); render3DEvacuationRoute(null); }}
+              >
+                {isPickingEvacOrigin
+                  ? "Cancel selection"
+                  : userOriginCoords
+                    ? "Change starting point"
+                    : "Select starting point"}
+              </button>
+              {pendingRouteOrigin && <p role="status" className="mt-2 text-amber-200">Preparing terrain and arrival forecast… routing will start automatically.</p>}
+            </div>
+            {!isPickingEvacOrigin && <>
             {/* 1. Monitored Area Location & Bounding Box */}
             <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-2.5 space-y-2">
               <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
@@ -6462,7 +6846,7 @@ export function CesiumDigitalTwinViewer({
                 </span>
                 <span className="text-[9px] text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
                   {evacDestMode === "safe_exit"
-                    ? "Automatic Safe Exit"
+                    ? "Automatic assessed exit"
                     : evacDestMode === "point_by_point"
                     ? "Point-by-Point Marking"
                     : "Custom Point"}
@@ -6480,10 +6864,10 @@ export function CesiumDigitalTwinViewer({
                   }`}
                 >
                   <div className="font-bold text-emerald-300 flex items-center gap-1 text-[11px]">
-                    🛡️ Safe Exit
+                    🛡️ Find best exit
                   </div>
                   <div className="text-[9px] text-slate-400 mt-0.5">
-                    GNN auto safe exit
+                    Terrain + flood timing
                   </div>
                 </button>
 
@@ -6573,14 +6957,36 @@ export function CesiumDigitalTwinViewer({
                               </p>
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => deleteEvacPoint(wp.id)}
-                            className="p-1 rounded hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
-                            title="Remove waypoint"
-                          >
-                            <Trash2 className="size-3" />
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+                                  viewerRef.current.camera.flyTo({
+                                    destination: Cesium.Cartesian3.fromDegrees(wp.lng, wp.lat - 0.002, 400),
+                                    duration: 1.2,
+                                  });
+                                }
+                                setSelectedEvacPoint(wp);
+                              }}
+                              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-300 cursor-pointer"
+                              title="Fly to waypoint"
+                            >
+                              <Eye className="size-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                deleteEvacPoint(wp.id);
+                                toast.success(`🗑️ Deleted evacuation point: "${wp.name}"`);
+                              }}
+                              className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800/40 text-rose-300 hover:text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                              title={`Delete ${wp.name}`}
+                            >
+                              <Trash2 className="size-3" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
                         </div>
                       ))}
 
@@ -6638,28 +7044,20 @@ export function CesiumDigitalTwinViewer({
               )}
 
               {/* Avoid critical road check */}
-              <label className="flex items-center gap-2 pt-1 cursor-pointer text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={routeAvoidCritical}
-                  onChange={(e) => setRouteAvoidCritical(e.target.checked)}
-                  className="rounded bg-slate-800 border-slate-600 text-emerald-500 focus:ring-0"
-                />
-                <span>Dynamically avoid flooded & high-risk road edges</span>
-              </label>
+              <p className="text-[10px] text-slate-400">Flooded roads, waterways, steep slopes and unassessed terrain are excluded from walking routes.</p>
             </div>
 
             {/* 4. Action Button: Calculate Safest Route */}
             <button
               type="button"
-              onClick={handleCalculateEvacuationRoute}
-              disabled={isCalculatingRoute || isExtractingNetworks}
+              onClick={() => handleCalculateEvacuationRoute()}
+              disabled={isCalculatingRoute || isExtractingNetworks || isPickingEvacOrigin}
               className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold py-2.5 px-3 rounded-lg text-xs shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 cursor-pointer transition-all"
             >
               {isCalculatingRoute ? (
                 <>
                   <Loader2 className="size-3.5 animate-spin" />
-                  <span>Computing Optimal Risk-Weighted Path...</span>
+                  <span>Checking roads, slope and flood timing…</span>
                 </>
               ) : isExtractingNetworks ? (
                 <>
@@ -6669,7 +7067,7 @@ export function CesiumDigitalTwinViewer({
               ) : (
                 <>
                   <Navigation className="size-3.5" />
-                  <span>Calculate Safest Evacuation Route</span>
+                  <span>Compare Evacuation Routes</span>
                 </>
               )}
             </button>
@@ -6722,13 +7120,13 @@ export function CesiumDigitalTwinViewer({
                         <div className="text-sm font-bold text-white">{evacuationRoute.total_distance_km} km</div>
                       </div>
                       <div className="bg-slate-900/60 rounded p-1.5">
-                        <div className="text-[10px] text-slate-400">Estimated Drive Time</div>
+                        <div className="text-[10px] text-slate-400">Estimated Walking Time</div>
                         <div className="text-sm font-bold text-white">{evacuationRoute.estimated_time_minutes} min</div>
                       </div>
                       <div className="bg-slate-900/60 rounded p-1.5">
-                        <div className="text-[10px] text-slate-400">Max Flood Risk</div>
+                        <div className="text-[10px] text-slate-400">Maximum Terrain Slope</div>
                         <div className="text-sm font-bold text-white">
-                          {Math.round((evacuationRoute.max_flood_risk_encountered || 0) * 100)}%
+                          {evacuationRoute.max_slope_pct ?? "—"}%
                         </div>
                       </div>
                       <div className="bg-slate-900/60 rounded p-1.5">
@@ -6739,6 +7137,26 @@ export function CesiumDigitalTwinViewer({
                       </div>
                     </div>
 
+                    <div role="status" className="rounded-lg border border-cyan-600/50 bg-slate-950 p-2 text-xs text-cyan-100">
+                      {evacuationPhase === "revealing" ? `Drawing ${evacuationRoute.candidate_routes?.length ?? 1} assessed route(s) from your starting point…`
+                        : evacuationPhase === "highlighting" ? "Best assessed route selected — follow the blinking line."
+                        : evacuationPhase === "confirmed" ? "Final route selected · evacuation point marked"
+                        : "Preparing route preview…"}
+                    </div>
+                    <p className="text-[10px] text-slate-300">{evacuationRoute.selection_reason}</p>
+                    {evacuationRoute.candidate_routes && <div className="space-y-1" aria-label="Compared evacuation routes">
+                      {evacuationRoute.candidate_routes.map((candidate, index) => <div key={candidate.id}
+                        className={`flex justify-between gap-2 rounded px-2 py-1 text-[10px] ${candidate.id === evacuationRoute.selected_candidate_id ? "bg-amber-500/15 text-amber-200" : "bg-slate-900 text-slate-400"}`}>
+                        <span>Route {index + 1}{candidate.id === evacuationRoute.selected_candidate_id ? " · selected" : ""}</span>
+                        <span>{candidate.total_distance_m} m · {candidate.estimated_time_minutes} min · +{candidate.elevation_gain_m} m</span>
+                      </div>)}
+                      {evacuationRoute.candidate_routes.length === 1 && <p className="text-[10px] text-slate-400">Only one distinct exit or destination passed the route checks.</p>}
+                    </div>}
+                    {evacuationPhase === "confirmed" && evacuationRoute.destination && <p className="text-xs text-amber-200">
+                      Evacuation point: {evacuationRoute.destination.lat.toFixed(5)}, {evacuationRoute.destination.lng.toFixed(5)}
+                    </p>}
+                    <p className="text-xs text-amber-200">{evacuationRoute.message}</p>
+                    <p className="text-[10px] text-slate-300">Simulation snapshot: {Math.round(evacuationRoute.departure_simulation_seconds ?? 0)}s · net elevation gain {evacuationRoute.elevation_gain_m ?? 0} m · minimum modeled clearance {Math.floor((evacuationRoute.clearance_seconds ?? 0) / 60)} min</p>
                     {/* Turn-by-turn preview */}
                     {evacuationRoute.segments && evacuationRoute.segments.length > 0 && (
                       <div className="space-y-1 pt-1">
@@ -6763,6 +7181,7 @@ export function CesiumDigitalTwinViewer({
                 )}
               </div>
             )}
+            </>}
           </div>
         </div>
       )}
@@ -7239,27 +7658,13 @@ export function CesiumDigitalTwinViewer({
             </span>
           </div>
 
-          {/* Flood Arrival Time Highlight Banner - only shown during simulation */}
-          {waterSimActive && (isFloodRunning || isFloodPaused) && (
-            <div className="mt-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 px-3 py-2 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-base">🌊</span>
-                <div>
-                  <div className="text-[9px] font-semibold text-cyan-300 uppercase tracking-wider">Flood Reach Time</div>
-                  <div className="text-xs font-bold text-white">
-                    {selectedBuilding.flood_arrival_time || (
-                      (typeof selectedBuilding.distance_to_river_m === "number" || typeof selectedBuilding.distance_from_river === "string")
-                        ? `~${Math.max(15, Math.round((Number(selectedBuilding.distance_to_river_m) || (parseFloat(String(selectedBuilding.distance_from_river || "")) || 350)) / 1.8))}s`
-                        : "Calculating…"
-                    )}
-                  </div>
-                </div>
-              </div>
-              <span className="text-[10px] font-mono text-cyan-400/90 bg-cyan-900/40 px-2 py-0.5 rounded border border-cyan-700/50">
-                {selectedBuilding.flood_risk || "MONITORED"}
-              </span>
+          {waterSimActive && <div className="mt-3 rounded-lg border border-cyan-700/60 bg-slate-950/60 p-2.5">
+            <div className="text-[9px] text-slate-400 uppercase font-semibold">Flood arrival time</div>
+            <div role="status" aria-label="Selected house flood arrival time" className="mt-1 text-xs font-semibold text-cyan-200">
+              {selectedBuildingArrival?.id === selectedBuilding.id ? selectedBuildingArrival.label : "Water ETA · calculating…"}
             </div>
-          )}
+            <div className="mt-1 text-[9px] text-slate-400">At 10 cm water depth · simulation time</div>
+          </div>}
 
           {/* Comprehensive 8-Metric Grid */}
           <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] bg-slate-950/60 rounded-lg p-2.5 border border-slate-800/80">
@@ -7341,8 +7746,8 @@ export function CesiumDigitalTwinViewer({
               onClick={() => {
                 if (selectedBuilding.lat && selectedBuilding.lon) {
                   setUserOriginCoords({ lat: selectedBuilding.lat, lng: selectedBuilding.lon });
-                  setShowEvacPanel(true);
-                  toast.success(`Set evacuation start to ${selectedBuilding.id}`);
+                  setShowEvacPanel(true); setIsPickingEvacOrigin(false);
+                  calculateRouteRef.current({ lat: selectedBuilding.lat, lng: selectedBuilding.lon });
                 }
               }}
               className="flex-1 flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg py-1.5 text-xs font-semibold cursor-pointer transition-colors"
@@ -7469,305 +7874,174 @@ export function CesiumDigitalTwinViewer({
         );
       })()}
 
-      {/* 📡 DEDICATED SLAVE DATA BOX ON THE RIGHT (Close with '<') */}
-      {(() => {
-        const activeSlave =
-          meshNodes.find((n) => n.id === activeSlaveId) ||
-          meshNodes.find((n) => n.type === "slave");
-        if (!activeSlave) return null;
-
-        // Minimized side tab when box is closed
-        if (!showSlaveDataBox) {
-          return (
-            <button
-              data-testid="open-slave-data-box-btn"
-              onClick={() => setShowSlaveDataBox(true)}
-              className="absolute top-24 right-0 z-30 flex items-center gap-1.5 bg-slate-900/95 hover:bg-slate-800 text-cyan-300 hover:text-white text-xs font-bold px-3 py-2 rounded-l-xl shadow-2xl border border-r-0 border-cyan-500/50 cursor-pointer transition-all hover:pr-4 group"
-              title="Open Slave Data Box (<)"
-            >
-              <span className="font-mono font-black text-sm text-cyan-400 group-hover:-translate-x-0.5 transition-transform">&lt;</span>
-              <span>{activeSlave.name.includes("Slave") ? activeSlave.name : `Slave 1 (${activeSlave.sensorId || stagedSensorId || "node1"})`} Data</span>
-            </button>
-          );
-        }
-
-        const calculatedWaterDepth = 0.24 + (simRainIntensity > 0 ? (simRainIntensity / 100) * 0.42 : 0);
-        const calculatedMoisture = Math.min(99.4, 72.4 + (simRainIntensity > 0 ? (simRainIntensity / 100) * 18.2 : 0));
-
-        return (
-          <div
-            data-testid="slave-data-box"
-            className="absolute top-16 right-3 sm:right-4 z-40 w-84 sm:w-96 max-h-[85vh] bg-slate-900/95 backdrop-blur-md border border-cyan-500/60 rounded-2xl p-4 shadow-2xl text-white flex flex-col gap-3 animate-in fade-in slide-in-from-right-3 duration-200 overflow-hidden"
-          >
-            {/* Header with '<' close button */}
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-              <div className="flex items-center gap-2">
-                <div className="size-8 rounded-lg bg-cyan-950 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shadow-sm">
-                  <Zap className="size-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h3 className="font-bold text-sm text-cyan-300 leading-none">
-                      {activeSlave.name}
-                    </h3>
-                    <span
-                      className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-semibold border ${
-                        slaveLiveTelemetry.hasData
-                          ? "bg-emerald-950 border-emerald-500/40 text-emerald-300"
-                          : "bg-slate-800 border-slate-700 text-slate-400"
-                      }`}
-                    >
-                      {slaveLiveTelemetry.hasData ? "● Live Data" : "● No Data (0)"}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
-                    Sensor ID: <span className="text-cyan-300 font-bold">{activeSlave.sensorId || stagedSensorId || "node1"}</span>
-                  </p>
-                </div>
-              </div>
-
-              {/* Close with literal '<' as requested: "add< to close that" */}
-              <button
-                data-testid="close-slave-data-box-btn"
-                onClick={() => setShowSlaveDataBox(false)}
-                className="flex items-center justify-center h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-400 hover:text-white border border-slate-700 text-sm font-black cursor-pointer transition-all hover:scale-105 active:scale-95 shadow group"
-                title="Close (<)"
-                aria-label="Close"
-              >
-                <span className="font-mono font-black text-sm group-hover:-translate-x-0.5 transition-transform">&lt;</span>
-              </button>
+      {/* 🛡️ SELECTED 3D EVACUATION POINT QUICK ACTION & DELETE CARD */}
+      {selectedEvacPoint && (
+        <div className="absolute bottom-6 right-6 z-30 w-80 bg-slate-950/95 backdrop-blur-md border border-emerald-500/60 rounded-xl p-3.5 shadow-2xl text-white animate-in fade-in slide-in-from-bottom-2">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <div className="flex items-center gap-1.5">
+              <span className="p-1 rounded bg-emerald-500/20 text-emerald-400">
+                <ShieldAlert className="size-4" />
+              </span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40">
+                EVACUATION REFUGE POINT
+              </span>
             </div>
-
-            {/* Scrollable telemetry body */}
-            <div className="overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-slate-700 text-xs">
-              {/* Node status / RF & Battery badges */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
-                  <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
-                    <Signal className="size-3 text-cyan-400" />
-                    <span>Signal</span>
-                  </div>
-                  <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
-                    {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.rssi} dBm` : "0 dBm"}
-                  </div>
-                </div>
-                <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
-                  <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
-                    <Zap className="size-3 text-amber-400" />
-                    <span>Battery</span>
-                  </div>
-                  <div className="font-mono font-bold text-emerald-400 text-xs mt-0.5">
-                    {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.battery}%` : "0%"}
-                  </div>
-                </div>
-                <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2 text-center">
-                  <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
-                    <Cpu className="size-3 text-indigo-400" />
-                    <span>Protocol</span>
-                  </div>
-                  <div className="font-mono font-bold text-indigo-300 text-[10px] mt-0.5">
-                    LoRaWAN
-                  </div>
-                </div>
-              </div>
-
-              {/* GPS Coordinates & Elevation */}
-              <div className="bg-slate-950/60 border border-slate-800/60 rounded-xl p-2.5 space-y-1">
-                <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center gap-1">
-                  <MapPin className="size-3 text-rose-400" />
-                  <span>Coordinates &amp; Location</span>
-                </div>
-                <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-slate-400">Lat / Long:</span>
-                  <span className="text-cyan-300 font-semibold">
-                    {activeSlave.lat.toFixed(5)}° N, {activeSlave.lng.toFixed(5)}° E
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-slate-400">Elevation:</span>
-                  <span className="text-emerald-300 font-semibold">
-                    {(activeSlave.elevationMeters ?? 14.8).toFixed(1)} m AMSL
-                  </span>
-                </div>
-              </div>
-
-              {/* Live Probe Telemetry Readings */}
-              <div className="space-y-1.5">
-                <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center justify-between">
-                  <span className="flex items-center gap-1">
-                    <Activity className="size-3 text-cyan-400" />
-                    <span>Live Probe Telemetry</span>
-                  </span>
-                  <span className="text-[9px] text-emerald-400 font-mono animate-pulse">
-                    {slaveLiveTelemetry.hasData ? "● Live 1 Hz" : "● No Data"}
-                  </span>
-                </div>
-
-                {/* 1. Submersible Water Level */}
-                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <Waves className="size-3.5 text-blue-400" />
-                      <span className="font-semibold text-slate-200 text-xs">Submersible Water Level</span>
-                    </div>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 font-mono border border-blue-800/50">
-                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.waterLevelM > 0.8 ? "High" : "Normal") : "0"}
-                    </span>
-                  </div>
-                  <div className="flex items-baseline justify-between mt-1.5">
-                    <span className="text-[10px] text-slate-400 font-mono">Current Depth:</span>
-                    <span className="font-mono font-bold text-cyan-300 text-sm">
-                      {slaveLiveTelemetry.hasData
-                        ? `${slaveLiveTelemetry.waterLevelM.toFixed(2)} m (${slaveLiveTelemetry.waterLevelMm.toFixed(0)} mm)`
-                        : "0 m"}
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                    <div
-                      className="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(100, (slaveLiveTelemetry.waterLevelM / 2.0) * 100)}%` }}
-                    />
-                  </div>
-                  {waterSimActive && (
-                    <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono">
-                      <span className="text-cyan-400 flex items-center gap-1 font-semibold">
-                        <Waves className="size-3" /> Sim Flood Level:
-                      </span>
-                      <span className="text-white font-bold">{sensorSimWaterLevel.toFixed(2)} m <span className="text-amber-300 font-normal">(-30% time)</span></span>
-                    </div>
-                  )}
-                </div>
-
-                {/* 2. Capacitive Soil Moisture */}
-                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <Droplets className="size-3.5 text-emerald-400" />
-                      <span className="font-semibold text-slate-200 text-xs">Capacitive Soil Moisture</span>
-                    </div>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 font-mono border border-emerald-800/50">
-                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.soilMoisture > 70 ? "Saturated" : "Moist") : "0"}
-                    </span>
-                  </div>
-                  <div className="flex items-baseline justify-between mt-1.5">
-                    <span className="text-[10px] text-slate-400 font-mono">Volumetric Content:</span>
-                    <span className="font-mono font-bold text-emerald-300 text-sm">
-                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.soilMoisture.toFixed(1)}%` : "0%"}
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                    <div
-                      className="bg-emerald-500 h-full rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(100, slaveLiveTelemetry.soilMoisture)}%` }}
-                    />
-                  </div>
-                </div>
-
-                {/* 3. Slope Inclinometer / Tilt */}
-                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <Mountain className="size-3.5 text-amber-400" />
-                      <span className="font-semibold text-slate-200 text-xs">Slope Inclinometer (Tilt)</span>
-                    </div>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 font-mono border border-amber-800/50">
-                      {slaveLiveTelemetry.hasData ? (slaveLiveTelemetry.tilt > 15 ? "Warning" : "Stable") : "0"}
-                    </span>
-                  </div>
-                  <div className="flex items-baseline justify-between mt-1.5">
-                    <span className="text-[10px] text-slate-400 font-mono">Axis Deviation:</span>
-                    <span className="font-mono font-bold text-amber-300 text-sm">
-                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.tilt.toFixed(1)}%` : "0%"}
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                    <div
-                      className="bg-amber-500 h-full rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(100, slaveLiveTelemetry.tilt)}%` }}
-                    />
-                  </div>
-                </div>
-
-                {/* 4. Optical Raindrop Sensor */}
-                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <CloudRain className="size-3.5 text-cyan-400" />
-                      <span className="font-semibold text-slate-200 text-xs">Optical Rain Sensor</span>
-                    </div>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
-                        slaveLiveTelemetry.rainfall > 20
-                          ? "bg-rose-950 text-rose-300 border-rose-800/50 animate-pulse font-bold"
-                          : slaveLiveTelemetry.hasData && slaveLiveTelemetry.rainfall > 0
-                          ? "bg-cyan-950 text-cyan-300 border-cyan-800/50"
-                          : "bg-slate-900 text-slate-400 border-slate-800"
-                      }`}
-                    >
-                      {slaveLiveTelemetry.rainfall > 20
-                        ? `${slaveLiveTelemetry.rainfall.toFixed(0)} mm/h (>20% Active)`
-                        : slaveLiveTelemetry.hasData && slaveLiveTelemetry.rainfall > 0
-                        ? `${slaveLiveTelemetry.rainfall.toFixed(0)} mm/h`
-                        : "0"}
-                    </span>
-                  </div>
-                  <div className="flex items-baseline justify-between mt-1.5">
-                    <span className="text-[10px] text-slate-400 font-mono">Precipitation:</span>
-                    <span className="font-mono font-bold text-cyan-300 text-sm">
-                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.rainfall.toFixed(1)} mm/h` : "0 mm/h"}
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                    <div
-                      className="bg-cyan-500 h-full rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(100, slaveLiveTelemetry.rainfall)}%` }}
-                    />
-                  </div>
-                </div>
-
-                {/* 5. 9-Axis Ground IMU */}
-                <div className="bg-slate-950/80 border border-slate-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <Activity className="size-3.5 text-purple-400" />
-                      <span className="font-semibold text-slate-200 text-xs">9-Axis Ground IMU</span>
-                    </div>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 font-mono border border-purple-800/50">
-                      {slaveLiveTelemetry.hasData ? "Active" : "0"}
-                    </span>
-                  </div>
-                  <div className="flex items-baseline justify-between mt-1.5">
-                    <span className="text-[10px] text-slate-400 font-mono">Vibration / Accel:</span>
-                    <span className="font-mono font-bold text-purple-300 text-sm">
-                      {slaveLiveTelemetry.hasData ? `${slaveLiveTelemetry.imuMag.toFixed(2)} g` : "0 g"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  onClick={() => focusOnNode(activeSlave)}
-                  className="flex-1 flex items-center justify-center gap-1.5 bg-cyan-700/80 hover:bg-cyan-600 text-white rounded-xl py-2 font-semibold text-xs transition-colors cursor-pointer"
-                >
-                  <Crosshair className="size-3.5" />
-                  <span>Focus in 3D</span>
-                </button>
-                <button
-                  onClick={() => {
-                    toast.success(`Pinged ${activeSlave.name}: Round-trip 18ms (Mesh 1-hop)`);
-                  }}
-                  className="flex-1 flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl py-2 font-semibold text-xs border border-slate-700 transition-colors cursor-pointer"
-                >
-                  <Radio className="size-3.5 text-cyan-400" />
-                  <span>Ping Node</span>
-                </button>
-              </div>
+            <button
+              onClick={() => setSelectedEvacPoint(null)}
+              className="text-slate-400 hover:text-white p-0.5 rounded cursor-pointer"
+              title="Close"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+          <div className="mt-2.5">
+            <div className="font-bold text-sm text-emerald-200">{selectedEvacPoint.name}</div>
+            <div className="text-[11px] font-mono text-slate-400 mt-0.5">
+              {selectedEvacPoint.lat.toFixed(5)}°N, {selectedEvacPoint.lng.toFixed(5)}°E
             </div>
           </div>
-        );
-      })()}
+          <div className="mt-2 bg-emerald-950/30 border border-emerald-500/30 rounded-lg p-2 text-[10px] text-emerald-300/90">
+            Designated safe assembly refuge along monitored high-ground terrain corridor.
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+                  viewerRef.current.camera.flyTo({
+                    destination: Cesium.Cartesian3.fromDegrees(
+                      selectedEvacPoint.lng,
+                      selectedEvacPoint.lat - 0.002,
+                      400
+                    ),
+                    orientation: {
+                      heading: Cesium.Math.toRadians(0),
+                      pitch: Cesium.Math.toRadians(-35),
+                      roll: 0.0,
+                    },
+                    duration: 1.5,
+                  });
+                }
+              }}
+              className="flex-1 py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700"
+            >
+              <Globe className="size-3.5 text-emerald-400" />
+              <span>Fly To</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const idToDelete = selectedEvacPoint.id;
+                const nameToDelete = selectedEvacPoint.name;
+                deleteEvacPoint(idToDelete);
+                setSelectedEvacPoint(null);
+                toast.success(`🗑️ Deleted evacuation point: "${nameToDelete}"`);
+                logUserActivity("Deleted Evacuation Point", `Deleted ${nameToDelete} via inspect card`);
+              }}
+              className="flex-1 py-1.5 px-2 rounded-lg bg-rose-600/90 hover:bg-rose-600 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-rose-950/40"
+            >
+              <Trash2 className="size-3.5" />
+              <span>Delete Point</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 📊 MONITORED AREA REAL ANALYTICS HUD PANEL */}
+      {showAreaAnalytics && monitoredAreaStats && (
+        <div className={`absolute top-14 ${forecastRailHidden ? "left-14" : "left-[276px]"} z-30 w-88 max-w-[calc(100%-2rem)] bg-slate-950/95 backdrop-blur-md border border-emerald-500/50 rounded-xl p-3.5 shadow-2xl text-white animate-in fade-in slide-in-from-top-2 duration-200 transition-all`}>
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+            <div className="flex items-center gap-2">
+              <div className="p-1 rounded bg-emerald-500/20 border border-emerald-500/40">
+                <BarChart2 className="size-4 text-emerald-400" />
+              </div>
+              <div>
+                <span className="font-bold text-xs text-white">Monitored Area Analytics</span>
+                <span className="text-[9px] text-emerald-300/80 block font-mono">
+                  {areaName || "Active 3D Monitored Boundary"}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowAreaAnalytics(false)}
+              className="text-slate-400 hover:text-white p-0.5 rounded hover:bg-slate-800 cursor-pointer"
+              title="Close Analytics"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <span className="text-[10px] text-slate-400 block">Surface Coverage</span>
+              <span className="text-sm font-extrabold text-emerald-300 font-mono">
+                {monitoredAreaStats.areaKm2} km²
+              </span>
+              <span className="text-[9px] text-slate-500 block">
+                {monitoredAreaStats.areaHectares} Hectares
+              </span>
+            </div>
+
+            <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <span className="text-[10px] text-slate-400 block">Mean Elevation & Relief</span>
+              <span className="text-sm font-extrabold text-cyan-300 font-mono">
+                {monitoredAreaStats.meanElev} m MSL
+              </span>
+              <span className="text-[9px] text-slate-500 block">
+                Slope ~{monitoredAreaStats.avgSlope}°
+              </span>
+            </div>
+
+            <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <span className="text-[10px] text-slate-400 block">Mapped Buildings</span>
+              <span className="text-sm font-extrabold text-orange-400 font-mono">
+                {monitoredAreaStats.houseCount} Houses
+              </span>
+              <span className="text-[9px] text-slate-500 block">
+                ~{monitoredAreaStats.estPopulation} Residents
+              </span>
+            </div>
+
+            <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <span className="text-[10px] text-slate-400 block">Drainage & Roads</span>
+              <span className="text-sm font-extrabold text-blue-300 font-mono">
+                {monitoredAreaStats.riverCount} Rivers
+              </span>
+              <span className="text-[9px] text-slate-500 block">
+                {monitoredAreaStats.roadCount} Road corridors
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-2.5 bg-cyan-950/40 border border-cyan-500/30 rounded-lg p-2 text-xs flex items-center justify-between">
+            <div>
+              <span className="text-[10px] text-slate-300 block">Live Rainfall Surge</span>
+              <span className="text-xs font-bold text-cyan-200">
+                {monitoredAreaStats.currentRain.toFixed(1)} mm/h
+              </span>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] text-slate-400 block">Runoff Volume</span>
+              <span className="text-xs font-mono font-bold text-cyan-300">
+                {monitoredAreaStats.estRunoffM3.toLocaleString()} m³
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-3 pt-2 border-t border-slate-800 flex items-center justify-between">
+            <span className="text-[10px] text-slate-400 flex items-center gap-1">
+              <ShieldAlert className="size-3 text-emerald-400" />
+              <span>{monitoredAreaStats.evacCount} Safe refuges defined</span>
+            </span>
+            <a
+              href="/analytics"
+              className="text-[10px] text-emerald-400 hover:text-emerald-300 underline font-semibold flex items-center gap-0.5"
+            >
+              <span>Full Analytics Page →</span>
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* ⛰️ SRTM 30m (STM 30) DEM Elevation Topography Overlay Card */}
       {showSrtm30 && showSrtmLegend && (
@@ -8390,7 +8664,7 @@ export function CesiumDigitalTwinViewer({
                         <span>Zone: {alert.zone_name || "Basin Area"}</span>
                         <span>Soil Moisture: {alert.soil_moisture ?? 0}%</span>
                         <span>Water Level: {alert.water_level_mm ?? 0} mm</span>
-                        <span>Tilt: {alert.tilt ?? 0}°</span>
+                        <span>Tilt: {alert.tilt != null && alert.tilt <= 99 && alert.tilt > 0 ? `Tilt (${alert.tilt}°)` : `No Tilt (${alert.tilt ?? 100}°)`}</span>
                         <span>IMU: {alert.imu_mag ?? 0}g</span>
                       </div>
                     </div>

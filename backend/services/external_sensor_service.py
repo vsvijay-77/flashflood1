@@ -63,10 +63,10 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                             COUNT(*) as total_records,
                             MIN(created_at) as first_seen,
                             MAX(created_at) as last_seen,
-                            AVG(rainfall) as avg_water_level,
-                            MAX(rainfall) as max_water_level,
-                            AVG(water_level) as avg_rainfall,
-                            MAX(water_level) as max_rainfall,
+                            AVG(water_level) as avg_water_level,
+                            MAX(water_level) as max_water_level,
+                            AVG(rainfall) as avg_rainfall,
+                            MAX(rainfall) as max_rainfall,
                             AVG(rssi) as avg_rssi,
                             AVG(snr) as avg_snr
                         FROM sensor_data
@@ -83,14 +83,20 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                     created_at = node.get("created_at")
                     is_online = True  # Verified active dataset
 
-                    # Swap water_level and rainfall data everywhere:
-                    raw_water_level = float(node.get("water_level") or 0.0)
-                    raw_rainfall = float(node.get("rainfall") or 0.0)
-                    water_level = raw_rainfall
-                    rainfall = raw_water_level
+                    # Direct mapping: water_level is water_level, rainfall is rainfall
+                    water_level = float(node.get("water_level") or 0.0)
+                    rainfall = float(node.get("rainfall") or 0.0)
 
                     raw_tilt = float(node.get("tilt") or 0.0)
-                    inv_tilt = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
+                    # Calibration: 100 is normal, 99 (or <= 99) is tilt
+                    if raw_tilt == 0.0 or raw_tilt >= 100.0:
+                        inv_tilt = 100.0
+                    elif raw_tilt == 99.0:
+                        inv_tilt = 99.0
+                    elif raw_tilt > 0.0 and raw_tilt <= 10.0:
+                        inv_tilt = max(10.0, round(100.0 - raw_tilt, 1))
+                    else:
+                        inv_tilt = round(raw_tilt, 1)
 
                     devices.append({
                         "device_id": dev_id,
@@ -178,14 +184,20 @@ def get_sensor_history(device_id: Optional[str] = None, limit: int = 150) -> Lis
                     created_at = item.get("created_at")
                     if created_at and hasattr(created_at, "isoformat"):
                         item["created_at"] = created_at.isoformat()
-                    # Swap water_level and rainfall
-                    raw_water_level = float(item.get("water_level") or 0.0)
-                    raw_rainfall = float(item.get("rainfall") or 0.0)
-                    item["water_level"] = raw_rainfall
-                    item["rainfall"] = raw_water_level
+                    # Direct mapping: water_level is water_level, rainfall is rainfall
+                    item["water_level"] = float(item.get("water_level") or 0.0)
+                    item["rainfall"] = float(item.get("rainfall") or 0.0)
                     raw_tilt = float(item.get("tilt") or 0.0)
                     item["raw_tilt"] = raw_tilt
-                    item["tilt"] = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
+                    # Calibration: 100 is normal, 99 (or <= 99) is tilt
+                    if raw_tilt == 0.0 or raw_tilt >= 100.0:
+                        item["tilt"] = 100.0
+                    elif raw_tilt == 99.0:
+                        item["tilt"] = 99.0
+                    elif raw_tilt > 0.0 and raw_tilt <= 10.0:
+                        item["tilt"] = max(10.0, round(100.0 - raw_tilt, 1))
+                    else:
+                        item["tilt"] = round(raw_tilt, 1)
                     rows.append(item)
                 return rows
     except Exception as e:
@@ -234,7 +246,7 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
     Normalizes node identifiers (node1 -> LORA_NODE_1, etc.).
     Returns real values or 0s if no data exists.
     Tilt is calibrated: 100% = 0, 0% = 100%.
-    Water level and rainfall swapped: water level -> raindrop, raindrop -> water level.
+    Water level is water_level, rainfall is rainfall.
     """
     clean_id = (node_id or "node1").strip()
     digits = "".join([c for c in clean_id if c.isdigit()])
@@ -259,21 +271,27 @@ def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
                         created_at = created_at.isoformat()
 
                     soil_moisture = float(item.get("soil_moisture") or 0.0)
-                    raw_water_level = float(item.get("water_level") or 0.0)
-                    raw_rainfall = float(item.get("rainfall") or 0.0)
-                    # Swap requested: water level data to rain drop, and raindrop to water level
-                    water_level = raw_rainfall
-                    rainfall = raw_water_level
-                    # Calibration requested: 100 percent = 0, 0 = 100%
+                    # Direct mapping: water_level is water_level, rainfall is rainfall
+                    water_level = float(item.get("water_level") or 0.0)
+                    rainfall = float(item.get("rainfall") or 0.0)
+                    # Calibration: 100 is normal, 99 (or <= 99) is tilt
                     raw_tilt = float(item.get("tilt") or 0.0)
-                    tilt = max(0.0, min(100.0, round(100.0 - raw_tilt, 1)))
+                    if raw_tilt == 0.0 or raw_tilt >= 100.0:
+                        tilt = 100.0
+                    elif raw_tilt == 99.0:
+                        tilt = 99.0
+                    elif raw_tilt > 0.0 and raw_tilt <= 10.0:
+                        tilt = max(10.0, round(100.0 - raw_tilt, 1))
+                    else:
+                        tilt = round(raw_tilt, 1)
                     imu_x = float(item.get("imu_x") or 0.0)
                     imu_y = float(item.get("imu_y") or 0.0)
                     imu_z = float(item.get("imu_z") or 0.0)
                     rssi = float(item.get("rssi") or 0.0)
                     snr = float(item.get("snr") or 0.0)
 
-                    imu_mag = round((imu_x**2 + imu_y**2 + imu_z**2)**0.5 / 4096.0, 2) if (imu_x or imu_y or imu_z) else 0.0
+                    raw_mag = (imu_x**2 + imu_y**2 + imu_z**2)**0.5 if (imu_x or imu_y or imu_z) else 0.0
+                    imu_mag = round(raw_mag / 4096.0, 2) if raw_mag > 500 else round(raw_mag, 2)
                     battery_pct = max(10, min(100, int(100 - (abs(rssi) - 90) * 1.5))) if rssi < 0 else 98
 
                     return {

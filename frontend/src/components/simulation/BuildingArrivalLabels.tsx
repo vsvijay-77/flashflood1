@@ -1,255 +1,117 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { BuildingFeature } from "@/lib/routingApi";
-import type { BuildingExposure } from "./buildingExposure";
-import { formatArrivalTime, type ArrivalForecastResult } from "./arrivalForecast";
-
+import type { BuildingExposure, ExposureGrid } from "./buildingExposure";
+import { buildingHeight } from "../gis/buildingGeometry";
+import { arrivalLabel, type ArrivalForecastResult } from "./arrivalForecast";
 declare const Cesium: any;
 
-export interface RooftopBadgeStyle {
-  text: string;
-  fillColor: any;
-  bgColor: any;
-  pointColor: any;
+export function houseBounds(building: BuildingFeature) {
+  const polygons = building.geometry.type === "Polygon" ? [building.geometry.coordinates as number[][][]] : building.geometry.coordinates as number[][][][];
+  let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+  for (const polygon of polygons) for (const point of polygon[0] || []) {
+    if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) continue;
+    west = Math.min(west, point[0]); east = Math.max(east, point[0]);
+    south = Math.min(south, point[1]); north = Math.max(north, point[1]);
+  }
+  return east > west && north > south ? { west, east, south, north } : null;
 }
 
-export function formatRooftopArrivalBadge(
-  exposure: BuildingExposure | undefined,
-  elapsed: number,
-  forecast: Pick<ArrivalForecastResult, "complete" | "horizon"> | null,
-  fallbackDistanceM?: number
-): RooftopBadgeStyle {
-  const CesiumRef = typeof Cesium !== "undefined" ? Cesium : null;
-  const cyan = CesiumRef?.Color?.fromCssColorString?.("#38bdf8") ?? "#38bdf8";
-  const orange = CesiumRef?.Color?.fromCssColorString?.("#fb923c") ?? "#fb923c";
-  const vibrantOrange = CesiumRef?.Color?.fromCssColorString?.("#f97316") ?? "#f97316";
-  const red = CesiumRef?.Color?.fromCssColorString?.("#ef4444") ?? "#ef4444";
-  const green = CesiumRef?.Color?.fromCssColorString?.("#4ade80") ?? "#4ade80";
-  const slate = CesiumRef?.Color?.fromCssColorString?.("#94a3b8") ?? "#94a3b8";
-
-  const darkBg = CesiumRef?.Color?.fromCssColorString?.("#090d16")?.withAlpha?.(0.92) ?? "#090d16";
-  const redBg = CesiumRef?.Color?.fromCssColorString?.("#450a0a")?.withAlpha?.(0.95) ?? "#450a0a";
-  const orangeBg = CesiumRef?.Color?.fromCssColorString?.("#431407")?.withAlpha?.(0.95) ?? "#431407";
-  const greenBg = CesiumRef?.Color?.fromCssColorString?.("#064e3b")?.withAlpha?.(0.92) ?? "#064e3b";
-
-  // 1. Water has reached this house!
-  if (exposure?.arrivalSeconds !== null && exposure?.arrivalSeconds !== undefined) {
-    const reachedTimeStr = formatArrivalTime(exposure.arrivalSeconds);
-    return {
-      text: `⚠️ FLOODED · ${reachedTimeStr}`,
-      fillColor: red,
-      bgColor: redBg,
-      pointColor: red,
-    };
-  }
-
-  // 2. Incoming flood with predicted arrival time
-  if (
-    exposure?.predictedArrivalSeconds !== null &&
-    exposure?.predictedArrivalSeconds !== undefined &&
-    exposure.predictedArrivalSeconds > elapsed
-  ) {
-    const remainingSeconds = exposure.predictedArrivalSeconds - elapsed;
-    const timeStr = formatArrivalTime(remainingSeconds);
-    const isUrgent = remainingSeconds <= 90;
-    return {
-      text: `🌊 Flood in ~${timeStr}`,
-      fillColor: isUrgent ? orange : cyan,
-      bgColor: isUrgent ? orangeBg : darkBg,
-      pointColor: isUrgent ? vibrantOrange : cyan,
-    };
-  }
-
-  // 3. Flood predicted to have arrived just now / imminent
-  if (
-    exposure?.predictedArrivalSeconds !== null &&
-    exposure?.predictedArrivalSeconds !== undefined &&
-    exposure.predictedArrivalSeconds <= elapsed
-  ) {
-    return {
-      text: `🌊 Flood Imminent`,
-      fillColor: vibrantOrange,
-      bgColor: orangeBg,
-      pointColor: vibrantOrange,
-    };
-  }
-
-  // 4. Forecast completed and this house will not be flooded within the horizon
-  if (forecast?.complete) {
-    return {
-      text: `🛡️ Safe (> ${formatArrivalTime(forecast.horizon)})`,
-      fillColor: green,
-      bgColor: greenBg,
-      pointColor: CesiumRef?.Color?.fromCssColorString?.("#22c55e") ?? "#22c55e",
-    };
-  }
-
-  // 5. Fallback from river distance if available before forecast finishes
-  if (fallbackDistanceM && fallbackDistanceM > 0) {
-    const estSeconds = Math.max(15, Math.round(fallbackDistanceM / 1.8));
-    return {
-      text: `🌊 Flood ETA: ~${formatArrivalTime(estSeconds)}`,
-      fillColor: cyan,
-      bgColor: darkBg,
-      pointColor: cyan,
-    };
-  }
-
-  // 6. Still calculating
-  return {
-    text: `⏱️ Flood ETA: Calculating…`,
-    fillColor: slate,
-    bgColor: darkBg,
-    pointColor: CesiumRef?.Color?.fromCssColorString?.("#64748b") ?? "#64748b",
-  };
-}
-
-export function BuildingArrivalLabels({
-  viewer,
-  buildings,
-  exposures,
-  elapsed,
-  forecast,
-  visible = true,
-}: {
-  viewer: any;
-  buildings: BuildingFeature[];
-  exposures: BuildingExposure[];
-  elapsed: number;
-  forecast: ArrivalForecastResult | null;
-  visible?: boolean;
+export function BuildingArrivalLabels({ viewer, buildings, exposures, elapsed, forecast, selectedId, onSelect, grid, bed, selectionEnabled = true }: {
+  viewer: any; buildings: BuildingFeature[]; exposures: BuildingExposure[]; elapsed: number; forecast: ArrivalForecastResult | null;
+  selectionEnabled?: boolean;
+  selectedId: string | null; onSelect: (id: string) => void; grid: ExposureGrid | null; bed?: Float32Array;
 }) {
   const labels = useRef(new Map<string, any>());
-  const collectionRef = useRef<any>(null);
+  const lookup = useMemo(() => new Map(buildings.map((building, index) => [String(building.id ?? building.properties.id ?? index), building])), [buildings]);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const selectionEnabledRef = useRef(selectionEnabled);
+  selectionEnabledRef.current = selectionEnabled;
+  const ground = (bounds: NonNullable<ReturnType<typeof houseBounds>>) => {
+    const lon = (bounds.west + bounds.east) / 2, lat = (bounds.south + bounds.north) / 2;
+    const loadedHeight = viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(lon, lat));
+    if (Number.isFinite(loadedHeight)) return loadedHeight;
+    if (grid && bed) {
+      const c = Math.max(0, Math.min(grid.cols - 1, Math.round((lon - grid.west) / (grid.east - grid.west) * (grid.cols - 1))));
+      const r = Math.max(0, Math.min(grid.rows - 1, Math.round((lat - grid.south) / (grid.north - grid.south) * (grid.rows - 1))));
+      if (Number.isFinite(bed[r * grid.cols + c])) return bed[r * grid.cols + c];
+    }
+    return viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(lon, lat)) ?? 0;
+  };
+  useEffect(() => {
+    if (!viewer || viewer.isDestroyed()) return;
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    handler.setInputAction((click: any) => {
+      if (!selectionEnabledRef.current) return;
+      const picked = viewer.scene.pick(click.position);
+      const entity = picked?.id;
+      const candidate = entity?._houseId ?? (entity?._buildingData ? entity.id : null);
+      if (candidate != null && lookup.has(String(candidate))) onSelectRef.current(String(candidate));
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    return () => handler.destroy();
+  }, [viewer, lookup]);
 
   useEffect(() => {
-    if (!viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
-
-    if (!visible) {
-      if (collectionRef.current) {
-        try {
-          viewer.dataSources.remove(collectionRef.current, true);
-        } catch (e) {}
-        collectionRef.current = null;
-        labels.current.clear();
-        viewer.scene?.requestRender?.();
-      }
-      return;
+    if (!viewer || viewer.isDestroyed() || !selectedId) return;
+    const building = lookup.get(selectedId);
+    const b = building && houseBounds(building);
+    if (!b || !building) return;
+    let disposed = false;
+    const focus = (height: number) => {
+      if (disposed || viewer.isDestroyed()) return;
+      const label = labels.current.get(selectedId);
+      if (label) label.position = Cesium.Cartesian3.fromDegrees((b.west + b.east) / 2, (b.south + b.north) / 2, height + buildingHeight(building.properties) + 3);
+      viewer.camera.flyToBoundingSphere(Cesium.BoundingSphere.fromPoints([
+        Cesium.Cartesian3.fromDegrees(b.west, b.south, height),
+        Cesium.Cartesian3.fromDegrees(b.east, b.north, height + buildingHeight(building.properties)),
+      ]), { duration: 0.8, offset: new Cesium.HeadingPitchRange(0, -0.65, 120) });
+      viewer.scene.requestRender();
+    };
+    focus(ground(b));
+    // Refine only the selected house: a coarse flood cell can be hundreds of
+    // metres from the footprint on mountain terrain.
+    if (viewer.terrainProvider?.availability) {
+      Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, [Cesium.Cartographic.fromDegrees((b.west + b.east) / 2, (b.south + b.north) / 2)])
+        .then((points: any[]) => { if (Number.isFinite(points[0]?.height)) focus(points[0].height); }).catch(() => {});
     }
+    return () => { disposed = true; };
 
+  }, [viewer, lookup, selectedId, grid, bed]);
+
+  useEffect(() => {
+    if (!viewer || viewer.isDestroyed()) return;
     const collection = new Cesium.CustomDataSource("simulation-building-arrivals");
-    collection.show = true;
     viewer.dataSources.add(collection);
-    collectionRef.current = collection;
-
-    // Label all loaded buildings in the area (cap at 250 for peak 60 FPS performance)
-    const maxLabels = 250;
-    const count = Math.min(buildings.length, maxLabels);
-
-    for (let index = 0; index < count; index++) {
-      const building = buildings[index];
-      const id = String(building.id ?? building.properties?.id ?? index);
-      if (labels.current.has(id)) continue;
-
-      const props = building.properties || {};
-      let lon = props.lon ?? props.lng;
-      let lat = props.lat;
-
-      if (typeof lon !== "number" || typeof lat !== "number") {
-        const ring = building.geometry?.type === "Polygon"
-          ? building.geometry.coordinates[0]
-          : building.geometry?.coordinates?.[0]?.[0];
-        if (!ring?.length) continue;
-        const points = ring as number[][];
-        lon = points.reduce((sum, p) => sum + p[0], 0) / points.length;
-        lat = points.reduce((sum, p) => sum + p[1], 0) / points.length;
-      }
-
-      if (typeof lon !== "number" || typeof lat !== "number" || !Number.isFinite(lon) || !Number.isFinite(lat)) {
-        continue;
-      }
-
-      const rawHeight = Number(props.height_m ?? props.height ?? props.estimated_height);
-      const height = Math.max(3.5, Number.isFinite(rawHeight) ? rawHeight : 6.0);
-      const fallbackDist = Number(props.distance_to_river_m) || (parseFloat(String(props.distance_from_river || "")) || 350);
-
-      const initialBadge = formatRooftopArrivalBadge(undefined, elapsed, forecast, fallbackDist);
-
+    // Bounded text atlas; houses remain selectable through their orange footprints and table rows.
+    const ids = [...new Set([...(selectedId ? [selectedId] : []), ...lookup.keys()])].slice(0, 15);
+    for (const id of ids) {
+      const building = lookup.get(id);
+      const b = building && houseBounds(building);
+      if (!building || !b) continue;
       const entity = collection.entities.add({
-        id: `arrival-label-${id}`,
-        position: Cesium.Cartesian3.fromDegrees(lon, lat, height + 2.5),
-        point: {
-          pixelSize: 6,
-          color: initialBadge.pointColor,
-          outlineColor: Cesium.Color.WHITE,
-          outlineWidth: 1.5,
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000),
-          scaleByDistance: new Cesium.NearFarScalar(150, 1.0, 8000, 0.5),
-        },
-        label: {
-          text: initialBadge.text,
-          font: "bold 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-          heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          fillColor: initialBadge.fillColor,
-          showBackground: true,
-          backgroundColor: initialBadge.bgColor,
-          backgroundPadding: new Cesium.Cartesian2(8, 4),
-          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -10),
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000),
-          scaleByDistance: new Cesium.NearFarScalar(150, 1.0, 8000, 0.55),
-        },
+        position: Cesium.Cartesian3.fromDegrees((b.west + b.east) / 2, (b.south + b.north) / 2, ground(b) + buildingHeight(building.properties) + 3),
+        label: { text: "Water ETA · calculating…", font: "bold 12px sans-serif", fillColor: Cesium.Color.CYAN,
+          showBackground: true, backgroundColor: Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.9),
+          backgroundPadding: new Cesium.Cartesian2(6, 4), verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 4000),
+          scaleByDistance: new Cesium.NearFarScalar(200, 1, 4000, 0.55) },
       });
-
-      (entity as any)._fallbackDist = fallbackDist;
+      entity._houseId = id;
       labels.current.set(id, entity);
     }
-
     viewer.scene.requestRender();
-
-    return () => {
-      labels.current.clear();
-      if (!viewer.isDestroyed() && collectionRef.current) {
-        try {
-          viewer.dataSources.remove(collectionRef.current, true);
-        } catch (e) {}
-        collectionRef.current = null;
-      }
-    };
-  }, [viewer, buildings, visible]);
+    return () => { labels.current.clear(); if (!viewer.isDestroyed()) viewer.dataSources.remove(collection, true); };
+  }, [viewer, lookup, selectedId, grid, bed]);
 
   useEffect(() => {
-    if (!visible || !viewer || viewer.isDestroyed() || typeof Cesium === "undefined") return;
-
-    let changed = false;
-    const exposureMap = new Map<string, BuildingExposure>();
-    for (const exp of exposures) {
-      exposureMap.set(exp.id, exp);
+    for (const exposure of exposures) {
+      const entity = labels.current.get(exposure.id);
+      if (!entity) continue;
+      const text = arrivalLabel(exposure, elapsed, forecast);
+      if (entity.label.text.getValue() !== text) entity.label.text = text;
+      entity.label.fillColor = exposure.arrivalSeconds !== null ? Cesium.Color.ORANGE : Cesium.Color.CYAN;
     }
-
-    for (const [id, entity] of labels.current.entries()) {
-      const exposure = exposureMap.get(id);
-      const fallbackDist = (entity as any)._fallbackDist;
-      const badge = formatRooftopArrivalBadge(exposure, elapsed, forecast, fallbackDist);
-
-      const currentText = entity.label?.text?.getValue?.(Cesium.JulianDate.now()) ?? entity.label?.text;
-      if (currentText !== badge.text) {
-        entity.label.text = badge.text;
-        entity.label.fillColor = badge.fillColor;
-        entity.label.backgroundColor = badge.bgColor;
-        if (entity.point) {
-          entity.point.color = badge.pointColor;
-        }
-        changed = true;
-      }
-    }
-
-    if (changed && viewer && !viewer.isDestroyed()) {
-      viewer.scene.requestRender();
-    }
-  }, [viewer, exposures, elapsed, forecast, visible]);
-
+    if (viewer && !viewer.isDestroyed()) viewer.scene.requestRender();
+  }, [viewer, exposures, elapsed, forecast, selectedId, lookup]);
   return null;
 }

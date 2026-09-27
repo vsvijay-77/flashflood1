@@ -1,6 +1,7 @@
 import { jsPDF } from "jspdf";
 import type { BuildingExposure } from "@/components/simulation/buildingExposure";
 import { buildStandardFloodReport, type StandardFloodReportData } from "@/components/simulation/standardFloodReport";
+import { NEXGI_LOGO_BASE64 } from "./logoBase64";
 
 export interface FloodReportPdfOptions {
   areaName?: string;
@@ -47,20 +48,28 @@ export function generateFloodReportPdf(options: FloodReportPdfOptions): jsPDF {
     doc.setFillColor(6, 182, 212); // cyan-500 accent line
     doc.rect(0, 23.2, pageWidth, 0.8, "F");
 
+    const logoSize = 15;
+    try {
+      doc.addImage(NEXGI_LOGO_BASE64, "PNG", margin, 4.2, logoSize, logoSize);
+    } catch {
+      // Fallback if image rendering fails
+    }
+    const textX = margin + logoSize + 3.5;
+
     doc.setTextColor(255, 255, 255);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    doc.text("NEXGI • ENVIRONMENTAL INTELLIGENCE NETWORK (EIN) • 3D DIGITAL TWIN", margin, 9);
+    doc.setFontSize(10.5);
+    doc.text("NEXGI • ENVIRONMENTAL INTELLIGENCE NETWORK (EIN) • 3D DIGITAL TWIN", textX, 9);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(148, 163, 184); // slate-400
-    doc.text("Department of Disaster Management & Hydrological Modeling", margin, 15);
+    doc.text("Department of Disaster Management & Hydrological Modeling", textX, 15);
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8.5);
     doc.setTextColor(56, 189, 248); // sky-400
-    doc.text(sectionTitle.toUpperCase(), margin, 20);
+    doc.text(sectionTitle.toUpperCase(), textX, 20);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
@@ -107,6 +116,12 @@ export function generateFloodReportPdf(options: FloodReportPdfOptions): jsPDF {
 
   doc.setFillColor(6, 182, 212);
   doc.rect(0, 73.5, pageWidth, 2.5, "F");
+
+  try {
+    doc.addImage(NEXGI_LOGO_BASE64, "PNG", pageWidth - margin - 26, 14, 26, 26);
+  } catch {
+    // Fallback if image rendering fails
+  }
 
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");

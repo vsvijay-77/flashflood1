@@ -33,7 +33,7 @@ export function AboutPlatform() {
       color: "text-amber-500", 
       bg: "bg-amber-500/10",
       title: "HUMAN AUTHORITY", 
-      body: "AI generates risk scores and decision-support recommendations, while authorized officials remain responsible for final decisions." 
+      body: "Automated scoring and decision-support recommendations are generated from sensor data, while authorized officials remain responsible for final decisions." 
     },
     { 
       id: "04", 
@@ -57,7 +57,8 @@ export function AboutPlatform() {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-sky-900/20 rounded-full blur-3xl opacity-50 mix-blend-screen" />
         
         <div className="relative mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 z-10">
-          <span className="inline-block rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-400">
+          <span className="inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-400">
+            <img src="/logo.png" alt="NEXGI" className="size-4 object-contain" />
             ABOUT THE PLATFORM
           </span>
           <h1 className="mt-8 text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl text-white">
@@ -125,7 +126,7 @@ export function PlatformPage() {
             From Environmental Signals to <span className="text-emerald-400">Intelligent Decisions.</span>
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-slate-300">
-            The Environmental Intelligence Network is built as a modular, independently deployable architecture connecting field telemetry, satellite intelligence, edge processing, cloud analytics, multi-agent AI, Digital Twin simulation, and government-facing command applications.
+            The Environmental Intelligence Network is built as a modular, independently deployable architecture connecting field telemetry, satellite intelligence, edge processing, cloud analytics, intelligent data processing, Digital Twin simulation, and government-facing command applications.
           </p>
 
           <div className="mt-12 flex flex-col items-center gap-2 font-mono text-[11px] font-bold text-sky-300 tracking-wider">
@@ -306,7 +307,7 @@ export function PlatformPage() {
             <span className="grid size-12 place-items-center rounded-xl bg-emerald-500 text-[#0A192F] font-mono text-sm font-bold">03</span>
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-400">LAYER 03</p>
-              <h2 className="text-2xl font-extrabold text-white">Multi-Agent Environmental Intelligence System</h2>
+              <h2 className="text-2xl font-extrabold text-white">Environmental Intelligence System</h2>
             </div>
           </div>
           <p className="text-lg text-slate-300 mb-16 max-w-4xl">
@@ -377,7 +378,7 @@ export function PlatformPage() {
             <div className="bg-slate-50 border border-slate-200 p-8 rounded-2xl flex flex-col items-center justify-center min-h-[400px] text-center">
               <Map className="size-24 text-sky-200 mb-6" />
               <div className="flex flex-col items-center gap-2 font-mono text-[10px] font-bold text-sky-600">
-                <span>REAL-TIME DATA + AI RISK SCORE</span>
+                <span>REAL-TIME DATA + RISK SCORE</span>
                 <ArrowDown className="size-4 animate-bounce" />
                 <span>DIGITAL TWIN SIMULATION ENGINE</span>
                 <ArrowDown className="size-4 animate-bounce" />
@@ -478,7 +479,7 @@ export function PlatformPage() {
               { title: "MODULAR", desc: "Each service can be independently developed and deployed." },
               { title: "SCALABLE", desc: "Architecture can expand from prototype deployments to large sensor networks." },
               { title: "RESILIENT", desc: "Edge processing supports critical operations during connectivity disruptions." },
-              { title: "INTELLIGENT", desc: "AI and multi-agent systems transform raw data into actionable intelligence." },
+              { title: "INTELLIGENT", desc: "Ensemble analytics transform raw data into actionable intelligence." },
               { title: "INTEROPERABLE", desc: "Designed to integrate multiple data sources, sensors, and government systems." },
               { title: "SECURE", desc: "Role-based access and controlled intelligence distribution protect sensitive operational data." }
             ].map(p => (

@@ -207,21 +207,41 @@ export function LiveSensorMonitoring() {
           <CardContent>
             <div className="flex items-end justify-between">
               <div>
-                <div className="text-xl font-bold text-slate-900">
-                  {tiltVal.toFixed(1)}° Tilt
+                <div className="text-xl font-bold text-slate-900 flex items-baseline gap-2">
+                  <span className={tiltVal <= 99 && tiltVal > 0 ? "text-rose-600" : "text-emerald-600"}>
+                    {tiltVal <= 99 && tiltVal > 0 ? "Tilt" : "No Tilt"}
+                  </span>
+                  <span className="text-xs font-mono text-slate-500 font-normal">
+                    ({tiltVal.toFixed(1)}°)
+                  </span>
                 </div>
-                <p className="text-xs font-mono text-slate-500">
-                  [{imuX}, {imuY}, {imuZ}]
-                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-xs font-mono text-slate-500">
+                    [{imuX}, {imuY}, {imuZ}]
+                  </p>
+                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded font-mono ${
+                    imuX >= 7 && imuY >= 7 && imuZ >= 7
+                      ? "bg-rose-100 text-rose-700 animate-pulse font-bold"
+                      : imuX <= -5 && imuY <= -5 && imuZ <= -5
+                      ? "bg-emerald-100 text-emerald-700 font-semibold"
+                      : "bg-slate-100 text-slate-600"
+                  }`}>
+                    {imuX >= 7 && imuY >= 7 && imuZ >= 7
+                      ? "🚨 Movement Detected"
+                      : imuX <= -5 && imuY <= -5 && imuZ <= -5
+                      ? "🛡️ No Movement"
+                      : "Stable"}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="mt-4 h-16">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={trendData}>
                   <Tooltip contentStyle={{ fontSize: "10px" }} />
-                  <Line type="monotone" dataKey="x" stroke="#a855f7" strokeWidth={1} dot={false} />
-                  <Line type="monotone" dataKey="y" stroke="#3b82f6" strokeWidth={1} dot={false} />
-                  <Line type="monotone" dataKey="z" stroke="#ec4899" strokeWidth={1} dot={false} />
+                  <Line type="monotone" dataKey="x" stroke="#06b6d4" strokeWidth={1.5} dot={false} isAnimationActive={true} animationDuration={300} />
+                  <Line type="monotone" dataKey="y" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={true} animationDuration={300} />
+                  <Line type="monotone" dataKey="z" stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={true} animationDuration={300} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwa
 import { Loader2, CloudRain } from "lucide-react";
 import * as THREE from "three";
 import { WaterPhysicsSimulation } from "./waterPhysics";
+import type { WaterRiskSnapshot } from "./waterRisk";
 import { clampFloodPlaybackSpeed, floodPlaybackRate } from "./playbackSpeed";
 import { createWaterShaderMaterial } from "./WaterShaders";
 import { createWaterwayDistanceTexture } from "./waterwayDistance";
@@ -11,9 +12,9 @@ import { defaultFlashFloodParameters, getFloodForcing } from "./flashFloodParame
 import CesiumSelectedAreaRainOverlay from "./CesiumSelectedAreaRainOverlay";
 import { rasterizeWaterSources } from "./water/sourceRaster";
 import { fetchWater, type WaterFootprint } from "./water/osmWater";
-import type { RiverFeature, RoadFeature } from "@/lib/routingApi";
+import type { RiverFeature, RoadFeature, EvacuationRouteResponse } from "@/lib/routingApi";
 import { createFlowGraphOverlay } from "./flowGraphOverlay";
-import { indexBuildings, assessBuildings, type BuildingExposure, type BuildingSample } from "./buildingExposure";
+import { type BuildingExposure, type BuildingSample } from "./buildingExposure";
 import { FloodImpactReport } from "./FloodImpactReport";
 import { buildStandardFloodReport } from "./standardFloodReport";
 import { buildSimulationReport, type SimulationReportData } from "./simulationReport";
@@ -21,7 +22,7 @@ import { apiPost } from "@/lib/api";
 import { toast } from "sonner";
 import { HouseArrivalPanel } from "./HouseArrivalPanel";
 import { BuildingArrivalLabels } from "./BuildingArrivalLabels";
-import { type ArrivalForecastInput, type ArrivalForecastResult, formatArrivalTime } from "./arrivalForecast";
+import { arrivalLabel, type ArrivalForecastInput, type ArrivalForecastResult } from "./arrivalForecast";
 import type { BuildingFeature } from "@/lib/routingApi";
 
 declare const Cesium: any;
@@ -41,6 +42,7 @@ export interface ThreeWaterSimulationProps {
   isFlatView?: boolean;
   defaultSoilSaturation?: number;
   defaultSourceRise?: number;
+  simulationSpeed?: number;
   defaultDurationMinutes?: number;
   hideControlsOnStart?: boolean;
   onPauseChange?: (isPaused: boolean) => void;
@@ -50,11 +52,18 @@ export interface ThreeWaterSimulationProps {
   onToggleVisibleRain?: (show: boolean) => void;
   autoStart?: boolean;
   onClose?: () => void;
-  onSelectBuilding?: (building: any) => void;
   debugMode?: boolean;
+  houseSelectionEnabled?: boolean;
+  onEvacuationReady?: (ready: boolean) => void;
+  onRouteInvalidated?: () => void;
+  onBuildingExposureChange?: (affectedNow: number, affectedTotal: number) => void;
+  selectedBuildingId?: string | null;
+  onSelectedBuildingArrivalChange?: (arrival: { id: string; label: string } | null) => void;
 }
 
 export interface ThreeWaterSimulationHandle {
+  getWaterRiskSnapshot: () => WaterRiskSnapshot | null;
+  calculateEvacuation: (origin: { lat: number; lng: number }, destination?: { lat: number; lng: number }) => Promise<EvacuationRouteResponse>;
   openControls: () => void;
   closeControls?: () => void;
   startSimulation: () => void;
@@ -87,6 +96,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       isFlatView = false,
       defaultSoilSaturation,
       defaultSourceRise,
+      simulationSpeed,
       defaultDurationMinutes,
       hideControlsOnStart = false,
       onPauseChange,
@@ -96,7 +106,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       onToggleVisibleRain,
       autoStart = false,
       onClose,
-      onSelectBuilding,
+      houseSelectionEnabled = true,
+      onEvacuationReady,
+      onRouteInvalidated,
+      onBuildingExposureChange,
+      selectedBuildingId,
+      onSelectedBuildingArrivalChange,
     },
     ref
   ) => {
@@ -114,6 +129,11 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
 
     // Physics Engine Ref
     const physicsSimRef = useRef<WaterPhysicsSimulation | null>(null);
+    const knownTerrainRef = useRef(new Uint8Array());
+    const routeJobRef = useRef<{ worker: Worker; finish: (result: EvacuationRouteResponse) => void } | null>(null);
+    const routeInvalidatedRef = useRef(onRouteInvalidated);
+    routeInvalidatedRef.current = onRouteInvalidated;
+    const cancelRoute = () => routeJobRef.current?.finish({ status: "error", message: "Scenario changed. Recalculate the evacuation route." });
     const insideMaskRef = useRef<Uint8Array | null>(null);
     const waterBodyMaskRef = useRef<Uint8Array | null>(null);
     const pathMaskRef = useRef<Uint8Array>(new Uint8Array());
@@ -130,6 +150,21 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     }>({ nodes: 0, edges: 0, displayedEdges: 0 });
     const [waterVolume, setWaterVolume] = useState(0);
     const buildingSamplesRef = useRef<BuildingSample[]>([]);
+    const exposureWorkerRef = useRef<Worker | null>(null);
+    const exposureBusyRef = useRef(false);
+    const exposureDirtyRef = useRef(false);
+    const exposureRevisionRef = useRef(0);
+    const [selectedHouseId, setSelectedHouseId] = useState<string | null>(null);
+    const requestExposure = () => {
+      const sim = physicsSimRef.current;
+      if (!sim || !exposureWorkerRef.current) return;
+      if (exposureBusyRef.current) { exposureDirtyRef.current = true; return; }
+      exposureDirtyRef.current = false;
+      exposureBusyRef.current = true;
+      exposureWorkerRef.current.postMessage({ type: "assess", revision: exposureRevisionRef.current,
+        depth: sim.state.depth, peaks: sim.state.peakDepth, arrivals: sim.state.firstArrivalSeconds,
+        predicted: arrivalForecastRef.current?.arrivals });
+    };
     const peakDepthRef = useRef(new Float32Array());
     const [buildingExposure, setBuildingExposure] = useState<BuildingExposure[]>([]);
     const [arrivalForecast, setArrivalForecast] = useState<ArrivalForecastResult | null>(null);
@@ -140,6 +175,15 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [completedReport, setCompletedReport] = useState<SimulationReportData | null>(null);
     const [saveStatus, setSaveStatus] = useState<string>("Ready");
     const simulationStartedAtRef = useRef<string | null>(null);
+
+    // Notify parent of live affected building counts whenever exposure changes
+    const onBuildingExposureChangeRef = useRef(onBuildingExposureChange);
+    onBuildingExposureChangeRef.current = onBuildingExposureChange;
+    useEffect(() => {
+      const affectedNow = buildingExposure.filter(b => b.affectedNow).length;
+      const affectedTotal = buildingExposure.filter(b => b.affectedDuringRun).length;
+      onBuildingExposureChangeRef.current?.(affectedNow, affectedTotal);
+    }, [buildingExposure]);
 
     // Local-inertial & coordinate frame refs
     const effectiveCenterElevRef = useRef<number>(baseElevation);
@@ -167,17 +211,38 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     const [isPaused, setIsPaused] = useState<boolean>(false);
     const [showWater, setShowWater] = useState<boolean>(true);
     const [sourceRise, setSourceRise] = useState<number>(defaultSourceRise !== undefined ? Math.max(0, defaultSourceRise) : 1.2);
-    const [speed, setSpeed] = useState<number>(1);
+    const [speed, setSpeed] = useState<number>(
+      simulationSpeed !== undefined && Number.isFinite(simulationSpeed)
+        ? clampFloodPlaybackSpeed(simulationSpeed)
+        : 1
+    );
+
+    useEffect(() => {
+      if (simulationSpeed !== undefined && Number.isFinite(simulationSpeed)) {
+        setSpeed(clampFloodPlaybackSpeed(simulationSpeed));
+      }
+    }, [simulationSpeed]);
     const [waveIntensity, setWaveIntensity] = useState<number>(1.0);
     const [statusText, setStatusText] = useState<string>("Initializing terrain & water sources…");
     const [isFallbackSource, setIsFallbackSource] = useState<boolean>(false);
     const [osmFeatureCount, setOsmFeatureCount] = useState<number>(0);
     const [gridResolutionText, setGridResolutionText] = useState<string>("Initializing…");
     const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+    const inspectedBuilding = buildingExposure.find(building => building.id === selectedBuildingId);
+    const inspectedArrivalLabel = active && selectedBuildingId
+      ? inspectedBuilding ? arrivalLabel(inspectedBuilding, elapsedSeconds, arrivalForecast) : "Water ETA · calculating…"
+      : null;
+    useEffect(() => {
+      onSelectedBuildingArrivalChange?.(selectedBuildingId && inspectedArrivalLabel
+        ? { id: selectedBuildingId, label: inspectedArrivalLabel }
+        : null);
+    }, [selectedBuildingId, inspectedArrivalLabel, onSelectedBuildingArrivalChange]);
     const [spreadAreaHectares, setSpreadAreaHectares] = useState<number>(0);
     const [maxDepthM, setMaxDepthM] = useState<number>(0);
     const [isReady, setIsReady] = useState(false);
     const [controlsOpen, setControlsOpen] = useState(!autoStart && !showVisibleRain && !hideControlsOnStart);
+    const controlsSuppressedRef = useRef(false);
+    controlsSuppressedRef.current = Boolean(autoStart || showVisibleRain || hideControlsOnStart);
     const [parameters, setParameters] = useState({
       ...defaultFlashFloodParameters,
       durationMinutes: defaultDurationMinutes !== undefined && defaultDurationMinutes > 0 ? defaultDurationMinutes : defaultFlashFloodParameters.durationMinutes,
@@ -250,6 +315,16 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     waveIntensityRef.current = waveIntensity;
     const showWaterRef = useRef(showWater);
     showWaterRef.current = showWater;
+
+    useEffect(() => {
+      routeInvalidatedRef.current?.();
+      return () => cancelRoute();
+    }, [active, isReady, rainfall, sourceRise, parameters.durationMinutes, parameters.soilSaturation,
+      parameters.infiltrationMmH, parameters.roughness, parameters.flowModel, parameters.floodIntensity,
+      roadFeatures, riverFeatures, polygonKey, forecastRevision]);
+    useEffect(() => {
+      onEvacuationReady?.(Boolean(active && isReady && arrivalForecast && arrivalForecast.throughSeconds >= elapsedSeconds + 120));
+    }, [active, isReady, arrivalForecast, elapsedSeconds, onEvacuationReady]);
 
     // ─── 1. INITIALIZE TERRAIN & OSM WATER BODIES ────────────────────────────
     useEffect(() => {
@@ -376,7 +451,9 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const lat = south + (r / (ROWS - 1)) * (north - south);
           for (let c = 0; c < COLS; c++) {
             const lng = west + (c / (COLS - 1)) * (east - west);
-            cartographics.push(Cesium.Cartographic.fromDegrees(lng, lat));
+            const point = Cesium.Cartographic.fromDegrees(lng, lat);
+            point.height = NaN; // A default ellipsoid height of zero is not a measured elevation.
+            cartographics.push(point);
             latList.push(lat);
             lngList.push(lng);
           }
@@ -444,6 +521,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             }
           }
         }
+
+        knownTerrainRef.current = Uint8Array.from(sampledElevations, h => Number.isFinite(h) ? 1 : 0);
 
         // Full progressive neighbor relaxation across all rows & columns so the entire area (including boundaries and tail rows) seamlessly blends
         if (measuredCount > 0 && measuredCount < totalCells) {
@@ -649,7 +728,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         setIsPaused(false);
         onRunningChange?.(false);
         onPauseChange?.(false);
-        setControlsOpen(!autoStart);
+        setControlsOpen(!controlsSuppressedRef.current);
         setStatusText(
           `Terrain ready • ${minElev.toFixed(0)}–${maxElev.toFixed(0)}m · Ready to start`
         );
@@ -914,14 +993,16 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const currentParameters = parametersRef.current;
           physics.config.manningN = currentParameters.roughness;
           physics.config.flowModel = currentParameters.flowModel;
-          // One real second is one simulated second at 1×. Consume elapsed frame
-          // time within the frame budget; faster presets use the displayed pace mapping.
+          // Starting speed at 1× advances at 2 simulated s/s for observable realistic flow.
+          // 10× preset fast-forwards at 120 simulated s/s with expanded physics budget.
           const playbackMultiplier = floodPlaybackRate(speedRef.current);
           const stepTime = Math.min(0.1, physicsTime);
+          const physicsBudgetMs = speedRef.current >= 10 ? 14 : speedRef.current >= 5 ? 10 : 6;
+          physics.config.maxSubstepsPerFrame = speedRef.current >= 10 ? 20 : 12;
           const advanced = physics.advanceWithForcing(
             stepTime, playbackMultiplier,
             time => getFloodForcing(rainfallRef.current, sourceRiseRef.current, currentParameters, time),
-            6,
+            physicsBudgetMs,
           );
           simulatedSinceTelemetry += advanced;
           if (mat) mat.uniforms.uFlowTime.value = physics.state.elapsedSeconds;
@@ -969,15 +1050,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
             setSpreadAreaHectares(physics.state.floodedAreaHectares);
             setMaxDepthM(physics.state.maxDepthM);
             setWaterVolume(physics.state.totalVolumeM3);
-            setBuildingExposure(
-              assessBuildings(
-                buildingSamplesRef.current,
-                depths,
-                peakDepthRef.current,
-                physics.state.firstArrivalSeconds,
-                arrivalForecastRef.current?.arrivals
-              )
-            );
+            requestExposure();
             // Update graph overlay at 2Hz when visible — updating 10k edges each time is expensive
             if (showGraphRef.current) graphRef.current?.update(physics.state);
           }
@@ -1131,17 +1204,30 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         setBuildingExposure([]);
         return;
       }
-      buildingSamplesRef.current = indexBuildings(buildingFeatures || [], grid, physics.state.insideMask);
-      setBuildingExposure(
-        assessBuildings(
-          buildingSamplesRef.current,
-          physics.state.depth,
-          peakDepthRef.current,
-          physics.state.firstArrivalSeconds,
-          arrivalForecastRef.current?.arrivals
-        )
-      );
-    }, [buildingFeatures, isReady, active]);
+      const worker = new Worker(new URL("./buildingExposure.worker.ts", import.meta.url), { type: "module" });
+      exposureWorkerRef.current = worker;
+      exposureBusyRef.current = false;
+      setBuildingExposure([]);
+      worker.onmessage = ({ data }) => {
+        if (data.type === "indexed") {
+          buildingSamplesRef.current = data.samples;
+          requestExposure();
+        } else {
+          exposureBusyRef.current = false;
+          if (data.revision === exposureRevisionRef.current) setBuildingExposure(data.exposures);
+          if (exposureDirtyRef.current || data.revision !== exposureRevisionRef.current) requestExposure();
+        }
+      };
+      worker.onerror = () => {
+        exposureBusyRef.current = false;
+        setForecastError("House assessment failed. Retry the calculation.");
+      };
+      const { cols, rows, west, east, south, north } = grid;
+      worker.postMessage({ type: "index", buildings: buildingFeatures || [],
+        grid: { cols, rows, west, east, south, north }, mask: physics.state.insideMask });
+      return () => { worker.terminate(); exposureWorkerRef.current = null; exposureBusyRef.current = false; };
+
+    }, [buildingFeatures, isReady, active, forecastRevision]);
 
     // Precompute from one frozen snapshot in a worker. Playback and visual-only
     // changes do not restart the calculation or rebuild the solver on the UI thread.
@@ -1152,6 +1238,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
       let worker: Worker | null = null;
       arrivalForecastRef.current = null;
       setArrivalForecast(null);
+      exposureRevisionRef.current++;
+      requestExposure();
       setForecastError(null);
       const input: ArrivalForecastInput = {
         config: { ...sim.config, manningN: parameters.roughness, flowModel: parameters.flowModel },
@@ -1183,11 +1271,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           const result = event.data;
           arrivalForecastRef.current = result;
           setArrivalForecast(result);
-          const live = physicsSimRef.current;
-          if (live) setBuildingExposure(assessBuildings(
-            buildingSamplesRef.current, live.state.depth, live.state.peakDepth,
-            live.state.firstArrivalSeconds, result.arrivals,
-          ));
+          requestExposure();
           if (result.complete) {
             worker?.terminate();
           }
@@ -1271,6 +1355,7 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     };
 
     const handleReset = () => {
+      cancelRoute();
       arrivalForecastRef.current = null;
       setForecastRevision(value => value + 1);
       simulationStartedAtRef.current = null;
@@ -1279,15 +1364,8 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
         physicsSimRef.current.reset();
         peakDepthRef.current.fill(0);
         setArrivalForecast(null);
-        setBuildingExposure(
-          assessBuildings(
-            buildingSamplesRef.current,
-            physicsSimRef.current.state.depth,
-            peakDepthRef.current,
-            physicsSimRef.current.state.firstArrivalSeconds,
-            undefined
-          )
-        );
+        exposureRevisionRef.current++;
+        requestExposure();
         setElapsedSeconds(0);
         setWaterVolume(0);
         graphRef.current?.update(physicsSimRef.current.state);
@@ -1438,6 +1516,37 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
     };
 
     useImperativeHandle(ref, () => ({
+      getWaterRiskSnapshot: () => {
+        const sim = physicsSimRef.current, grid = gridMetaRef.current;
+        if (!active || !isReady || !sim || !grid) return null;
+        // Borrow arrays for synchronous rasterization; callers must not mutate them.
+        return { ...grid, elapsedSeconds: sim.state.elapsedSeconds,
+          depth: sim.state.depth, velocityX: sim.state.velocityX, velocityY: sim.state.velocityY,
+          inside: sim.state.insideMask, knownTerrain: knownTerrainRef.current };
+      },
+      calculateEvacuation: (origin, destination) => {
+        cancelRoute();
+        const sim = physicsSimRef.current, grid = gridMetaRef.current, forecast = arrivalForecastRef.current;
+        if (!active || !isReady || !sim || !grid || !forecast) return Promise.resolve({ status: "error", message: "Terrain and arrival forecast are still loading. Retry when the simulation is ready." });
+        return new Promise<EvacuationRouteResponse>(resolve => {
+          const worker = new Worker(new URL("./evacuationPlanner.worker.ts", import.meta.url), { type: "module" });
+          const timer = setTimeout(() => finish({ status: "error", message: "Route calculation timed out. Select a smaller area and retry." }), 20000);
+          const finish = (result: EvacuationRouteResponse) => {
+            clearTimeout(timer); worker.terminate();
+            if (routeJobRef.current?.worker === worker) routeJobRef.current = null;
+            resolve(result);
+          };
+          routeJobRef.current = { worker, finish };
+          worker.onmessage = ({ data }) => finish(data);
+          worker.onerror = () => finish({ status: "error", message: "Route worker failed. Please retry." });
+          const { cols, rows, west, east, south, north, dx, dy } = grid;
+          worker.postMessage({ grid: { cols, rows, west, east, south, north, dx, dy },
+            bed: sim.state.bed, knownTerrain: knownTerrainRef.current, inside: sim.state.insideMask,
+            depth: sim.state.depth, water: sim.state.isWaterway, arrivals: forecast.arrivals,
+            forecastThrough: forecast.throughSeconds, elapsed: sim.state.elapsedSeconds,
+            roads: roadFeaturesRef.current || [], origin, destination });
+        });
+      },
       openControls: () => setControlsOpen(true),
       closeControls: () => setControlsOpen(false),
       startSimulation: handleStart,
@@ -1503,78 +1612,22 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           </div>
         )}
 
-        {/* Billboard labels hovering over buildings in 3D Cesium view - only shown during active simulation */}
+        {/* Billboard labels hovering over buildings in 3D Cesium view */}
         <BuildingArrivalLabels
           viewer={cesiumViewer}
           buildings={buildingFeatures || []}
           exposures={buildingExposure}
           elapsed={elapsedSeconds}
           forecast={arrivalForecast}
-          visible={Boolean(isRunning || isPaused || elapsedSeconds > 0)}
+          selectedId={selectedHouseId}
+          selectionEnabled={houseSelectionEnabled}
+          onSelect={setSelectedHouseId}
+          grid={gridMetaRef.current}
+          bed={physicsSimRef.current?.state.bed}
         />
 
-        {Boolean(isRunning || isPaused || elapsedSeconds > 0) && (
-          <HouseArrivalPanel
-            buildings={buildingExposure}
-            elapsed={elapsedSeconds}
-            forecast={arrivalForecast}
-            error={forecastError}
-            onRetry={() => setForecastRevision(value => value + 1)}
-            onSelectBuilding={(building) => {
-            const feature = (buildingFeatures || []).find((b, i) => String(b.id ?? b.properties?.id ?? i) === building.id);
-            const bProps = (feature?.properties || {}) as any;
-            let lat = building.lat ?? bProps.lat;
-            let lon = building.lon ?? bProps.lon ?? (bProps as any).lng;
-
-            if ((typeof lat !== "number" || typeof lon !== "number") && feature?.geometry) {
-              const ring = feature.geometry.type === "Polygon"
-                ? feature.geometry.coordinates[0]
-                : feature.geometry.coordinates?.[0]?.[0];
-              if (ring?.length) {
-                const pts = ring as number[][];
-                lon = pts.reduce((sum, p) => sum + p[0], 0) / pts.length;
-                lat = pts.reduce((sum, p) => sum + p[1], 0) / pts.length;
-              }
-            }
-
-            if (cesiumViewer && !cesiumViewer.isDestroyed() && typeof lat === "number" && typeof lon === "number" && typeof Cesium !== "undefined") {
-              cesiumViewer.camera.flyTo({
-                destination: Cesium.Cartesian3.fromDegrees(lon, lat - 0.0015, (Number(bProps.estimated_height || bProps.height) || 6) + 120),
-                orientation: {
-                  heading: Cesium.Math.toRadians(0),
-                  pitch: Cesium.Math.toRadians(-40),
-                  roll: 0,
-                },
-                duration: 1.5,
-              });
-            }
-
-            const distM = building.distanceToRiverM || Number(bProps.distance_to_river_m) || (parseFloat(String(bProps.distance_from_river || "")) || 350);
-            const arrivalText = building.arrivalSeconds !== null
-              ? `Reached at ${formatArrivalTime(building.arrivalSeconds)}`
-              : building.predictedArrivalSeconds !== null && building.predictedArrivalSeconds > elapsedSeconds
-              ? `~${formatArrivalTime(building.predictedArrivalSeconds - elapsedSeconds)}`
-              : building.predictedArrivalSeconds !== null
-              ? "Flood Imminent"
-              : `~${formatArrivalTime(Math.max(15, Math.round(distM / 1.8)))}`;
-
-            onSelectBuilding?.({
-              ...bProps,
-              id: building.id,
-              name: building.name,
-              lat,
-              lon,
-              estimated_height: bProps.estimated_height || bProps.height || 6,
-              elevation: bProps.elevation || bProps.elevation_m || 298.0,
-              flood_risk: building.arrivalSeconds !== null ? "CRITICAL" : bProps.flood_risk || "MONITORED",
-              distance_from_river: `${Math.round(distM)} m`,
-              distance_to_river_m: distM,
-              flood_arrival_time: arrivalText,
-              _buildingData: true,
-            });
-          }}
-        />
-        )}
+        <HouseArrivalPanel buildings={buildingExposure} elapsed={elapsedSeconds} forecast={arrivalForecast}
+          selectedId={selectedHouseId} onSelect={setSelectedHouseId} error={forecastError} onRetry={() => setForecastRevision(value => value + 1)} />
 
         {/* Floating Control Panel HUD */}
         <FloodImpactReport

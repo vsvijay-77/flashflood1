@@ -84,11 +84,9 @@ export interface BuildingFeature {
     landslide_risk?: "LOW" | "MODERATE" | "HIGH";
     distance_to_river_m?: number;
     distance_from_river?: string;
-    flood_arrival_time?: string;
     evacuation_zone?: string;
     confidence?: number;
     source?: string;
-    lng?: number;
   };
   geometry: {
     type: "Polygon" | "MultiPolygon";
@@ -176,6 +174,17 @@ export interface RouteSegment {
   flood_risk: number;
 }
 
+export interface EvacuationCandidate {
+  id: string;
+  coordinates: [number, number][];
+  destination: { lat: number; lng: number };
+  total_distance_m: number;
+  estimated_time_minutes: number;
+  elevation_gain_m: number;
+  max_slope_pct: number;
+  clearance_seconds: number;
+}
+
 export interface EvacuationRouteResponse {
   status: "success" | "no_path" | "error";
   route_status?: "SAFE" | "CAUTION" | "HAZARDOUS";
@@ -192,6 +201,13 @@ export interface EvacuationRouteResponse {
   coordinates?: [number, number][]; // [lat, lng]
   segments?: RouteSegment[];
   avoided_blocked_edges?: number;
+  max_slope_pct?: number;
+  elevation_gain_m?: number;
+  departure_simulation_seconds?: number;
+  clearance_seconds?: number;
+  candidate_routes?: EvacuationCandidate[];
+  selected_candidate_id?: string;
+  selection_reason?: string;
 }
 
 export async function extractNetworks(params: {
@@ -312,5 +328,4 @@ export async function fetchMicrosoftBuildings(
 
   return apiGet<MicrosoftBuildingsResponse>(`/buildings?${query.toString()}`, { signal });
 }
-
 

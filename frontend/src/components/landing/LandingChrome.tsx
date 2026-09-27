@@ -32,8 +32,8 @@ export function LandingNavbar() {
     >
       <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3 sm:px-6 lg:px-8">
         <Link to="/" className="flex shrink-0 items-center gap-3" data-testid="brand-logo-link">
-          <span className="grid size-10 place-items-center rounded-lg bg-[#0B2545] text-white">
-            <ShieldCheck className="size-5" />
+          <span className="flex size-10 items-center justify-center rounded-lg bg-[#0B2545] p-1 shadow-sm">
+            <img src="/logo.png" alt="NEXGI Logo" className="size-full object-contain" />
           </span>
           <span className="leading-none">
             <span className="block text-[16px] font-black tracking-wider text-[#0B2545]">NEXGI</span>
@@ -98,8 +98,8 @@ export function GovernmentFooter() {
       <div className="mx-auto grid max-w-7xl gap-8 px-4 py-16 sm:px-6 lg:grid-cols-4 lg:px-8">
         <div className="lg:col-span-2">
           <div className="flex items-center gap-3">
-            <span className="grid size-10 place-items-center rounded-lg bg-emerald-500/20 text-emerald-400">
-              <ShieldCheck className="size-5" />
+            <span className="flex size-10 items-center justify-center rounded-lg bg-emerald-500/20 p-1 shadow-sm">
+              <img src="/logo.png" alt="NEXGI Logo" className="size-full object-contain" />
             </span>
             <span>
               <span className="block text-[16px] font-extrabold tracking-tight text-white">NEXGI</span>

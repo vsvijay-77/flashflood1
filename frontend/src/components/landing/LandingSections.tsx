@@ -5,7 +5,7 @@ const STEPS = [
   { n: "01", title: "Data Collection", icon: Satellite, body: "IoT environmental sensor nodes collect rainfall, soil moisture, temperature, water level, smoke and tilt readings from the field." },
   { n: "02", title: "LoRaWAN Communication", icon: Radio, body: "Sensor nodes transmit long-range, low-power data to the nearest LoRaWAN gateway across difficult terrain." },
   { n: "03", title: "Edge Processing", icon: Cpu, body: "Edge AI performs local analysis and continues critical operations during network interruptions." },
-  { n: "04", title: "Cloud + AI", icon: Cloud, body: "Environmental data is processed using machine learning models and a multi-agent intelligence system." },
+  { n: "04", title: "Cloud Analytics", icon: Cloud, body: "Environmental data is processed using machine learning models and an ensemble intelligence system." },
   { n: "05", title: "GIS + Digital Twin", icon: Map, body: "Data is visualized geographically and through Digital Twin simulations of hazard propagation." },
   { n: "06", title: "Early Warning", icon: Bell, body: "Authorities receive actionable alerts, risk scores and response recommendations in real time." },
 ];
@@ -61,10 +61,10 @@ const LAYERS = [
   },
   {
     id: "agents",
-    title: "Multi-Agent System",
+    title: "Intelligence System",
     icon: Brain,
     items: ["Prediction Agent", "Alert Agent", "Risk Assessment Agent", "Decision Making Agent", "Adaptive Learning Agent"],
-    models: ["AI Orchestrator", "LLM", "Qdrant Vector DB", "Redis", "LangChain", "LangGraph", "HuggingFace"],
+    models: ["Orchestration Engine", "LLM", "Qdrant Vector DB", "Redis", "LangChain", "LangGraph", "HuggingFace"],
   },
   {
     id: "twin",
@@ -77,7 +77,7 @@ const LAYERS = [
     id: "gis",
     title: "Application Layer",
     icon: MonitorSmartphone,
-    items: ["Risk Assessment Dashboard", "AI Decision Support", "Interactive Hazard Mapping"],
+    items: ["Risk Assessment Dashboard", "Decision Support Interface", "Interactive Hazard Mapping"],
     models: ["Mobile: Real-Time Alerts", "Mobile: Evacuation Guidance", "Mobile: Safety Recommendations"],
   },
 ];

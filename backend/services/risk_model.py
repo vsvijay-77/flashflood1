@@ -105,6 +105,15 @@ class FloodRiskEngine:
     def __init__(self):
         self.model = GNNTransformerFloodModel(node_features=8, hidden_dim=32)
         self.model.eval()
+        self.transformer_predictor = None
+        checkpoint_path = "backend/ml/checkpoints/best_flood_transformer.pt"
+        try:
+            from backend.ml.inference.eval_flood_transformer import FloodTransformerPredictor
+            import os
+            if os.path.exists(checkpoint_path):
+                self.transformer_predictor = FloodTransformerPredictor(checkpoint_path=checkpoint_path, device="cpu")
+        except Exception:
+            self.transformer_predictor = None
 
     def predict_graph_risk(
         self,

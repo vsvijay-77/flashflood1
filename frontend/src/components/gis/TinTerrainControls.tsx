@@ -33,6 +33,7 @@ import {
   Cpu,
   Zap,
   Activity,
+  X,
 } from "lucide-react";
 import type { TinTerrainData } from "@/services/tinTerrain";
 
@@ -55,6 +56,8 @@ export interface TinTerrainControlsProps {
   onChangeOpacity: (val: number) => void;
   onChangeExaggeration: (val: number) => void;
   onRefresh: () => void;
+  onClose?: () => void;
+  className?: string;
 }
 
 export function TinTerrainControls({
@@ -76,6 +79,8 @@ export function TinTerrainControls({
   onChangeOpacity,
   onChangeExaggeration,
   onRefresh,
+  onClose,
+  className,
 }: TinTerrainControlsProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -86,7 +91,10 @@ export function TinTerrainControls({
   return (
     <div
       data-testid="tin-terrain-panel"
-      className="absolute top-[93px] right-3 z-30 w-80 rounded-xl bg-slate-950/95 border border-cyan-500/50 backdrop-blur-md shadow-2xl text-white animate-in fade-in slide-in-from-right-2 duration-300 pointer-events-auto"
+      className={
+        className ||
+        "absolute top-[68px] right-3 z-50 w-80 rounded-xl bg-slate-950/95 border border-cyan-500/50 backdrop-blur-md shadow-2xl text-white animate-in fade-in slide-in-from-right-2 duration-300 pointer-events-auto"
+      }
     >
       {/* Header Bar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800/80">
@@ -138,6 +146,17 @@ export function TinTerrainControls({
           >
             {collapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
           </button>
+          {onClose && (
+            <button
+              type="button"
+              data-testid="close-tin-tab-btn"
+              onClick={onClose}
+              title="Close TIN Terrain Tab"
+              className="size-7 rounded-lg flex items-center justify-center text-slate-200 hover:text-white bg-slate-800/90 hover:bg-rose-600 border border-slate-700/80 hover:border-rose-500 transition-all cursor-pointer ml-1 shadow-sm active:scale-95 z-20 shrink-0"
+            >
+              <X className="size-4 text-white" />
+            </button>
+          )}
         </div>
       </div>
 

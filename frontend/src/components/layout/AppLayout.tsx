@@ -27,7 +27,7 @@ const MAIN_NAV: NavItem[] = [
   { label: "GIS Monitoring", to: "/gis", icon: Map, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
   { label: "Digital Twin", to: "/digital-twin", icon: Boxes, allow: ["admin", "gov_officer"] },
   { label: "SOS Alerts", to: "/sos-alerts", icon: ShieldAlert, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
-  { label: "AI Risk Assessment", to: "/risk", icon: Gauge, allow: ["admin", "gov_officer"] },
+  { label: "Risk Assessment", to: "/risk", icon: Gauge, allow: ["admin", "gov_officer"] },
   { label: "Alerts", to: "/alerts", icon: AlertTriangle, allow: ["admin", "gov_officer", "field_officer"] },
   { label: "Analytics", to: "/analytics", icon: BarChart3, allow: ["admin", "gov_officer"] },
   { label: "Reports", to: "/reports", icon: FileText, allow: ["admin", "gov_officer", "field_officer", "viewer"] },
@@ -216,8 +216,8 @@ export default function AppLayout() {
       >
         <div className={cn("flex items-center border-b border-white/10 py-4", collapsed ? "flex-col gap-4 px-2" : "justify-between px-4")}>
           <div className="flex items-center gap-3">
-            <Link to="/dashboard" className="grid size-9 shrink-0 place-items-center rounded-lg bg-white/10 text-white" data-testid="sidebar-logo">
-              <ShieldCheck className="size-5" />
+            <Link to="/dashboard" className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/10 p-1 hover:bg-white/15 transition-colors" data-testid="sidebar-logo">
+              <img src="/logo.png" alt="NEXGI Logo" className="size-full object-contain" />
             </Link>
             {!collapsed ? (
               <span className="min-w-0 leading-none">
@@ -262,6 +262,11 @@ export default function AppLayout() {
             <Button variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setMobileOpen(true)} data-testid="header-mobile-menu-btn" aria-label="Open navigation">
               <Menu className="size-5" />
             </Button>
+
+            <Link to="/dashboard" className="flex items-center gap-2 lg:hidden" data-testid="header-mobile-logo">
+              <img src="/logo.png" alt="NEXGI" className="size-6 object-contain" />
+              <span className="font-black text-sm tracking-wide text-[#0B2545]">NEXGI</span>
+            </Link>
 
             <nav className="hidden shrink-0 items-center gap-2 text-sm sm:flex" data-testid="header-breadcrumb">
               <Link to="/dashboard" className="text-slate-500 hover:text-[#0F4C81]">Platform</Link>
@@ -460,7 +465,7 @@ export default function AppLayout() {
                         <span>Zone: {alert.zone_name || "Basin Area"}</span>
                         <span>Soil Moisture: {alert.soil_moisture ?? 0}%</span>
                         <span>Water Level: {alert.water_level_mm ?? 0} mm</span>
-                        <span>Tilt: {alert.tilt ?? 0}°</span>
+                        <span>Tilt: {alert.tilt != null && alert.tilt <= 99 && alert.tilt > 0 ? `Tilt (${alert.tilt}°)` : `No Tilt (${alert.tilt ?? 100}°)`}</span>
                         <span>IMU: {alert.imu_mag ?? 0}g</span>
                       </div>
                     </div>

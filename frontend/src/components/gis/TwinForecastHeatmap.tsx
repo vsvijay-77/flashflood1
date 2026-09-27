@@ -1,17 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiPost, ApiError } from "@/lib/api";
+import { hazardColor } from "../simulation/waterRisk";
 
 declare const Cesium: any;
 type Frame = { time: string; precipitation: number; temperature_2m: number; relative_humidity_2m: number; wind_speed_10m: number; scores: number[] };
 type Forecast = { mode: string; source: string; fetched_at: string; frames: Frame[]; size: number };
+const forecastCache = new Map<string, { at: number; forecast: Forecast }>();
+const frameCache = new WeakMap<Forecast, Map<number, string>>();
+const isMeasuredHeight = (height: unknown): height is number => typeof height === "number" && Number.isFinite(height) && height >= -500 && height <= 9000;
 type Props = {
   viewer: any;
   polygon: [number, number][];
   selectedHour?: number;
   onSelectedHourChange?: (hour: number) => void;
+  onFrameTimesChange?: (times: string[]) => void;
   opacity?: number;
   hideCard?: boolean;
 };
+
+export function validateForecast(value: Forecast): Forecast {
+  if (!Number.isInteger(value?.size) || value.size < 2 || value.size > 21 || !Array.isArray(value.frames) || !value.frames.length
+    || value.frames.some(frame => !Number.isFinite(Date.parse(frame.time))
+      || ![frame.precipitation, frame.temperature_2m, frame.relative_humidity_2m, frame.wind_speed_10m].every(Number.isFinite)
+      || !Array.isArray(frame.scores) || frame.scores.length !== value.size * value.size
+      || frame.scores.some(score => !Number.isFinite(score) || score < 0 || score > 1))) {
+    throw new Error("Forecast data is incomplete. Retry to load the heatmap.");
+  }
+  return value;
+}
+
+export function forecastFrameIndex(hour: number, count: number) {
+  return Math.max(0, Math.min(Math.max(0, count - 1), Number.isFinite(hour) ? Math.floor(hour) : 0));
+}
 
 // Rows run south to north; the image runs north to south.
 export function surfaceImage(
@@ -19,63 +39,30 @@ export function surfaceImage(
   bounds: number[],
   scores: number[],
   size: number,
-  elevations?: number[]
+  _elevations?: number[],
+  resolution = 512
 ) {
+  if (scores.length !== size * size || scores.some(score => !Number.isFinite(score))) throw new Error("Incomplete heatmap scores");
   const [south, north, west, east] = bounds;
   const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 512;
+  canvas.width = canvas.height = resolution;
   const ctx = canvas.getContext("2d")!;
-  const pixels = ctx.createImageData(512, 512);
+  const pixels = ctx.createImageData(resolution, resolution);
 
-  let effectiveScores = scores;
-  const finiteScores = scores.filter(Number.isFinite);
-  const maxInitialScore = finiteScores.length > 0 ? Math.max(...finiteScores) : 0;
-
-  // When weather prediction scores are zero or dry, derive flood inundation zones from terrain elevations (valleys & basins)
-  if (maxInitialScore <= 0.01 && elevations && elevations.length === size * size) {
-    const validElevs = elevations.filter(Number.isFinite);
-    if (validElevs.length > 0) {
-      const minElev = Math.min(...validElevs);
-      const maxElev = Math.max(...validElevs);
-      const elevRange = Math.max(1, maxElev - minElev);
-      effectiveScores = elevations.map((h) => {
-        if (!Number.isFinite(h)) return 0;
-        const rel = (h - minElev) / elevRange;
-        // Invert relative elevation: low valley floor and drainage channels are marked as high flood areas (score -> 1.0),
-        // smoothly continuous down to 0.0 at the highest terrain points, ensuring the full area is covered.
-        return Math.max(0, Math.min(1, 1 - rel));
-      });
-    }
-  }
-
-  // Dynamic range calibration: ensures river flood areas scale to the red hazard zone
-  const maxScore = Math.max(...effectiveScores.filter(Number.isFinite), 0.001);
-  const minScore = Math.min(...effectiveScores.filter(Number.isFinite), 0);
-  const range = Math.max(0.001, maxScore - minScore);
-
-  for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
-    const gx = x / 511 * (size - 1), gy = (1 - y / 511) * (size - 1);
+  // Absolute forecast scale: dry terrain must not be painted as inundation.
+  const effectiveScores = scores.map(score => Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0);
+  for (let y = 0; y < resolution; y++) for (let x = 0; x < resolution; x++) {
+    const gx = x / (resolution - 1) * (size - 1), gy = (1 - y / (resolution - 1)) * (size - 1);
     const col = Math.min(size - 2, Math.floor(gx)), row = Math.min(size - 2, Math.floor(gy));
     const fx = gx - col, fy = gy - row;
     const rawVal = (effectiveScores[row * size + col] * (1 - fx) + effectiveScores[row * size + col + 1] * fx) * (1 - fy)
       + (effectiveScores[(row + 1) * size + col] * (1 - fx) + effectiveScores[(row + 1) * size + col + 1] * fx) * fy;
 
-    // Relative hazard scaling: maps the highest flood accumulation areas to 0.75-1.0 (Vivid Red)
-    const norm = range > 0.0001 ? Math.max(0, Math.min(1, (rawVal - minScore) / range)) : 0;
-    const value = Math.max(rawVal, Math.pow(norm, 0.7));
-
-    // Fixed index scale: blue -> cyan -> orange -> vivid red (marking flood area in red).
-    const stops = [
-      [37, 99, 235],  // Blue (Low Hazard)
-      [6, 182, 212],  // Cyan (Moderate-Low)
-      [234, 88, 12],  // Orange (Moderate-High)
-      [220, 38, 38],  // Vivid Red (High Flood Inundation)
-    ];
-    const v = Math.max(0, Math.min(1, value)) * 3, i = Math.min(2, Math.floor(v));
-    const offset = (y * 512 + x) * 4;
-    for (let c = 0; c < 3; c++) pixels.data[offset + c] = Math.round(stops[i][c] * (1 - (v - i)) + stops[i + 1][c] * (v - i));
-    // Full area coverage: every pixel inside the monitored area receives visible alpha so the whole area is covered
-    pixels.data[offset + 3] = Math.round(180 + Math.min(1, value) * 65);
+    const value = Math.max(0, Math.min(1, rawVal));
+    const offset = (y * resolution + x) * 4;
+    pixels.data.set(hazardColor(value), offset);
+    // Show the full area: minimum alpha 60 for zero-risk cells so the entire polygon is always visible
+    pixels.data[offset + 3] = Math.max(60, Math.round(245 * Math.min(1, value * 3)));
   }
   ctx.putImageData(pixels, 0, 0);
 
@@ -84,9 +71,18 @@ export function surfaceImage(
     ctx.beginPath();
     const dLng = Math.max(1e-7, east - west);
     const dLat = Math.max(1e-7, north - south);
-    polygon.forEach(([lat, lng], i) => {
-      const x = (lng - west) / dLng * 512, y = (north - lat) / dLat * 512;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    // Expand each vertex by 2px toward outside so edge pixels are fully included
+    const pxs = polygon.map(([lat, lng]) => ({
+      x: (lng - west) / dLng * resolution,
+      y: (north - lat) / dLat * resolution,
+    }));
+    const cx = pxs.reduce((s, p) => s + p.x, 0) / pxs.length;
+    const cy = pxs.reduce((s, p) => s + p.y, 0) / pxs.length;
+    pxs.forEach((p, i) => {
+      const dx = p.x - cx, dy = p.y - cy;
+      const len = Math.max(1, Math.hypot(dx, dy));
+      const ex = p.x + (dx / len) * 2, ey = p.y + (dy / len) * 2;
+      if (i === 0) ctx.moveTo(ex, ey); else ctx.lineTo(ex, ey);
     });
     ctx.closePath();
     ctx.fillStyle = "#ffffff";
@@ -100,6 +96,7 @@ export default function TwinForecastHeatmap({
   polygon,
   selectedHour,
   onSelectedHourChange,
+  onFrameTimesChange,
   opacity: externalOpacity,
   hideCard,
 }: Props) {
@@ -111,7 +108,7 @@ export default function TwinForecastHeatmap({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [localHour, setLocalHour] = useState(0);
-  const hour = selectedHour ?? localHour;
+  const hour = forecastFrameIndex(selectedHour ?? localHour, forecast?.frames.length ?? 0);
   const setHour = (next: number) => {
     setLocalHour(next);
     onSelectedHourChange?.(next);
@@ -121,46 +118,65 @@ export default function TwinForecastHeatmap({
   const opacity = externalOpacity ?? localOpacity;
   const setOpacity = setLocalOpacity;
   const layerRef = useRef<any>(null);
-  const elevationsRef = useRef<number[]>([]);
+
   const opacityRef = useRef(opacity);
   opacityRef.current = opacity;
   const [refresh, setRefresh] = useState(0);
+  useEffect(() => { onFrameTimesChange?.(forecast?.frames.map(frame => frame.time) ?? []); }, [forecast, onFrameTimesChange]);
   useEffect(() => {
     setForecast(null); setError(""); setHour(0);
     if (!viewer || viewer.isDestroyed() || area.length < 3) return;
     const controller = new AbortController();
     let cancelled = false;
     const timer = window.setTimeout(() => { cancelled = true; controller.abort(); setLoading(false); setError("Terrain or weather request timed out. Retry to load the heatmap."); }, 60000);
+    const cached = forecastCache.get(areaKey);
+    if (refresh === 0 && cached && Date.now() - cached.at < 300000) {
+      window.clearTimeout(timer); setForecast(cached.forecast); setLoading(false);
+      return () => { cancelled = true; controller.abort(); };
+    }
     setLoading(true);
     (async () => {
       const [south, north, west, east] = bounds;
-      if (!(north > south && east > west && north - south <= 0.5 && east - west <= 0.5)) throw new Error("Select a smaller area to load the terrain forecast.");
-      const provider = viewer.scene?.terrainProvider;
+      // Allow up to 1.0° areas so large monitored zones get full coverage
+      if (!(north > south && east > west && north - south <= 1.0 && east - west <= 1.0)) throw new Error("Select an area smaller than 1 degree to load the terrain forecast.");
+      const provider = viewer.terrainProvider ?? viewer.scene?.terrainProvider;
+      if (!provider || provider instanceof Cesium.EllipsoidTerrainProvider) throw new Error("Terrain elevations are unavailable. Load terrain and retry.");
       if (provider?.readyPromise) {
         try { await provider.readyPromise; } catch { /* ignore */ }
       }
+      // Use maximum 21×21 grid = 441 points for dense, full-area coverage
       const size = 21;
       const positions = Array.from({ length: size * size }, (_, i) => Cesium.Cartographic.fromDegrees(
         west + (i % size) / (size - 1) * (east - west), south + Math.floor(i / size) / (size - 1) * (north - south)));
-      let elevations: number[] = [];
-      try {
-        if (provider && Cesium.sampleTerrainMostDetailed) {
-          const terrain = await Cesium.sampleTerrainMostDetailed(provider, positions);
-          elevations = terrain.map((p: any) => p?.height);
-        }
-      } catch (err) {
-        console.warn("Terrain sampling with sampleTerrainMostDetailed failed, falling back to globe elevation:", err);
-      }
-      if (elevations.length !== positions.length || elevations.some((h: number) => !Number.isFinite(h))) {
-        elevations = positions.map(pos => {
-          const h = viewer.scene?.globe?.getHeight ? viewer.scene.globe.getHeight(pos) : undefined;
-          return Number.isFinite(h) ? h! : 250;
-        });
+
+      // Fast path: reuse already-loaded Cesium globe tile heights (zero network cost)
+      let elevations = positions.map(pos => viewer.scene?.globe?.getHeight?.(pos));
+      const hasMissing = elevations.some(h => !isMeasuredHeight(h));
+
+      if (hasMissing && provider && !(provider instanceof Cesium.EllipsoidTerrainProvider)) {
+        let terrainTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          // Bounded coarse terrain fetch for the weather/terrain estimate.
+          const terrain: any = await Promise.race([
+            Cesium.sampleTerrain(provider, 8, positions),
+            new Promise((_, reject) => { terrainTimer = setTimeout(() => reject(new Error("Terrain sampling timed out")), 2000); }),
+          ]);
+          elevations = terrain.map((p: any, i: number) => isMeasuredHeight(p?.height) ? p.height : elevations[i]);
+        } catch {
+          // Keep measured globe heights; incomplete coverage is reported below.
+        } finally { clearTimeout(terrainTimer); }
       }
       if (cancelled) return;
-      elevationsRef.current = elevations;
-      const result = await apiPost<Forecast>("/digital-twin/surface-forecast", { south, north, west, east, size, elevations }, { signal: controller.signal });
-      if (!cancelled) setForecast(result);
+
+      // Missing terrain cannot be inferred from camera altitude or a flat mean.
+      if (elevations.some(h => !isMeasuredHeight(h))) throw new Error("Terrain coverage is incomplete or outside supported elevations. Retry once the area is loaded.");
+
+      const result = validateForecast(await apiPost<Forecast>("/digital-twin/surface-forecast", { south, north, west, east, size, elevations }, { signal: controller.signal }));
+      if (!cancelled) {
+        if (forecastCache.size >= 8) forecastCache.delete(forecastCache.keys().next().value!);
+        forecastCache.set(areaKey, { at: Date.now(), forecast: result });
+        setForecast(result);
+      }
     })().catch(err => {
       if (!cancelled) {
         console.error("[TwinForecastHeatmap] Forecast fetch error:", err);
@@ -174,31 +190,47 @@ export default function TwinForecastHeatmap({
   useEffect(() => {
     if (!viewer || viewer.isDestroyed() || !forecast || !visible) return;
     let disposed = false;
-    let layer: any;
     const [south, north, west, east] = bounds;
-    const frame = forecast.frames?.[hour] ?? forecast.frames?.[0];
+    const frame = forecast.frames[hour];
     if (!frame?.scores) return;
-    const url = surfaceImage(area, bounds, frame.scores, forecast.size, elevationsRef.current);
+    let images = frameCache.get(forecast);
+    if (!images) { images = new Map(); frameCache.set(forecast, images); }
+    let url = images.get(hour);
+    if (!url) {
+      url = surfaceImage(area, bounds, frame.scores, forecast.size, undefined, 512);
+      if (images.size >= 12) images.delete(images.keys().next().value!);
+      images.set(hour, url);
+    }
     Cesium.SingleTileImageryProvider.fromUrl(url, {
       rectangle: Cesium.Rectangle.fromDegrees(west, south, east, north),
       credit: "Weather: Open-Meteo",
     }).then((provider: any) => {
       if (disposed || viewer.isDestroyed()) return;
-      layer = viewer.imageryLayers.addImageryProvider(provider);
+      const previous = layerRef.current;
+      const layer = viewer.imageryLayers.addImageryProvider(provider);
       layerRef.current = layer;
       layer.alpha = opacityRef.current;
       viewer.imageryLayers.raiseToTop(layer);
+      if (previous) viewer.imageryLayers.remove(previous, true);
       viewer.scene.requestRender();
+      setError("");
     }).catch((err: any) => {
       console.error("[TwinForecastHeatmap] fromUrl error:", err);
       if (!disposed) setError("Unable to render the surface heatmap.");
     });
-    return () => {
-      disposed = true;
-      if (layerRef.current === layer) layerRef.current = null;
-      if (layer && !viewer.isDestroyed()) { viewer.imageryLayers.remove(layer, true); viewer.scene.requestRender(); }
-    };
+    return () => { disposed = true; };
   }, [viewer, forecast, hour, visible, area, bounds]);
+
+  // Keep the previous hour visible until its replacement has loaded. Area
+  // changes, refreshes, hiding and unmounting still remove the old layer.
+  const hasForecast = !!forecast;
+  useEffect(() => () => {
+    if (layerRef.current && viewer && !viewer.isDestroyed()) {
+      viewer.imageryLayers.remove(layerRef.current, true);
+      viewer.scene.requestRender();
+    }
+    layerRef.current = null;
+  }, [viewer, area, visible, hasForecast]);
 
   useEffect(() => {
     if (layerRef.current && viewer && !viewer.isDestroyed()) {
@@ -208,7 +240,10 @@ export default function TwinForecastHeatmap({
   }, [opacity, viewer]);
 
   const frame = forecast?.frames[hour];
-  if (hideCard) return null;
+  if (hideCard) return loading || error ? <div role="status" className="absolute top-28 left-3 z-30 max-w-72 rounded-lg bg-slate-950/95 p-3 text-xs text-cyan-100">
+    {loading ? "Loading terrain and hourly weather estimate…" : error}
+    {error && <button className="ml-2 underline" onClick={() => setRefresh(x => x + 1)}>Retry heatmap</button>}
+  </div> : null;
   return <section className="absolute top-[405px] left-3 z-30 w-64 max-h-[calc(100%-26rem)] overflow-y-auto rounded-xl border border-cyan-500/50 bg-slate-950 opacity-100 p-3 text-xs text-slate-100 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-200 custom-dt-scrollbar" aria-label="Weather forecast surface heatmap" onKeyDown={e => e.stopPropagation()} onKeyUp={e => e.stopPropagation()}>
     <div className="flex items-center justify-between gap-2">
       <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={visible} onChange={e => setVisible(e.target.checked)} /> Forecast heatmap</label>
@@ -223,7 +258,7 @@ export default function TwinForecastHeatmap({
       </label>
       <div className="grid grid-cols-2 gap-1 text-slate-300"><span>Rain {frame.precipitation.toFixed(1)} mm/h</span><span>{frame.temperature_2m.toFixed(1)} °C</span><span>Humidity {frame.relative_humidity_2m}%</span><span>Wind {frame.wind_speed_10m} km/h</span></div>
       <div className="mt-2 h-2 rounded bg-gradient-to-r from-blue-600 via-cyan-500 via-35% to-red-600" style={{ background: "linear-gradient(to right,#2563eb,#06b6d4,#ea580c,#dc2626)" }} />
-      <div className="mt-1 flex justify-between text-[10px]"><span>Low · 0</span><span>Relative hazard index</span><span className="text-red-400 font-bold">Flood Area · 1</span></div>
+      <div className="mt-1 flex justify-between text-[10px]"><span>Low · 0</span><span>Forecast hazard index</span><span className="text-red-400 font-bold">High · 1</span></div>
       <label className="mt-2 flex items-center gap-2">Opacity<input aria-label="Heatmap opacity" className="w-full accent-cyan-400" type="range" min={0.1} max={1.0} step={0.05} value={opacity} onChange={e => setOpacity(Number(e.target.value))} /></label>
       <p className="mt-2 text-[10px] text-slate-400"><a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline">Open-Meteo</a> · fetched {new Date(forecast.fetched_at).toLocaleTimeString()} · area-centre weather; local terrain variation. Not a calibrated flood probability.</p>
     </>}

@@ -3,8 +3,8 @@ import { clampFloodPlaybackSpeed, floodPlaybackRate, floodPlaybackSpeeds } from 
 import { WaterPhysicsSimulation } from "./waterPhysics";
 
 describe("retuned flood playback", () => {
-  it("preserves a slow 1× and moves the former 60× pace to the 10× preset", () => {
-    expect(floodPlaybackSpeeds.map(floodPlaybackRate)).toEqual([0.5, 1, 6, 12, 30, 60]);
+  it("preserves starting speed at 2× and increases the 10× preset pace to 120×", () => {
+    expect(floodPlaybackSpeeds.map(floodPlaybackRate)).toEqual([0.5, 2, 6, 12, 30, 120]);
     expect(floodPlaybackSpeeds.at(-1)).toBe(10);
     for (const speed of floodPlaybackSpeeds) {
       const sim = new WaterPhysicsSimulation({ cols: 1, rows: 1, dx: 10 }, [0]);
@@ -14,9 +14,9 @@ describe("retuned flood playback", () => {
   });
   it("bounds external speed requests and interpolates intermediate settings", () => {
     expect(clampFloodPlaybackSpeed(60)).toBe(10);
-    expect(floodPlaybackRate(60)).toBe(60);
+    expect(floodPlaybackRate(60)).toBe(120);
     expect(floodPlaybackRate(-1)).toBe(0.5);
-    expect(floodPlaybackRate(NaN)).toBe(1);
+    expect(floodPlaybackRate(NaN)).toBe(2);
     expect(floodPlaybackRate(4)).toBe(21);
   });
 });

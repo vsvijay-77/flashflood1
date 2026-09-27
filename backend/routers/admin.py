@@ -341,11 +341,28 @@ async def send_mob_user_alert(
         except Exception:
             pass
 
+        # 6. Execute real Twilio Telephony (Voice Call & SMS) if selected in channels
+        telephony_res = None
+        phone_num = target_user.get("phone_number") or ""
+        if phone_num and any(ch.lower() in ["call", "voice", "message", "sms"] for ch in (payload.channels or [])):
+            try:
+                from services.twilio_service import dispatch_telephony_alert
+                telephony_res = await dispatch_telephony_alert(
+                    phone_number=phone_num,
+                    channels=payload.channels or ["call", "message"],
+                    title=payload.title,
+                    detail=payload.detail,
+                    hazard_type=payload.hazard_type,
+                )
+            except Exception as tel_err:
+                print(f"[Telephony Alert] Error dispatching to {phone_num}: {tel_err}")
+
         return {
             "status": "ok",
             "message": f"Alert successfully dispatched to {target_user.get('full_name') or 'Citizen'}",
             "alert": alert_data,
             "mob_alert": mob_alert_doc,
+            "telephony": telephony_res,
         }
     except HTTPException:
         raise
@@ -477,11 +494,33 @@ async def broadcast_mob_user_alert(
             "created_at": datetime.now(timezone.utc),
         })
 
+        # Trigger real Twilio Telephony broadcasts (Voice Calls & SMS) in background tasks
+        telephony_recipients = 0
+        if any(ch.lower() in ["call", "voice", "message", "sms"] for ch in (payload.channels or [])):
+            try:
+                from services.twilio_service import dispatch_telephony_alert
+                for u in target_users:
+                    p_num = u.get("phone_number") or ""
+                    if p_num:
+                        telephony_recipients += 1
+                        asyncio.create_task(
+                            dispatch_telephony_alert(
+                                phone_number=p_num,
+                                channels=payload.channels,
+                                title=payload.title,
+                                detail=payload.detail,
+                                hazard_type=payload.hazard_type,
+                            )
+                        )
+            except Exception as tel_broadcast_err:
+                print(f"[Telephony Broadcast] Error scheduling alerts: {tel_broadcast_err}")
+
         target_label = f"Citizens in {payload.monitored_area}" if payload.target == "monitored_zone" else "All Citizens" if payload.target == "all" else "Selected Citizens"
         return {
             "status": "ok",
             "message": f"Successfully dispatched emergency alert to {dispatched_count} {target_label} via {', '.join(payload.channels)}",
             "dispatched_count": dispatched_count,
+            "telephony_broadcast_count": telephony_recipients,
             "target": payload.target,
             "monitored_area": payload.monitored_area,
             "saved_to_db": "mob_alerts",

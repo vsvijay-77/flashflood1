@@ -379,7 +379,7 @@ def _build_fallbacks() -> dict[str, dict]:
             "isFallback": False,
         },
         "rainfall": {
-            "tileUrl": radar_url,
+            "tileUrl": "/api/gee/tiles/rainfall/{z}/{x}/{y}.png",
             "timestamp": radar_ts,
             "isFallback": False,
             "isForecast": False,

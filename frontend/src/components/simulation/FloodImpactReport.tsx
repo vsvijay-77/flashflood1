@@ -164,11 +164,13 @@ function FloodImpactReportContent({
           >
             {/* Header */}
             <header className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/90 px-6 py-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-cyan-950 border border-cyan-700/60 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider text-cyan-300">
-                    Official Standard Report
-                  </span>
+              <div className="flex items-center gap-3.5">
+                <img src="/logo.png" alt="NEXGI Logo" className="size-11 object-contain shrink-0 rounded-lg bg-white/5 p-1 border border-slate-700/60" />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-cyan-950 border border-cyan-700/60 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider text-cyan-300">
+                      Official Standard Report
+                    </span>
                   <span className="font-mono text-xs text-slate-400">{cover.reportRef}</span>
                   <span
                     className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
@@ -189,6 +191,7 @@ function FloodImpactReportContent({
                   {cover.preparedBy} · Event Date: {cover.eventDate}
                 </p>
               </div>
+            </div>
 
               <div className="flex items-center gap-2">
                 {isOnReportsPage ? (

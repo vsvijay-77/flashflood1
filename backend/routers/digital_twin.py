@@ -872,15 +872,16 @@ class SurfaceForecastRequest(BaseModel):
     north: float = Field(ge=-85, le=85, allow_inf_nan=False)
     west: float = Field(ge=-180, le=180, allow_inf_nan=False)
     east: float = Field(ge=-180, le=180, allow_inf_nan=False)
-    size: int = Field(ge=3, le=21)
+    size: int = Field(ge=3, le=21)  # max 21×21 = 441 for full-area coverage
     elevations: List[float] = Field(min_length=9, max_length=441)
 
 
 @router.post("/surface-forecast")
 async def surface_forecast(request: SurfaceForecastRequest):
     from services import twin_forecast
-    if not (0 < request.north - request.south <= 0.5 and 0 < request.east - request.west <= 0.5):
-        raise HTTPException(status_code=422, detail="Select an area smaller than 0.5 degrees with valid bounds.")
+    # Allow up to 1.0° so large monitored zones get full-area heatmap coverage
+    if not (0 < request.north - request.south <= 1.0 and 0 < request.east - request.west <= 1.0):
+        raise HTTPException(status_code=422, detail="Select an area smaller than 1 degree with valid bounds.")
     if len(request.elevations) != request.size ** 2 or any(
         not math.isfinite(h) or not -500 <= h <= 9000 for h in request.elevations
     ):

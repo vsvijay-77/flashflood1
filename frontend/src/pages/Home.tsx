@@ -23,6 +23,7 @@ export default function Home() {
         <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:gap-8 lg:px-8">
           <div className="z-10">
             <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-400">
+              <img src="/logo.png" alt="NEXGI" className="size-4 object-contain" />
               NEXGI · ENVIRONMENTAL INTELLIGENCE NETWORK
             </span>
 
@@ -33,7 +34,7 @@ export default function Home() {
             </h1>
 
             <p className="mt-6 max-w-xl text-base leading-relaxed text-slate-300">
-              A unified environmental intelligence network connecting remote sensors, LoRaWAN communication, AI-driven risk prediction, GIS mapping, and Digital Twins to help authorities detect, understand, and respond to environmental threats in real time.
+              A unified environmental intelligence network connecting remote sensors, LoRaWAN communication, predictive risk modeling, GIS mapping, and Digital Twins to help authorities detect, understand, and respond to environmental threats in real time.
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-4">
@@ -46,7 +47,7 @@ export default function Home() {
               {[
                 "Real-Time Monitoring", 
                 "📡 Remote LoRaWAN Coverage", 
-                "🧠 AI-Powered Prediction", 
+                "🧠 Predictive Risk Analysis", 
                 "🗺 India-Scale GIS Intelligence"
               ].map((strip, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -119,7 +120,7 @@ export default function Home() {
                 icon: Brain,
                 title: "Move from monitoring events to anticipating them.",
                 desc: "Machine learning and anomaly detection models continuously analyze environmental patterns and sensor behavior to generate dynamic hazard probabilities and early risk indicators.",
-                tags: ["Random Forest", "Isolation Forest", "CNN Analysis", "Time-Series Detection", "Multi-Agent AI"]
+                tags: ["Random Forest", "Isolation Forest", "CNN Analysis", "Time-Series Detection", "Ensemble Models"]
               },
               {
                 icon: Lock,
@@ -169,7 +170,7 @@ export default function Home() {
               { icon: Mountain, color: "text-amber-400", bg: "bg-amber-400/10", title: "LANDSLIDE DETECTION", desc: "Tilt, acceleration, soil moisture, and terrain intelligence for slope instability monitoring." },
               { icon: CloudRain, color: "text-cyan-400", bg: "bg-cyan-400/10", title: "EXTREME RAINFALL", desc: "Hyperlocal rainfall monitoring and threshold-based warning systems." },
               { icon: Droplets, color: "text-emerald-400", bg: "bg-emerald-400/10", title: "SOIL & ENVIRONMENTAL HEALTH", desc: "Continuous soil moisture and environmental condition monitoring." },
-              { icon: Activity, color: "text-purple-400", bg: "bg-purple-400/10", title: "MULTI-HAZARD INTELLIGENCE", desc: "AI combines multiple environmental indicators to identify complex and emerging compound risks." }
+              { icon: Activity, color: "text-purple-400", bg: "bg-purple-400/10", title: "MULTI-HAZARD INTELLIGENCE", desc: "Ensemble analytics combine multiple environmental indicators to identify complex and emerging compound risks." }
             ].map((hazard, i) => (
               <div key={i} className="group cursor-pointer rounded-2xl border border-slate-700 bg-slate-800/50 p-8 transition-all hover:-translate-y-1 hover:border-slate-500 hover:bg-slate-800 w-full sm:w-[calc(50%-12px)] lg:w-[calc(33.333%-16px)]">
                 <span className={`grid size-12 place-items-center rounded-xl ${hazard.bg} ${hazard.color}`}>
@@ -237,7 +238,7 @@ export default function Home() {
               { name: "CONNECTIVITY LAYER", tech: "LoRa + LoRaWAN", icon: Radio },
               { name: "EDGE INTELLIGENCE", tech: "Raspberry Pi + Local Processing", icon: Cpu },
               { name: "CLOUD INTELLIGENCE", tech: "FastAPI + AI + Data Processing", icon: Cloud },
-              { name: "INTELLIGENCE LAYER", tech: "Machine Learning + Multi-Agent AI", icon: Brain },
+              { name: "INTELLIGENCE LAYER", tech: "Machine Learning + Ensemble Models", icon: Brain },
               { name: "VISUALIZATION LAYER", tech: "GIS + Digital Twin + Command Dashboard", icon: Map }
             ].map((layer, i) => (
               <div key={i} className="flex flex-col items-center">

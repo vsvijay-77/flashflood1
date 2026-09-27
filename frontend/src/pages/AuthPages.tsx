@@ -18,8 +18,8 @@ function AuthVisual({ heading, sub }: { heading: string; sub: string }) {
   return (
     <div className="relative hidden overflow-hidden bg-[#0B2545] p-10 lg:flex lg:flex-col lg:justify-between" data-testid="auth-visual">
       <div className="flex items-center gap-3">
-        <span className="grid size-10 place-items-center rounded-lg bg-white/10 text-white">
-          <ShieldCheck className="size-5" />
+        <span className="flex size-10 items-center justify-center rounded-lg bg-white/10 p-1">
+          <img src="/logo.png" alt="NEXGI Logo" className="size-full object-contain" />
         </span>
         <span>
           <span className="block text-[16px] font-black tracking-wider text-white">NEXGI</span>
@@ -203,8 +203,12 @@ export function LoginPage() {
   };
 
   return (
-    <AuthFrame visual={<AuthVisual heading="Environmental intelligence, one operational picture" sub="Live LoRaWAN telemetry, GIS hazard mapping and AI risk scoring for authorized government officials." />}>
+    <AuthFrame visual={<AuthVisual heading="Environmental intelligence, one operational picture" sub="Live LoRaWAN telemetry, GIS hazard mapping and real-time risk scoring for authorized government officials." />}>
       <Card className="border-slate-200/80 p-8 shadow-sm" data-testid="login-card">
+        <div className="mb-5 flex items-center gap-2.5 lg:hidden">
+          <img src="/logo.png" alt="NEXGI Logo" className="size-8 object-contain" />
+          <span className="text-base font-black tracking-wider text-[#0B2545]">NEXGI</span>
+        </div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Welcome Back</h1>
         <p className="mt-1.5 text-sm text-slate-600">Sign in to access the NEXGI Environmental Intelligence Platform.</p>
 
@@ -310,15 +314,17 @@ export function LoginPage() {
             Register Now
           </Link>
         </p>
-        <div className="mt-4 rounded-lg bg-slate-50 p-3 text-center border border-slate-200/70" data-testid="login-demo-hint">
-          <p className="font-mono text-[11px] text-slate-500 mb-2">Pre-configured test account available</p>
+        <div className="mt-4 rounded-xl bg-gradient-to-br from-[#0F4C81]/8 to-sky-50 p-4 text-center border-2 border-[#0F4C81]/30" data-testid="login-demo-hint">
+          <p className="font-semibold text-[12px] text-slate-600 mb-3">🔓 Demo Access Available</p>
           <button
             type="button"
             onClick={() => handleFillDemo("test@gmail.com", "12345678")}
-            className="w-full text-center text-xs font-sans font-bold text-[#0F4C81] hover:underline cursor-pointer border border-[#0F4C81]/25 py-1.5 px-2 rounded-md bg-white hover:bg-sky-50 transition-colors shadow-2xs"
+            className="w-full text-center text-sm font-bold text-white cursor-pointer py-3 px-4 rounded-lg bg-[#0F4C81] hover:bg-[#0B3A61] transition-all shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2"
           >
-            Fill Demo Credentials
+            <span>⚡</span>
+            <span>Fill Demo Credentials</span>
           </button>
+          <p className="text-[10px] text-slate-400 mt-2 font-mono">test@gmail.com · 12345678</p>
         </div>
       </Card>
     </AuthFrame>
@@ -405,6 +411,10 @@ export function RegisterPage() {
   return (
     <AuthFrame visual={<AuthVisual heading="National disaster management credentialing" sub="Register your department identity to request access to live environmental monitoring and hazard intelligence." />}>
       <Card className="border-slate-200/80 p-8" data-testid="register-card">
+        <div className="mb-5 flex items-center gap-2.5 lg:hidden">
+          <img src="/logo.png" alt="NEXGI Logo" className="size-8 object-contain" />
+          <span className="text-base font-black tracking-wider text-[#0B2545]">NEXGI</span>
+        </div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Create Official Account</h1>
         <p className="mt-1.5 text-sm text-slate-600">Registration is reviewed before restricted systems are unlocked.</p>
 

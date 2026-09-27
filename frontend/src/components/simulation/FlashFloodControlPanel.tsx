@@ -230,11 +230,11 @@ export function FlashFloodControlPanel(props: Props) {
               </button>
             </div>
           </div>
-          <p aria-label="Playback pace explanation" className="mt-2 text-xs text-slate-400">1× is real time; 10× matches the former 60× pace. Selected pace: {floodPlaybackRate(props.speed)} simulated seconds per real second.</p>
+          <p aria-label="Playback pace explanation" className="mt-2 text-xs text-slate-400">Starting speed 1× runs at 2 simulated s/s; 10× runs at 120 simulated s/s. Selected pace: {floodPlaybackRate(props.speed)} simulated seconds per real second.</p>
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             {[["Elapsed", elapsed], ["Water extent", `${props.spreadAreaHectares.toFixed(2)} ha`], ["Maximum depth", `${props.maxDepthM.toFixed(2)} m`], ["Terrain grid", props.gridResolution]].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-900 p-3"><div className="text-slate-400">{label}</div><div className="mt-1 font-mono text-cyan-200">{value}</div></div>)}
           </div>
-          <p className="mt-3 text-xs text-slate-400">Slope comes from the loaded terrain. Include the mountain catchment and village in your selected area. Playback starts immediately. House arrival estimates update in the background. Rooftop countdowns use simulated time and a 10 cm exposure threshold. At 1×, one second of playback advances one simulated second.</p>
+          <p className="mt-3 text-xs text-slate-400">Slope comes from the loaded terrain. Include the mountain catchment and village in your selected area. Playback starts immediately. House arrival estimates update in the background. Rooftop countdowns use simulated time and a 10 cm exposure threshold. At 1×, playback advances 2 simulated seconds per real second.</p>
           <p aria-label="Water performance" className="mt-2 text-xs text-slate-400">{props.fps} FPS · {props.effectiveSpeed.toFixed(1)}× actual speed · {props.osmFeatureCount} mapped water features. Flow is approximated at the available terrain resolution.</p>
         </div>
         <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-700 px-5 py-3">

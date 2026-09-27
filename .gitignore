@@ -1,11 +1,12 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# IDE and editors
+# ─── IDE & Editors ────────────────────────────────────────────────────────────
 .idea/
 .vscode/
 .emergent/
+.gemini/
+*.swp
+*.swo
 
-# Dependencies
+# ─── Node / Frontend Dependencies ─────────────────────────────────────────────
 node_modules/
 /node_modules
 /.pnp
@@ -18,73 +19,81 @@ package-lock.json
 !.yarn/releases
 !.yarn/versions
 
-# Testing
-/coverage
-
-# Next.js
-/.next/
-/out/
-next-env.d.ts
-*.tsbuildinfo
-
-# Production builds
+# ─── Frontend Build Output ─────────────────────────────────────────────────────
 /build
 dist/
 dist
+frontend/dist/
+*.tsbuildinfo
 
-# Environment files (comprehensive coverage)
-
-*token.json*
-*credentials.json*
-
-# Logs and debug files
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-dump.rdb
-
-# System files
-.DS_Store
-*.pem
-
-# Python
+# ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
-*pyc*
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
 .venv/
+env/
+ENV/
 backend/venv
-backend/cache/
-backend/preview_*.png
+backend/.venv
 
-# Logs and local artifacts
-.logs/
-frontend/node_modules.previous/
-frontend/public/cesium/
-frontend/public/cesium
+# ─── Python Testing & Caches ──────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Environment files — NEVER commit these, they hold secrets (JWT_SECRET, API keys, DB URIs).
-# Commit the .env.example templates instead.
+# ─── Environment Files ────────────────────────────────────────────────────────
+# NEVER commit real .env files — they contain secrets (JWT, API keys, DB URIs)
+# Commit .env.example templates instead
 .env
 .env.*
 !.env.example
 backend/.env
 frontend/.env
 
-# Development tools
-chainlit.md
-.chainlit
-.ipynb_checkpoints/
-.ac
+# ─── Credentials & Secrets ────────────────────────────────────────────────────
+*token.json*
+*credentials.json*
+*.pem
+*.key
 
-# Deployment
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dump.rdb
+.logs/
+
+# ─── System Files ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Deployment ───────────────────────────────────────────────────────────────
 .vercel
 
-# Data and databases
-agenthub/agents/youtube/db
+# ─── Frontend Specific ────────────────────────────────────────────────────────
+frontend/node_modules.previous/
+frontend/public/cesium/
+frontend/public/cesium
 
-# Archive files and large assets
+# ─── Testing ──────────────────────────────────────────────────────────────────
+/coverage
+/tests/test-results/
+tests/*.png
+tests/**/*.png
+.playwright/
+
+# ─── Data & Databases ─────────────────────────────────────────────────────────
+backend/cache/
+backend/preview_*.png
+
+# ─── Archive & Large Binary Files ─────────────────────────────────────────────
 **/*.zip
 **/*.tar.gz
 **/*.tar
@@ -93,17 +102,13 @@ agenthub/agents/youtube/db
 *.deb
 *.dylib
 
-# Build caches
+# ─── Build Caches ─────────────────────────────────────────────────────────────
 .cache/
+.oxlintrc-cache/
 
+# ─── Misc Development Artifacts ───────────────────────────────────────────────
+chainlit.md
+.chainlit
+.ipynb_checkpoints/
 memory/test_credentials.md
-
-# Mobile development
 android-sdk/
-
-# Testing workspace artifacts
-/tests/test-results/
-tests/*.png
-tests/**/*.png
-
-

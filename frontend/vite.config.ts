@@ -6,6 +6,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import cesiumModule from "vite-plugin-cesium";
+// The plugin exports an ESM function but ships CommonJS-shaped declarations.
+const cesium = cesiumModule as unknown as typeof cesiumModule.default;
 import tailwindcss from "@tailwindcss/vite";
 
 // Supervisor exports DISABLE_HOT_RELOAD=true when the platform sets ENABLE_RELOAD=false.
@@ -21,6 +24,7 @@ if (!hotReloadDisabled && process.platform === "linux") {
 export default defineConfig({
   plugins: [
     react(),
+    cesium({ devMinifyCesium: true }),
     tailwindcss(),
   ],
   build: {

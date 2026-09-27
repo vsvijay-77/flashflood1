@@ -1,7 +1,5 @@
-# NEXGI — Python Backend Dependencies
-# Vercel Python runtime installs from this file at project root.
-# Only packages actually imported by the backend are listed here.
-# ML/training packages are intentionally excluded to stay within Vercel's 50 MB lambda limit.
+# NEXGI — Production Vercel Serverless Dependencies
+# Lean build optimized to stay strictly under Vercel/AWS Lambda 250MB limit
 
 # ─── Web Framework ────────────────────────────────────────────────────────────
 fastapi>=0.110.0,<1.0.0
@@ -15,10 +13,8 @@ email-validator>=2.2.0
 
 # ─── Authentication & Security ────────────────────────────────────────────────
 pyjwt>=2.10.1
-passlib[bcrypt]>=1.7.4
-bcrypt==4.0.1
-cryptography>=42.0.8
-python-jose>=3.3.0
+passlib>=1.7.4
+bcrypt>=4.0.0
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 supabase>=2.3.0
@@ -28,27 +24,19 @@ pymongo>=4.6.0
 # ─── External Sensor DB (PostgreSQL) ──────────────────────────────────────────
 psycopg[binary]>=3.1.0
 
-# ─── HTTP Clients ─────────────────────────────────────────────────────────────
+# ─── HTTP Clients & External APIs ─────────────────────────────────────────────
 httpx>=0.27.0
 requests>=2.31.0
 requests-oauthlib>=2.0.0
 
-# ─── GIS / Satellite ──────────────────────────────────────────────────────────
+# ─── GIS / Geometry / Math (Optimized runtime) ────────────────────────────────
 Pillow>=10.0.0
 numpy>=1.26.0
 shapely>=2.0.0
 networkx>=3.0
-earthengine-api>=0.1.390
-
-# ─── Data Processing ──────────────────────────────────────────────────────────
-pandas>=2.2.0
 
 # ─── Comms / Telephony ────────────────────────────────────────────────────────
 twilio>=9.0.0
 
-# ─── Vector Search ────────────────────────────────────────────────────────────
-qdrant-client>=1.9.0
-
 # ─── Runtime Utilities ────────────────────────────────────────────────────────
 python-dotenv>=1.0.1
-tzdata>=2024.2

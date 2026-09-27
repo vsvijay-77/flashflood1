@@ -1,4 +1,10 @@
 {
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 30,
+      "excludeFiles": "{frontend/**,node_modules/**,dataset/**,tests/**,dist/**,backend/cache/**,backend/ml/**,backend/tests/**}"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",

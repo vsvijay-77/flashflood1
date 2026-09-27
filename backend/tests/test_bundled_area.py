@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -11,9 +12,9 @@ from services.bundled_area import DIRECTORY, load_bundled_area
 def test_snapshot_is_identical_in_both_deployments_and_contains_real_geometry():
     manifest = json.loads((DIRECTORY / "manifest.json").read_text())
     entry = manifest[0]
-    content = (DIRECTORY / entry["file"]).read_bytes()
+    content = gzip.decompress((DIRECTORY / entry["file"]).read_bytes())
     root = Path(__file__).resolve().parents[2]
-    assert content == (root / "frontend/public/prebaked_zones" / entry["file"]).read_bytes()
+    assert content == (root / "frontend/public/prebaked_zones" / entry["file"].removesuffix(".gz")).read_bytes()
     assert hashlib.sha256(content).hexdigest() == entry["sha256"]
     snapshot = json.loads(content)
     assert entry["counts"] == {"roads": 194, "rivers": 349, "buildings": 2647}

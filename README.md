@@ -161,6 +161,8 @@ every physical house has been mapped. No generated fallback structures are inclu
 The browser loads this file before calling the API. Vite copies it into `dist`,
 so hosting the frontend also hosts the map. A matching backend copy serves the
 same data through `/api/geo/extract-networks` and `/api/geo/extract-buildings`.
+The backend snapshot is losslessly gzip-compressed to fit Vercel's function size
+limit; the loader decompresses it and verifies its checksum before serving it.
 Loading these layers needs no Supabase or OSM connection; other application
 features, basemaps, and terrain can still need their services. Changed boundaries
 use the normal API flow. The manifest checksum versions the static URL and browser

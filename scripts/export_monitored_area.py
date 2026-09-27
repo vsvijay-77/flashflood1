@@ -4,6 +4,7 @@ Run: .venv/bin/python scripts/export_monitored_area.py AREA_UUID
 Requires backend/.env Supabase credentials. Only public map geometry is exported.
 """
 import argparse
+import gzip
 import hashlib
 import json
 import sys
@@ -57,14 +58,19 @@ def export(area_id):
     filename = f"{area_id}.json"
     entry = {"area_id": area_id, "polygon": polygon, "file": filename,
              "sha256": hashlib.sha256(content).hexdigest(), "counts": counts}
-    for directory in [ROOT / "backend/data/prebaked_zones", ROOT / "frontend/public/prebaked_zones"]:
+    backend_directory = ROOT / "backend/data/prebaked_zones"
+    frontend_directory = ROOT / "frontend/public/prebaked_zones"
+    for directory in [backend_directory, frontend_directory]:
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / filename).write_bytes(content)
+    (frontend_directory / filename).write_bytes(content)
+    (backend_directory / f"{filename}.gz").write_bytes(gzip.compress(content, mtime=0))
+    (backend_directory / filename).unlink(missing_ok=True)
     index = ROOT / "backend/data/prebaked_zones/manifest.json"
     manifest = json.loads(index.read_text()) if index.exists() else []
-    manifest = [item for item in manifest if item["area_id"] != area_id] + [entry]
+    manifest = [item for item in manifest if item["area_id"] != area_id] + [{**entry, "file": f"{filename}.gz"}]
     index.write_text(json.dumps(manifest, indent=2) + "\n")
-    (ROOT / "frontend/src/services/bundledAreaManifest.json").write_text(index.read_text())
+    frontend_manifest = [{**item, "file": item["file"].removesuffix(".gz")} for item in manifest]
+    (ROOT / "frontend/src/services/bundledAreaManifest.json").write_text(json.dumps(frontend_manifest, indent=2) + "\n")
     print(json.dumps({"file": filename, "bytes": len(content), "counts": counts}, indent=2))
 
 

@@ -1,4 +1,5 @@
 """Read exported geometry without requiring Supabase or a map provider."""
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -23,9 +24,11 @@ def load_bundled_area(payload):
             elif area_id != entry["area_id"] or any(getattr(payload, field) is not None for field in ("north", "south", "east", "west")):
                 continue
             content = (DIRECTORY / entry["file"]).read_bytes()
+            if entry["file"].endswith(".gz"):
+                content = gzip.decompress(content)
             if hashlib.sha256(content).hexdigest() != entry["sha256"]:
                 return None
             return json.loads(content)
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, EOFError, ValueError, KeyError, TypeError):
         pass
     return None

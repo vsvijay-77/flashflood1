@@ -15,7 +15,7 @@ def test_deployed_bundle_starts_without_optional_ml_packages(tmp_path):
                  if line.strip() and not line.startswith("#")]
     for folder in ("backend", "api"):
         for source in (root / folder).rglob("*"):
-            if not source.is_file() or source.suffix not in {".py", ".json"}:
+            if not source.is_file() or source.suffix not in {".py", ".json", ".gz"}:
                 continue
             relative = source.relative_to(root)
             if any(relative.match(pattern) or relative.as_posix().startswith(pattern.rstrip("*"))

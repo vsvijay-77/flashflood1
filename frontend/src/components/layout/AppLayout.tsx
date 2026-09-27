@@ -67,23 +67,28 @@ function SidebarLinks({ items, role, onNavigate, collapsed }: { items: NavItem[]
 function NotificationMenu() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["notifications"], queryFn: () => apiGet<Notification[]>("/notifications"), retry: false });
+  const [opened, setOpened] = useState(false);
   const list = data ?? [];
-  const unread = list.filter((n) => !n.read).length;
+  const unread = opened ? 0 : list.filter((n) => !n.read).length;
   const readAll = useMutation({
     mutationFn: () => apiPost<{ message: string }>("/notifications/read-all"),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
   });
 
+  const handleOpen = () => {
+    setOpened(true);
+    readAll.mutate();
+  };
+
   return (
     <Popover>
       <PopoverTrigger
+        onClick={handleOpen}
         render={
           <Button variant="ghost" size="icon-sm" className="relative" data-testid="notification-bell-btn" aria-label="Notifications">
             <Bell className="size-5" />
-            {unread > 0 ? (
-              <span className="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-red-600 font-mono text-[9px] font-bold text-white" data-testid="notification-unread-count">
-                {unread}
-              </span>
+            {unread > 0 && !opened ? (
+              <span className="absolute top-1 right-1 size-2 rounded-full bg-red-500 ring-2 ring-white" data-testid="notification-unread-dot" />
             ) : null}
           </Button>
         }
@@ -97,8 +102,8 @@ function NotificationMenu() {
           {list.length === 0 ? (
             <p className="px-4 py-8 text-center text-xs text-slate-500" data-testid="notifications-empty">No notifications yet.</p>
           ) : (
-            list.map((n) => (
-              <div key={n.id} className={cn("border-b border-slate-50 px-4 py-3", !n.read && "bg-sky-50/50")} data-testid={`notification-item-${n.id}`}>
+            list.slice(0, 10).map((n) => (
+              <div key={n.id} className="border-b border-slate-50 px-4 py-3 hover:bg-slate-50 transition-colors" data-testid={`notification-item-${n.id}`}>
                 <p className="text-xs font-semibold text-slate-900">{n.title}</p>
                 <p className="mt-0.5 text-xs text-slate-500">{n.body}</p>
                 <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-slate-400">{n.kind.replace(/_/g, " ")}</p>

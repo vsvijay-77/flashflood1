@@ -158,7 +158,7 @@ async def delete_user(user_id: str, user: dict = Depends(require_roles("admin"))
 
 @router.get("/notifications", response_model=List[Notification])
 async def list_notifications(user: dict = Depends(current_user)):
-    docs = await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).to_list(60)
+    docs = await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).to_list(10)
     return [Notification(**d) for d in docs]
 
 

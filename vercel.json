@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build && echo '=== Prebaked zones in dist ===' && ls -la dist/prebaked_zones/ 2>/dev/null || echo 'No prebaked_zones in dist'",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
     "api/index.py": {
@@ -17,5 +17,5 @@
       "destination": "/index.html"
     }
   ],
-  "_prebaked_version": "2_real_osm"
+  "_prebaked_version": "3_real_osm_zone2"
 }

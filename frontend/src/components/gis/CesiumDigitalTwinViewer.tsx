@@ -2316,8 +2316,8 @@ export function CesiumDigitalTwinViewer({
 
       const res = await loadSelectedAreaNetworks(params, controller.signal, (partial) => {
         if (requestId !== networkRequestRef.current || !viewerRef.current || viewerRef.current.isDestroyed()) return;
-        const roads = partial.roads.geojson.features;
-        const rivers = partial.rivers.geojson.features;
+        const roads = partial.roads?.geojson?.features || [];
+        const rivers = partial.rivers?.geojson?.features || [];
         if (roads.length) { setRoadFeatures(roads); render3DRoads(roads, showRoads); }
         if (rivers.length) { setRiverFeatures(rivers); render3DRivers(rivers, showRivers); }
         setNetworkError("Some map layers are still loading. Available paths and waterways are shown.");

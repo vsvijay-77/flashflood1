@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, Body, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
@@ -199,6 +199,36 @@ async def list_custom_areas():
             "created_at": "2026-09-18T10:53:33.348793+00:00"
         }
     ]
+
+
+@api_router.post("/areas")
+@app.post("/areas")
+async def create_custom_area(payload: dict = Body(...)):
+    """Creates a custom monitored area in Supabase."""
+    try:
+        from lib.db import supabase
+        res = supabase.table("custom_areas").insert(payload).select().single().execute()
+        return res.data
+    except Exception as e:
+        logger.error(f"Error creating area: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.delete("/areas/{area_id}")
+@app.delete("/areas/{area_id}")
+async def delete_custom_area(area_id: str):
+    """Deletes a custom monitored area from Supabase."""
+    try:
+        from lib.db import supabase
+        supabase.table("custom_areas").delete().eq("id", area_id).execute()
+        try:
+            supabase.table("area_map_layers").delete().eq("area_id", area_id).execute()
+        except Exception:
+            pass
+        return {"status": "success", "deleted": area_id}
+    except Exception as e:
+        logger.error(f"Error deleting area {area_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Health endpoints ───────────────────────────────────────────────────────────

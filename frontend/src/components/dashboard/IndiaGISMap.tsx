@@ -35,15 +35,13 @@ export function IndiaGISMap() {
   const [customAreas, setCustomAreas] = useState<CustomArea[]>([]);
 
   useEffect(() => {
-    supabase
-      .from("custom_areas")
-      .select("*")
-      .then(({ data }) => {
-        if (data) {
-          const loaded: CustomArea[] = data.map((d: any) => {
+    fetch("/api/areas")
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((apiData) => {
+        if (Array.isArray(apiData) && apiData.length > 0) {
+          const loaded: CustomArea[] = apiData.map((d: any) => {
             const polygonCoords = parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng));
             const areaSq = calculatePolygonAreaSqMeters(polygonCoords);
-
             return {
               id: d.id,
               name: d.name,
@@ -61,7 +59,39 @@ export function IndiaGISMap() {
             };
           });
           setCustomAreas(loaded);
+          return;
         }
+        throw new Error("Empty areas from API");
+      })
+      .catch(() => {
+        supabase
+          .from("custom_areas")
+          .select("*")
+          .then(({ data }) => {
+            if (data) {
+              const loaded: CustomArea[] = data.map((d: any) => {
+                const polygonCoords = parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng));
+                const areaSq = calculatePolygonAreaSqMeters(polygonCoords);
+
+                return {
+                  id: d.id,
+                  name: d.name,
+                  district: d.district,
+                  type: d.area_type || "Forest",
+                  risk: d.risk_category || "Medium",
+                  priority: d.priority || "Normal",
+                  description: d.description || "",
+                  date: new Date(d.created_at).toLocaleDateString(),
+                  lat: Number(d.lat),
+                  lng: Number(d.lng),
+                  shape: d.shape || "Polygon",
+                  polygon: polygonCoords,
+                  areaSqMeters: areaSq,
+                };
+              });
+              setCustomAreas(loaded);
+            }
+          });
       });
   }, []);
 

@@ -1,3 +1,4 @@
+import { loadBundledArea } from "./bundledArea";
 import { extractBuildings, type BuildingFeature } from "@/lib/routingApi";
 
 /**
@@ -13,6 +14,8 @@ export async function loadSelectedAreaBuildings(
   areaKey?: string,
 ): Promise<BuildingFeature[]> {
   signal.throwIfAborted();
+  const bundled = await loadBundledArea({ polygon, area_id: areaId, area_key: areaKey }, signal);
+  if (bundled?.buildings) return bundled.buildings.geojson.features;
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {

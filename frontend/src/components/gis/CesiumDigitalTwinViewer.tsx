@@ -1,3 +1,4 @@
+import { bundledAreaVersion } from "@/services/bundledArea";
 import { loadSelectedAreaNetworks } from "@/services/selectedAreaNetworks";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -579,7 +580,7 @@ export function CesiumDigitalTwinViewer({
   const activityStorageKey = `dt_user_activity_${safeName}`;
   // v6 invalidates center/viewport data saved by older viewers. Only complete
   // selected-polygon responses may be restored for an area.
-  const networksStorageKey = `dt_networks_v11_${safeName}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
+  const networksStorageKey = `dt_networks_v12_${bundledAreaVersion}_${safeName}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
 
   // Purge old v1/v2 cache entries for this area (stale data from old code)
   try {
@@ -2391,8 +2392,8 @@ export function CesiumDigitalTwinViewer({
 
 
         if (res.buildings) {
-          // Buildings already available from DB cache — ensure path clearance and boundary conformance
-          const preparedDbBuildings = prepareBuildingFootprints(cachedDbBuildings, activePoly, roads, rivers);
+          // Preserve mapped footprints; normalize and filter only to the selected boundary.
+          const preparedDbBuildings = prepareBuildingFootprints(cachedDbBuildings, activePoly);
           setBuildingFeatures(preparedDbBuildings);
           setOsmTileStatus(prev => ({ ...prev, buildings: preparedDbBuildings.length }));
           void render3DBuildings(preparedDbBuildings);

@@ -149,6 +149,33 @@ Telemetry polls every five seconds and backs off to thirty seconds during outage
 
 ---
 
+## Monitored Zone 2 bundled map
+
+`frontend/public/prebaked_zones/0004ccb1-ebc6-4c8c-90f6-06ebe52a2e42.json`
+contains **2,647 building footprints, 194 roads/paths, and 349 water features**
+exported from the saved Supabase layers for Zone 2's exact polygon. The source
+layers were saved on September 18, 2026; export timestamps and attribution are
+inside the file. These are all available saved features, not a guarantee that
+every physical house has been mapped. No generated fallback structures are included.
+
+The browser loads this file before calling the API. Vite copies it into `dist`,
+so hosting the frontend also hosts the map. A matching backend copy serves the
+same data through `/api/geo/extract-networks` and `/api/geo/extract-buildings`.
+Loading these layers needs no Supabase or OSM connection; other application
+features, basemaps, and terrain can still need their services. Changed boundaries
+use the normal API flow. The manifest checksum versions the static URL and browser
+map cache to replace the old 30-building snapshot.
+
+To refresh the snapshot from the saved layers:
+
+```sh
+.venv/bin/python scripts/export_monitored_area.py 0004ccb1-ebc6-4c8c-90f6-06ebe52a2e42
+```
+
+Commit both geometry copies and both generated manifests after refreshing, then
+build/deploy normally. Use this exporter for Zone 2; the legacy `prebake_zones*.py`
+scripts generate fallback buildings and must not overwrite this snapshot.
+
 ## Demo Access
 
 A pre-configured demo account is available on the login page:

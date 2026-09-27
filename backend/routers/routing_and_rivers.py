@@ -129,30 +129,7 @@ async def water_bodies(payload: WaterBounds):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-PREBAKED_DIR = Path(__file__).resolve().parent.parent / "data" / "prebaked_zones"
-
-
-def _find_prebaked_zone(payload: LocationRequest) -> Optional[Dict[str, Any]]:
-    area_id = payload.area_id or payload.area_key or ""
-    clean_id = area_id.removeprefix("dt-area-")
-    if clean_id:
-        target_file = PREBAKED_DIR / f"{clean_id}.json"
-        if target_file.exists():
-            try:
-                return json.loads(target_file.read_text())
-            except Exception:
-                pass
-    lat = payload.lat or (payload.polygon[0][0] if payload.polygon else None)
-    lng = payload.lng or (payload.polygon[0][1] if payload.polygon else None)
-    if lat is not None and lng is not None:
-        if 30.5 <= lat <= 31.5 and 78.0 <= lng <= 79.5:
-            zone2_file = PREBAKED_DIR / "zone2.json"
-            if zone2_file.exists():
-                try:
-                    return json.loads(zone2_file.read_text())
-                except Exception:
-                    pass
-    return None
+from services.bundled_area import load_bundled_area as _find_prebaked_zone
 
 
 @router.post("/extract-networks")

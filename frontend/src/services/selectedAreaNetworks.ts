@@ -1,5 +1,37 @@
 import { extractNetworks, type NetworkExtractionResponse } from "@/lib/routingApi";
 
+async function loadPrebakedZone(params: Parameters<typeof extractNetworks>[0]): Promise<NetworkExtractionResponse | null> {
+  try {
+    const rawId = params.area_id || params.area_key || "";
+    const cleanId = rawId.replace(/^dt-area-/, "");
+    const urls: string[] = [];
+    if (cleanId) {
+      urls.push(`/prebaked_zones/${cleanId}.json`);
+    }
+    const lat = params.lat ?? params.polygon?.[0]?.[0];
+    const lng = params.lng ?? params.polygon?.[0]?.[1];
+    if (lat != null && lng != null && lat >= 30 && lat <= 32 && lng >= 78 && lng <= 80) {
+      urls.push("/prebaked_zones/zone2.json");
+    }
+    if (cleanId || lat != null) {
+      urls.push("/prebaked_zones/default.json");
+    }
+
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && (data.roads?.geojson?.features?.length || data.rivers?.geojson?.features?.length)) {
+            return data as NetworkExtractionResponse;
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 /** Retry failed layers; the backend reuses each successfully saved layer. */
 export async function loadSelectedAreaNetworks(
   params: Parameters<typeof extractNetworks>[0], signal: AbortSignal,
@@ -41,8 +73,15 @@ export async function loadSelectedAreaNetworks(
     } catch (error) {
       signal.throwIfAborted();
       lastError = error;
+      const prebaked = await loadPrebakedZone(params);
+      if (prebaked) {
+        onProgress?.(prebaked);
+        return prebaked;
+      }
     }
   }
   if (partial) return partial;
+  const prebaked = await loadPrebakedZone(params);
+  if (prebaked) return prebaked;
   throw lastError;
 }

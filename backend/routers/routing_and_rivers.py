@@ -1,6 +1,8 @@
 """Routing & Rivers API Router: Real OSM road and river extraction, GNN spatial graph, risk inference, and evacuation routing."""
 import asyncio
+import json
 import math
+from pathlib import Path
 import networkx as nx
 from typing import Dict, Any, List, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Query, Body
@@ -127,12 +129,42 @@ async def water_bodies(payload: WaterBounds):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+PREBAKED_DIR = Path(__file__).resolve().parent.parent / "data" / "prebaked_zones"
+
+
+def _find_prebaked_zone(payload: LocationRequest) -> Optional[Dict[str, Any]]:
+    area_id = payload.area_id or payload.area_key or ""
+    clean_id = area_id.removeprefix("dt-area-")
+    if clean_id:
+        target_file = PREBAKED_DIR / f"{clean_id}.json"
+        if target_file.exists():
+            try:
+                return json.loads(target_file.read_text())
+            except Exception:
+                pass
+    lat = payload.lat or (payload.polygon[0][0] if payload.polygon else None)
+    lng = payload.lng or (payload.polygon[0][1] if payload.polygon else None)
+    if lat is not None and lng is not None:
+        if 30.5 <= lat <= 31.5 and 78.0 <= lng <= 79.5:
+            zone2_file = PREBAKED_DIR / "zone2.json"
+            if zone2_file.exists():
+                try:
+                    return json.loads(zone2_file.read_text())
+                except Exception:
+                    pass
+    return None
+
+
 @router.post("/extract-networks")
 async def extract_networks(payload: LocationRequest = Body(...)):
     """
     Extracts real-world OpenStreetMap road network and river/waterway channels for any selected location.
     Accepts place name, polygon, or coordinates + radius.
     """
+    prebaked = _find_prebaked_zone(payload)
+    if prebaked:
+        return prebaked
+
     has_geometry = bool(payload.polygon and len(payload.polygon) >= 3) or all(
         value is not None for value in (payload.north, payload.south, payload.east, payload.west)
     ) or (payload.lat is not None and payload.lng is not None)
@@ -267,6 +299,15 @@ def _generate_fallback_buildings(bbox: Dict[str, float], polygon: Optional[List[
 
 @router.post("/extract-buildings")
 async def extract_buildings(payload: LocationRequest = Body(...)):
+    prebaked = _find_prebaked_zone(payload)
+    if prebaked and "buildings" in prebaked and prebaked["buildings"].get("geojson"):
+        return {
+            "status": "success",
+            "bbox": prebaked.get("bbox", {}),
+            "buildings": prebaked["buildings"],
+            "osm_loading": {"complete": True, "source": "prebaked_cache"},
+        }
+
     bbox = _derive_bbox(payload)
     area_id = area_map_store.area_id_for(payload)
     key = area_map_store.boundary_key(payload.polygon, bbox)

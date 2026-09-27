@@ -1,0 +1,2233 @@
+{
+  "status": "success",
+  "bbox": {
+    "north": 11.4391424938366,
+    "south": 11.39455234546395,
+    "east": 76.74190521240236,
+    "west": 76.68577194213869
+  },
+  "osm_loading": {
+    "complete": true,
+    "total_tiles": 2,
+    "loaded_tiles": 2,
+    "failed_tiles": [],
+    "failed_layers": [],
+    "source": "prebaked_cache"
+  },
+  "roads": {
+    "geojson": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-1",
+            "name": "Highway Corridor 1",
+            "road_type": "secondary",
+            "length_m": 1407.3,
+            "speed_kmh": 50,
+            "width_px": 3.5,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.694192,
+                11.401241
+              ],
+              [
+                76.707103,
+                11.401241
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-2",
+            "name": "Sector Link 1",
+            "road_type": "tertiary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 3.0,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.694192,
+                11.401241
+              ],
+              [
+                76.694192,
+                11.411497
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-3",
+            "name": "Highway Corridor 1",
+            "road_type": "secondary",
+            "length_m": 1407.2,
+            "speed_kmh": 50,
+            "width_px": 3.5,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.707103,
+                11.401241
+              ],
+              [
+                76.720013,
+                11.401241
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-4",
+            "name": "Sector Link 2",
+            "road_type": "primary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 4.5,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.707103,
+                11.401241
+              ],
+              [
+                76.707103,
+                11.411497
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-5",
+            "name": "Highway Corridor 1",
+            "road_type": "secondary",
+            "length_m": 1407.3,
+            "speed_kmh": 50,
+            "width_px": 3.5,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.720013,
+                11.401241
+              ],
+              [
+                76.732924,
+                11.401241
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-6",
+            "name": "Sector Link 3",
+            "road_type": "primary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 4.5,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.720013,
+                11.401241
+              ],
+              [
+                76.720013,
+                11.411497
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-7",
+            "name": "Sector Link 4",
+            "road_type": "tertiary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 3.0,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.732924,
+                11.401241
+              ],
+              [
+                76.732924,
+                11.411497
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-8",
+            "name": "Highway Corridor 2",
+            "road_type": "primary",
+            "length_m": 1407.3,
+            "speed_kmh": 50,
+            "width_px": 5.0,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.694192,
+                11.411497
+              ],
+              [
+                76.707103,
+                11.411497
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-9",
+            "name": "Sector Link 1",
+            "road_type": "tertiary",
+            "length_m": 1140.3,
+            "speed_kmh": 40,
+            "width_px": 3.0,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.694192,
+                11.411497
+              ],
+              [
+                76.694192,
+                11.421752
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-10",
+            "name": "Highway Corridor 2",
+            "road_type": "primary",
+            "length_m": 1407.1,
+            "speed_kmh": 50,
+            "width_px": 5.0,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.707103,
+                11.411497
+              ],
+              [
+                76.720013,
+                11.411497
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-11",
+            "name": "Sector Link 2",
+            "road_type": "primary",
+            "length_m": 1140.3,
+            "speed_kmh": 40,
+            "width_px": 4.5,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.707103,
+                11.411497
+              ],
+              [
+                76.707103,
+                11.421752
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-12",
+            "name": "Highway Corridor 2",
+            "road_type": "primary",
+            "length_m": 1407.3,
+            "speed_kmh": 50,
+            "width_px": 5.0,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.720013,
+                11.411497
+              ],
+              [
+                76.732924,
+                11.411497
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-13",
+            "name": "Sector Link 3",
+            "road_type": "primary",
+            "length_m": 1140.3,
+            "speed_kmh": 40,
+            "width_px": 4.5,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.720013,
+                11.411497
+              ],
+              [
+                76.720013,
+                11.421752
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-14",
+            "name": "Sector Link 4",
+            "road_type": "tertiary",
+            "length_m": 1140.3,
+            "speed_kmh": 40,
+            "width_px": 3.0,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.732924,
+                11.411497
+              ],
+              [
+                76.732924,
+                11.421752
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-15",
+            "name": "Highway Corridor 3",
+            "road_type": "primary",
+            "length_m": 1407.2,
+            "speed_kmh": 50,
+            "width_px": 5.0,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.694192,
+                11.421752
+              ],
+              [
+                76.707103,
+                11.421752
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-16",
+            "name": "Sector Link 1",
+            "road_type": "tertiary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 3.0,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.694192,
+                11.421752
+              ],
+              [
+                76.694192,
+                11.432008
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-17",
+            "name": "Highway Corridor 3",
+            "road_type": "primary",
+            "length_m": 1407.1,
+            "speed_kmh": 50,
+            "width_px": 5.0,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.707103,
+                11.421752
+              ],
+              [
+                76.720013,
+                11.421752
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-18",
+            "name": "Sector Link 2",
+            "road_type": "primary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 4.5,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.707103,
+                11.421752
+              ],
+              [
+                76.707103,
+                11.432008
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-19",
+            "name": "Highway Corridor 3",
+            "road_type": "primary",
+            "length_m": 1407.2,
+            "speed_kmh": 50,
+            "width_px": 5.0,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.720013,
+                11.421752
+              ],
+              [
+                76.732924,
+                11.421752
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-20",
+            "name": "Sector Link 3",
+            "road_type": "primary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 4.5,
+            "is_major": true,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.720013,
+                11.421752
+              ],
+              [
+                76.720013,
+                11.432008
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-21",
+            "name": "Sector Link 4",
+            "road_type": "tertiary",
+            "length_m": 1140.4,
+            "speed_kmh": 40,
+            "width_px": 3.0,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.15
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.732924,
+                11.421752
+              ],
+              [
+                76.732924,
+                11.432008
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-22",
+            "name": "Highway Corridor 4",
+            "road_type": "secondary",
+            "length_m": 1407.2,
+            "speed_kmh": 50,
+            "width_px": 3.5,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.694192,
+                11.432008
+              ],
+              [
+                76.707103,
+                11.432008
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-23",
+            "name": "Highway Corridor 4",
+            "road_type": "secondary",
+            "length_m": 1407.0,
+            "speed_kmh": 50,
+            "width_px": 3.5,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.707103,
+                11.432008
+              ],
+              [
+                76.720013,
+                11.432008
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-road-24",
+            "name": "Highway Corridor 4",
+            "road_type": "secondary",
+            "length_m": 1407.2,
+            "speed_kmh": 50,
+            "width_px": 3.5,
+            "is_major": false,
+            "accessibility": "open",
+            "flood_risk": 0.1
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.720013,
+                11.432008
+              ],
+              [
+                76.732924,
+                11.432008
+              ]
+            ]
+          }
+        }
+      ],
+      "metadata": {
+        "total_nodes": 16,
+        "total_edges": 24
+      }
+    },
+    "total_nodes": 16,
+    "total_edges": 24
+  },
+  "rivers": {
+    "geojson": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-river-main-1",
+            "name": "Main River Drainage Basin",
+            "waterway_type": "river",
+            "width_m": 28.0,
+            "length_m": 4500,
+            "is_water_body": false,
+            "is_main_river": true,
+            "flow_direction": "downstream",
+            "flood_susceptibility": 0.75
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.733485,
+                11.434683
+              ],
+              [
+                76.725065,
+                11.426657
+              ],
+              [
+                76.714961,
+                11.417739
+              ],
+              [
+                76.707103,
+                11.410159
+              ],
+              [
+                76.694192,
+                11.399903
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-river-trib-1",
+            "name": "North Catchment Stream",
+            "waterway_type": "stream",
+            "width_m": 12.0,
+            "length_m": 2200,
+            "is_water_body": false,
+            "is_main_river": false,
+            "flow_direction": "downstream",
+            "flood_susceptibility": 0.55
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.713839,
+                11.436913
+              ],
+              [
+                76.714961,
+                11.417739
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-river-trib-2",
+            "name": "Valley Basin Inflow",
+            "waterway_type": "stream",
+            "width_m": 14.0,
+            "length_m": 1800,
+            "is_water_body": false,
+            "is_main_river": false,
+            "flow_direction": "downstream",
+            "flood_susceptibility": 0.6
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.696999,
+                11.414618
+              ],
+              [
+                76.707103,
+                11.410159
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": {
+            "id": "fallback-river-reservoir-1",
+            "name": "Catchment Reservoir",
+            "waterway_type": "reservoir",
+            "width_m": 35.0,
+            "length_m": 800,
+            "is_water_body": true,
+            "is_main_river": false,
+            "flow_direction": "none",
+            "flood_susceptibility": 0.85
+          },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [
+              [
+                76.713839,
+                11.416847
+              ],
+              [
+                76.716084,
+                11.418631
+              ]
+            ]
+          }
+        }
+      ],
+      "metadata": {
+        "total_nodes": 12,
+        "total_edges": 4
+      }
+    },
+    "total_nodes": 12,
+    "total_edges": 4
+  },
+  "buildings": {
+    "geojson": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "id": "bld-fallback-1",
+          "properties": {
+            "id": "bld-fallback-1",
+            "name": "Structure 1",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 165.0,
+            "elevation": 425.0,
+            "elevation_m": 425.0,
+            "lat": 11.408375,
+            "lon": 76.704857,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.29,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.704857,
+                  11.408375
+                ],
+                [
+                  76.705082,
+                  11.408375
+                ],
+                [
+                  76.705082,
+                  11.408554
+                ],
+                [
+                  76.704857,
+                  11.408554
+                ],
+                [
+                  76.704857,
+                  11.408375
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-2",
+          "properties": {
+            "id": "bld-fallback-2",
+            "name": "Structure 2",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 210.0,
+            "elevation": 430.0,
+            "elevation_m": 430.0,
+            "lat": 11.409267,
+            "lon": 76.70598,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.43,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.70598,
+                  11.409267
+                ],
+                [
+                  76.706204,
+                  11.409267
+                ],
+                [
+                  76.706204,
+                  11.409445
+                ],
+                [
+                  76.70598,
+                  11.409445
+                ],
+                [
+                  76.70598,
+                  11.409267
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-3",
+          "properties": {
+            "id": "bld-fallback-3",
+            "name": "Structure 3",
+            "building": "yes",
+            "height": 19.5,
+            "height_m": 19.5,
+            "estimated_height": 19.5,
+            "area_sqm": 255.0,
+            "elevation": 435.0,
+            "elevation_m": 435.0,
+            "lat": 11.410159,
+            "lon": 76.704857,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.57,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.704857,
+                  11.410159
+                ],
+                [
+                  76.705082,
+                  11.410159
+                ],
+                [
+                  76.705082,
+                  11.410337
+                ],
+                [
+                  76.704857,
+                  11.410337
+                ],
+                [
+                  76.704857,
+                  11.410159
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-4",
+          "properties": {
+            "id": "bld-fallback-4",
+            "name": "Structure 4",
+            "building": "yes",
+            "height": 9.0,
+            "height_m": 9.0,
+            "estimated_height": 9.0,
+            "area_sqm": 300.0,
+            "elevation": 440.0,
+            "elevation_m": 440.0,
+            "lat": 11.411051,
+            "lon": 76.70598,
+            "flood_risk": "HIGH",
+            "flood_risk_score": 0.71,
+            "risk_color": "#EF4444"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.70598,
+                  11.411051
+                ],
+                [
+                  76.706204,
+                  11.411051
+                ],
+                [
+                  76.706204,
+                  11.411229
+                ],
+                [
+                  76.70598,
+                  11.411229
+                ],
+                [
+                  76.70598,
+                  11.411051
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-5",
+          "properties": {
+            "id": "bld-fallback-5",
+            "name": "Structure 5",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 345.0,
+            "elevation": 445.0,
+            "elevation_m": 445.0,
+            "lat": 11.411943,
+            "lon": 76.704857,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.15,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.704857,
+                  11.411943
+                ],
+                [
+                  76.705082,
+                  11.411943
+                ],
+                [
+                  76.705082,
+                  11.412121
+                ],
+                [
+                  76.704857,
+                  11.412121
+                ],
+                [
+                  76.704857,
+                  11.411943
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-6",
+          "properties": {
+            "id": "bld-fallback-6",
+            "name": "Structure 6",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 120.0,
+            "elevation": 450.0,
+            "elevation_m": 450.0,
+            "lat": 11.410605,
+            "lon": 76.718891,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.29,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.718891,
+                  11.410605
+                ],
+                [
+                  76.719115,
+                  11.410605
+                ],
+                [
+                  76.719115,
+                  11.410783
+                ],
+                [
+                  76.718891,
+                  11.410783
+                ],
+                [
+                  76.718891,
+                  11.410605
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-7",
+          "properties": {
+            "id": "bld-fallback-7",
+            "name": "Structure 7",
+            "building": "yes",
+            "height": 19.5,
+            "height_m": 19.5,
+            "estimated_height": 19.5,
+            "area_sqm": 165.0,
+            "elevation": 455.0,
+            "elevation_m": 455.0,
+            "lat": 11.411497,
+            "lon": 76.720013,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.43,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.720013,
+                  11.411497
+                ],
+                [
+                  76.720238,
+                  11.411497
+                ],
+                [
+                  76.720238,
+                  11.411675
+                ],
+                [
+                  76.720013,
+                  11.411675
+                ],
+                [
+                  76.720013,
+                  11.411497
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-8",
+          "properties": {
+            "id": "bld-fallback-8",
+            "name": "Structure 8",
+            "building": "yes",
+            "height": 9.0,
+            "height_m": 9.0,
+            "estimated_height": 9.0,
+            "area_sqm": 210.0,
+            "elevation": 460.0,
+            "elevation_m": 460.0,
+            "lat": 11.412388,
+            "lon": 76.718891,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.57,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.718891,
+                  11.412388
+                ],
+                [
+                  76.719115,
+                  11.412388
+                ],
+                [
+                  76.719115,
+                  11.412567
+                ],
+                [
+                  76.718891,
+                  11.412567
+                ],
+                [
+                  76.718891,
+                  11.412388
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-9",
+          "properties": {
+            "id": "bld-fallback-9",
+            "name": "Structure 9",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 255.0,
+            "elevation": 465.0,
+            "elevation_m": 465.0,
+            "lat": 11.41328,
+            "lon": 76.720013,
+            "flood_risk": "HIGH",
+            "flood_risk_score": 0.71,
+            "risk_color": "#EF4444"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.720013,
+                  11.41328
+                ],
+                [
+                  76.720238,
+                  11.41328
+                ],
+                [
+                  76.720238,
+                  11.413459
+                ],
+                [
+                  76.720013,
+                  11.413459
+                ],
+                [
+                  76.720013,
+                  11.41328
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-10",
+          "properties": {
+            "id": "bld-fallback-10",
+            "name": "Structure 10",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 300.0,
+            "elevation": 420.0,
+            "elevation_m": 420.0,
+            "lat": 11.414172,
+            "lon": 76.718891,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.15,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.718891,
+                  11.414172
+                ],
+                [
+                  76.719115,
+                  11.414172
+                ],
+                [
+                  76.719115,
+                  11.41435
+                ],
+                [
+                  76.718891,
+                  11.41435
+                ],
+                [
+                  76.718891,
+                  11.414172
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-11",
+          "properties": {
+            "id": "bld-fallback-11",
+            "name": "Structure 11",
+            "building": "yes",
+            "height": 19.5,
+            "height_m": 19.5,
+            "estimated_height": 19.5,
+            "area_sqm": 345.0,
+            "elevation": 425.0,
+            "elevation_m": 425.0,
+            "lat": 11.419523,
+            "lon": 76.707664,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.29,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.707664,
+                  11.419523
+                ],
+                [
+                  76.707888,
+                  11.419523
+                ],
+                [
+                  76.707888,
+                  11.419701
+                ],
+                [
+                  76.707664,
+                  11.419701
+                ],
+                [
+                  76.707664,
+                  11.419523
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-12",
+          "properties": {
+            "id": "bld-fallback-12",
+            "name": "Structure 12",
+            "building": "yes",
+            "height": 9.0,
+            "height_m": 9.0,
+            "estimated_height": 9.0,
+            "area_sqm": 120.0,
+            "elevation": 430.0,
+            "elevation_m": 430.0,
+            "lat": 11.420415,
+            "lon": 76.708787,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.43,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.708787,
+                  11.420415
+                ],
+                [
+                  76.709011,
+                  11.420415
+                ],
+                [
+                  76.709011,
+                  11.420593
+                ],
+                [
+                  76.708787,
+                  11.420593
+                ],
+                [
+                  76.708787,
+                  11.420415
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-13",
+          "properties": {
+            "id": "bld-fallback-13",
+            "name": "Structure 13",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 165.0,
+            "elevation": 435.0,
+            "elevation_m": 435.0,
+            "lat": 11.421306,
+            "lon": 76.707664,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.57,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.707664,
+                  11.421306
+                ],
+                [
+                  76.707888,
+                  11.421306
+                ],
+                [
+                  76.707888,
+                  11.421485
+                ],
+                [
+                  76.707664,
+                  11.421485
+                ],
+                [
+                  76.707664,
+                  11.421306
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-14",
+          "properties": {
+            "id": "bld-fallback-14",
+            "name": "Structure 14",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 210.0,
+            "elevation": 440.0,
+            "elevation_m": 440.0,
+            "lat": 11.422198,
+            "lon": 76.708787,
+            "flood_risk": "HIGH",
+            "flood_risk_score": 0.71,
+            "risk_color": "#EF4444"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.708787,
+                  11.422198
+                ],
+                [
+                  76.709011,
+                  11.422198
+                ],
+                [
+                  76.709011,
+                  11.422377
+                ],
+                [
+                  76.708787,
+                  11.422377
+                ],
+                [
+                  76.708787,
+                  11.422198
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-15",
+          "properties": {
+            "id": "bld-fallback-15",
+            "name": "Structure 15",
+            "building": "yes",
+            "height": 19.5,
+            "height_m": 19.5,
+            "estimated_height": 19.5,
+            "area_sqm": 255.0,
+            "elevation": 445.0,
+            "elevation_m": 445.0,
+            "lat": 11.42309,
+            "lon": 76.707664,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.15,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.707664,
+                  11.42309
+                ],
+                [
+                  76.707888,
+                  11.42309
+                ],
+                [
+                  76.707888,
+                  11.423268
+                ],
+                [
+                  76.707664,
+                  11.423268
+                ],
+                [
+                  76.707664,
+                  11.42309
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-16",
+          "properties": {
+            "id": "bld-fallback-16",
+            "name": "Structure 16",
+            "building": "yes",
+            "height": 9.0,
+            "height_m": 9.0,
+            "estimated_height": 9.0,
+            "area_sqm": 300.0,
+            "elevation": 450.0,
+            "elevation_m": 450.0,
+            "lat": 11.421752,
+            "lon": 76.721697,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.29,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.721697,
+                  11.421752
+                ],
+                [
+                  76.721922,
+                  11.421752
+                ],
+                [
+                  76.721922,
+                  11.421931
+                ],
+                [
+                  76.721697,
+                  11.421931
+                ],
+                [
+                  76.721697,
+                  11.421752
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-17",
+          "properties": {
+            "id": "bld-fallback-17",
+            "name": "Structure 17",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 345.0,
+            "elevation": 455.0,
+            "elevation_m": 455.0,
+            "lat": 11.422644,
+            "lon": 76.72282,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.43,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.72282,
+                  11.422644
+                ],
+                [
+                  76.723044,
+                  11.422644
+                ],
+                [
+                  76.723044,
+                  11.422822
+                ],
+                [
+                  76.72282,
+                  11.422822
+                ],
+                [
+                  76.72282,
+                  11.422644
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-18",
+          "properties": {
+            "id": "bld-fallback-18",
+            "name": "Structure 18",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 120.0,
+            "elevation": 460.0,
+            "elevation_m": 460.0,
+            "lat": 11.423536,
+            "lon": 76.721697,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.57,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.721697,
+                  11.423536
+                ],
+                [
+                  76.721922,
+                  11.423536
+                ],
+                [
+                  76.721922,
+                  11.423714
+                ],
+                [
+                  76.721697,
+                  11.423714
+                ],
+                [
+                  76.721697,
+                  11.423536
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-19",
+          "properties": {
+            "id": "bld-fallback-19",
+            "name": "Structure 19",
+            "building": "yes",
+            "height": 19.5,
+            "height_m": 19.5,
+            "estimated_height": 19.5,
+            "area_sqm": 165.0,
+            "elevation": 465.0,
+            "elevation_m": 465.0,
+            "lat": 11.424428,
+            "lon": 76.72282,
+            "flood_risk": "HIGH",
+            "flood_risk_score": 0.71,
+            "risk_color": "#EF4444"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.72282,
+                  11.424428
+                ],
+                [
+                  76.723044,
+                  11.424428
+                ],
+                [
+                  76.723044,
+                  11.424606
+                ],
+                [
+                  76.72282,
+                  11.424606
+                ],
+                [
+                  76.72282,
+                  11.424428
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-20",
+          "properties": {
+            "id": "bld-fallback-20",
+            "name": "Structure 20",
+            "building": "yes",
+            "height": 9.0,
+            "height_m": 9.0,
+            "estimated_height": 9.0,
+            "area_sqm": 210.0,
+            "elevation": 420.0,
+            "elevation_m": 420.0,
+            "lat": 11.42532,
+            "lon": 76.721697,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.15,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.721697,
+                  11.42532
+                ],
+                [
+                  76.721922,
+                  11.42532
+                ],
+                [
+                  76.721922,
+                  11.425498
+                ],
+                [
+                  76.721697,
+                  11.425498
+                ],
+                [
+                  76.721697,
+                  11.42532
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-21",
+          "properties": {
+            "id": "bld-fallback-21",
+            "name": "Structure 21",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 255.0,
+            "elevation": 425.0,
+            "elevation_m": 425.0,
+            "lat": 11.415064,
+            "lon": 76.713277,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.29,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.713277,
+                  11.415064
+                ],
+                [
+                  76.713502,
+                  11.415064
+                ],
+                [
+                  76.713502,
+                  11.415242
+                ],
+                [
+                  76.713277,
+                  11.415242
+                ],
+                [
+                  76.713277,
+                  11.415064
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-22",
+          "properties": {
+            "id": "bld-fallback-22",
+            "name": "Structure 22",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 300.0,
+            "elevation": 430.0,
+            "elevation_m": 430.0,
+            "lat": 11.415956,
+            "lon": 76.7144,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.43,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.7144,
+                  11.415956
+                ],
+                [
+                  76.714624,
+                  11.415956
+                ],
+                [
+                  76.714624,
+                  11.416134
+                ],
+                [
+                  76.7144,
+                  11.416134
+                ],
+                [
+                  76.7144,
+                  11.415956
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-23",
+          "properties": {
+            "id": "bld-fallback-23",
+            "name": "Structure 23",
+            "building": "yes",
+            "height": 19.5,
+            "height_m": 19.5,
+            "estimated_height": 19.5,
+            "area_sqm": 345.0,
+            "elevation": 435.0,
+            "elevation_m": 435.0,
+            "lat": 11.416847,
+            "lon": 76.713277,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.57,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.713277,
+                  11.416847
+                ],
+                [
+                  76.713502,
+                  11.416847
+                ],
+                [
+                  76.713502,
+                  11.417026
+                ],
+                [
+                  76.713277,
+                  11.417026
+                ],
+                [
+                  76.713277,
+                  11.416847
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-24",
+          "properties": {
+            "id": "bld-fallback-24",
+            "name": "Structure 24",
+            "building": "yes",
+            "height": 9.0,
+            "height_m": 9.0,
+            "estimated_height": 9.0,
+            "area_sqm": 120.0,
+            "elevation": 440.0,
+            "elevation_m": 440.0,
+            "lat": 11.417739,
+            "lon": 76.7144,
+            "flood_risk": "HIGH",
+            "flood_risk_score": 0.71,
+            "risk_color": "#EF4444"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.7144,
+                  11.417739
+                ],
+                [
+                  76.714624,
+                  11.417739
+                ],
+                [
+                  76.714624,
+                  11.417918
+                ],
+                [
+                  76.7144,
+                  11.417918
+                ],
+                [
+                  76.7144,
+                  11.417739
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-25",
+          "properties": {
+            "id": "bld-fallback-25",
+            "name": "Structure 25",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 165.0,
+            "elevation": 445.0,
+            "elevation_m": 445.0,
+            "lat": 11.418631,
+            "lon": 76.713277,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.15,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.713277,
+                  11.418631
+                ],
+                [
+                  76.713502,
+                  11.418631
+                ],
+                [
+                  76.713502,
+                  11.418809
+                ],
+                [
+                  76.713277,
+                  11.418809
+                ],
+                [
+                  76.713277,
+                  11.418631
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-26",
+          "properties": {
+            "id": "bld-fallback-26",
+            "name": "Structure 26",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 210.0,
+            "elevation": 450.0,
+            "elevation_m": 450.0,
+            "lat": 11.412834,
+            "lon": 76.710471,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.29,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.710471,
+                  11.412834
+                ],
+                [
+                  76.710695,
+                  11.412834
+                ],
+                [
+                  76.710695,
+                  11.413013
+                ],
+                [
+                  76.710471,
+                  11.413013
+                ],
+                [
+                  76.710471,
+                  11.412834
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-27",
+          "properties": {
+            "id": "bld-fallback-27",
+            "name": "Structure 27",
+            "building": "yes",
+            "height": 19.5,
+            "height_m": 19.5,
+            "estimated_height": 19.5,
+            "area_sqm": 255.0,
+            "elevation": 455.0,
+            "elevation_m": 455.0,
+            "lat": 11.413726,
+            "lon": 76.711593,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.43,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.711593,
+                  11.413726
+                ],
+                [
+                  76.711818,
+                  11.413726
+                ],
+                [
+                  76.711818,
+                  11.413904
+                ],
+                [
+                  76.711593,
+                  11.413904
+                ],
+                [
+                  76.711593,
+                  11.413726
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-28",
+          "properties": {
+            "id": "bld-fallback-28",
+            "name": "Structure 28",
+            "building": "yes",
+            "height": 9.0,
+            "height_m": 9.0,
+            "estimated_height": 9.0,
+            "area_sqm": 300.0,
+            "elevation": 460.0,
+            "elevation_m": 460.0,
+            "lat": 11.414618,
+            "lon": 76.710471,
+            "flood_risk": "MODERATE",
+            "flood_risk_score": 0.57,
+            "risk_color": "#F59E0B"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.710471,
+                  11.414618
+                ],
+                [
+                  76.710695,
+                  11.414618
+                ],
+                [
+                  76.710695,
+                  11.414796
+                ],
+                [
+                  76.710471,
+                  11.414796
+                ],
+                [
+                  76.710471,
+                  11.414618
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-29",
+          "properties": {
+            "id": "bld-fallback-29",
+            "name": "Structure 29",
+            "building": "yes",
+            "height": 12.5,
+            "height_m": 12.5,
+            "estimated_height": 12.5,
+            "area_sqm": 345.0,
+            "elevation": 465.0,
+            "elevation_m": 465.0,
+            "lat": 11.41551,
+            "lon": 76.711593,
+            "flood_risk": "HIGH",
+            "flood_risk_score": 0.71,
+            "risk_color": "#EF4444"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.711593,
+                  11.41551
+                ],
+                [
+                  76.711818,
+                  11.41551
+                ],
+                [
+                  76.711818,
+                  11.415688
+                ],
+                [
+                  76.711593,
+                  11.415688
+                ],
+                [
+                  76.711593,
+                  11.41551
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "bld-fallback-30",
+          "properties": {
+            "id": "bld-fallback-30",
+            "name": "Structure 30",
+            "building": "yes",
+            "height": 16.0,
+            "height_m": 16.0,
+            "estimated_height": 16.0,
+            "area_sqm": 120.0,
+            "elevation": 420.0,
+            "elevation_m": 420.0,
+            "lat": 11.416402,
+            "lon": 76.710471,
+            "flood_risk": "SAFE",
+            "flood_risk_score": 0.15,
+            "risk_color": "#10B981"
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  76.710471,
+                  11.416402
+                ],
+                [
+                  76.710695,
+                  11.416402
+                ],
+                [
+                  76.710695,
+                  11.41658
+                ],
+                [
+                  76.710471,
+                  11.41658
+                ],
+                [
+                  76.710471,
+                  11.416402
+                ]
+              ]
+            ]
+          }
+        }
+      ],
+      "metadata": {
+        "total_buildings": 30,
+        "building_version": 3
+      }
+    },
+    "total_features": 30
+  }
+}

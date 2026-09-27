@@ -805,8 +805,11 @@ async def get_digital_twin_model(task_id: str):
     Proxy and cache the GLB 3D model through the backend.
     Enables same-origin loading in <model-viewer> and Three.js with full CORS compliance.
     """
-    cache_dir = Path("/Users/vijay/Documents/flash_flood/backend/cache/models")
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = Path("/tmp/cache/models")
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
     cached_file = cache_dir / f"{task_id}.glb"
 
     if cached_file.exists() and cached_file.stat().st_size > 0:

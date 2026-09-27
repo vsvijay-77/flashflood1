@@ -27,16 +27,23 @@ def boundary_key(polygon, bbox):
 def load_layers(area_id, key):
     if not area_id:
         return {}
-    from lib.db import supabase
-    rows = supabase.table('area_map_layers').select('layer,geojson').eq('area_id', area_id).eq('boundary_key', key).execute().data
-    return {row['layer']: row['geojson'] for row in rows or []}
+    try:
+        from lib.db import supabase
+        rows = supabase.table('area_map_layers').select('layer,geojson').eq('area_id', area_id).eq('boundary_key', key).execute().data
+        return {row['layer']: row['geojson'] for row in rows or []}
+    except Exception:
+        return {}
 
 
 def save_layer(area_id, key, layer, geojson):
     if not area_id:
         return
-    from lib.db import supabase
-    supabase.table('area_map_layers').upsert({
-        'area_id': area_id, 'boundary_key': key, 'layer': layer,
-        'geojson': geojson, 'updated_at': datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    try:
+        from lib.db import supabase
+        supabase.table('area_map_layers').upsert({
+            'area_id': area_id, 'boundary_key': key, 'layer': layer,
+            'geojson': geojson, 'updated_at': datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception:
+        # Cache persistence is non-fatal if RLS or permissions restrict anon writes
+        pass

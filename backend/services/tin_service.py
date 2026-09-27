@@ -25,8 +25,16 @@ from scipy.spatial import Delaunay
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path(__file__).parent.parent / "cache" / "tin"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+import os
+
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    CACHE_DIR = Path("/tmp") / "cache" / "tin"
+else:
+    CACHE_DIR = Path(__file__).parent.parent / "cache" / "tin"
+try:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 OPENTOPO_BASE_URL = "https://portal.opentopography.org/API/globaldem"
 DEFAULT_DEM_TYPE = "COP30"

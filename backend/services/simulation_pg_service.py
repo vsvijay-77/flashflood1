@@ -17,7 +17,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import psycopg
+try:
+    import psycopg
+except ImportError:
+    try:
+        import psycopg2 as psycopg
+    except ImportError:
+        psycopg = None
+
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).parent.parent
@@ -31,7 +38,9 @@ SENSOR_DB_URL = os.environ.get("SENSOR_DB_URL", DEFAULT_SENSOR_DB_URL)
 
 
 def _conn():
-    return psycopg.connect(SENSOR_DB_URL, connect_timeout=10)
+    if psycopg is None:
+        raise RuntimeError("PostgreSQL driver (psycopg) not installed")
+    return psycopg.connect(SENSOR_DB_URL, connect_timeout=4)
 
 
 def ensure_tables() -> None:

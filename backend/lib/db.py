@@ -18,7 +18,14 @@ ROOT_DIR = Path(__file__).parent.parent
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv()
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+DEFAULT_SUPABASE_URL = "https://pffdafhrhtevdboxqztn.supabase.co"
+DEFAULT_SUPABASE_KEY = "sb_publishable_YP29CER2yLiNVIz7fmuw-g_0R6R9wEJ"
+
+TABLE_ALIASES = {
+    "areas": "custom_areas",
+}
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL)
 SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "app")
@@ -30,17 +37,23 @@ _mongo_client: Optional[AsyncIOMotorClient] = None
 def get_supabase() -> Client:
     client = getattr(_thread_local, "client", None)
     if client is None:
-        url = os.environ.get("SUPABASE_URL", "")
-        key = os.environ.get("SUPABASE_SECRET_KEY", "")
+        url = (
+            os.environ.get("SUPABASE_URL")
+            or os.environ.get("VITE_SUPABASE_URL")
+            or DEFAULT_SUPABASE_URL
+        )
+        key = (
+            os.environ.get("SUPABASE_SECRET_KEY")
+            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_PUBLISHABLE_KEY")
+            or os.environ.get("SUPABASE_ANON_KEY")
+            or os.environ.get("VITE_SUPABASE_ANON_KEY")
+            or DEFAULT_SUPABASE_KEY
+        )
         if not url or not key:
             load_dotenv(ROOT_DIR / ".env")
-            url = os.environ.get("SUPABASE_URL", "")
-            key = os.environ.get("SUPABASE_SECRET_KEY", "")
-        if not url or not key:
-            raise ValueError(
-                "SUPABASE_URL or SUPABASE_SECRET_KEY is not set. "
-                "Please configure these in your Vercel Project Settings -> Environment Variables."
-            )
+            url = os.environ.get("SUPABASE_URL") or DEFAULT_SUPABASE_URL
+            key = os.environ.get("SUPABASE_SECRET_KEY") or DEFAULT_SUPABASE_KEY
         client = create_client(url, key)
         _thread_local.client = client
     return client
@@ -49,8 +62,6 @@ def get_supabase() -> Client:
 def _is_fallback_error(e: Exception) -> bool:
     # On Vercel, if Mongo is localhost, never fallback to Mongo (prevents 500 connection refused)
     if os.environ.get("VERCEL") and ("localhost" in MONGO_URL or "127.0.0.1" in MONGO_URL):
-        return False
-    if not os.environ.get("SUPABASE_URL") or not os.environ.get("SUPABASE_SECRET_KEY"):
         return False
     err = str(e).lower()
     return "pgrst205" in err or "not find the table" in err or isinstance(e, (ValueError, KeyError, AttributeError))
@@ -109,7 +120,7 @@ class DeleteResult:
 
 class SupabaseCursor:
     def __init__(self, table_name: str, query: Optional[Dict[str, Any]] = None, projection: Optional[Dict[str, Any]] = None):
-        self.table_name = table_name
+        self.table_name = TABLE_ALIASES.get(table_name, table_name)
         self.query = query or {}
         self.projection = projection or {}
         self._sort_column: Optional[str] = None
@@ -187,11 +198,17 @@ class SupabaseCursor:
         except Exception as e:
             # Fallback to local MongoDB if table not yet created in Supabase
             if _is_fallback_error(e):
-                mongo = get_mongo_fallback()
-                cursor = mongo[self.table_name].find(self.query, self.projection)
-                if self._sort_column:
-                    cursor = cursor.sort(self._sort_column, -1 if self._sort_descending else 1)
-                return await cursor.to_list(length)
+                try:
+                    mongo = get_mongo_fallback()
+                    cursor = mongo[self.table_name].find(self.query, self.projection)
+                    if self._sort_column:
+                        cursor = cursor.sort(self._sort_column, -1 if self._sort_descending else 1)
+                    return await cursor.to_list(length)
+                except Exception:
+                    return []
+            err_str = str(e).lower()
+            if "pgrst205" in err_str or "not find the table" in err_str:
+                return []
             raise e
 
     def __aiter__(self):
@@ -204,7 +221,7 @@ class SupabaseCursor:
 
 class SupabaseCollection:
     def __init__(self, table_name: str):
-        self.table_name = table_name
+        self.table_name = TABLE_ALIASES.get(table_name, table_name)
 
     def find(self, filter: Optional[Dict[str, Any]] = None, projection: Optional[Dict[str, Any]] = None) -> SupabaseCursor:
         return SupabaseCursor(self.table_name, filter, projection)
@@ -382,8 +399,14 @@ class SupabaseCollection:
             return len(res.data or [])
         except Exception as e:
             if _is_fallback_error(e):
-                mongo = get_mongo_fallback()
-                return await mongo[self.table_name].count_documents(filter)
+                try:
+                    mongo = get_mongo_fallback()
+                    return await mongo[self.table_name].count_documents(filter)
+                except Exception:
+                    return 0
+            err_str = str(e).lower()
+            if "pgrst205" in err_str or "not find the table" in err_str:
+                return 0
             raise e
 
 

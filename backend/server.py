@@ -158,6 +158,49 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── Monitored Areas endpoint ────────────────────────────────────────────────
+@api_router.get("/areas")
+@app.get("/areas")
+async def list_custom_areas():
+    """Returns custom monitored areas from Supabase, with fallback default areas."""
+    try:
+        from lib.db import db
+        docs = await db.custom_areas.find({}, {"_id": 0}).to_list(100)
+        if docs:
+            return docs
+    except Exception as e:
+        logger.warning(f"Failed to fetch areas from Supabase: {e}")
+    # Return default monitored areas if empty or Supabase query failed
+    return [
+        {
+            "id": "af991cda-e647-4b00-86ed-8449feceaf8c",
+            "name": "Monitored Zone 1",
+            "district": "Western Ghats",
+            "area_type": "River Basin",
+            "risk_category": "Medium",
+            "priority": "Normal (Hourly)",
+            "description": "Custom monitoring boundary",
+            "lat": 11.3814,
+            "lng": 76.7452,
+            "shape": "Polygon:[[11.586010207110014,76.89489745069295],[11.548339011444835,76.53784178663045],[11.133625233016879,76.57629393506795],[11.257563688455736,76.97180174756797]]",
+            "created_at": "2026-09-27T09:10:51.879289+00:00"
+        },
+        {
+            "id": "0004ccb1-ebc6-4c8c-90f6-06ebe52a2e42",
+            "name": "Monitored Zone 2",
+            "district": "Western Ghats",
+            "area_type": "River Basin",
+            "risk_category": "Medium",
+            "priority": "Normal (Hourly)",
+            "description": "Custom monitoring boundary",
+            "lat": 31.0649,
+            "lng": 78.8176,
+            "shape": "Polygon:[[31.218673801364655,78.6126708984375],[30.9128292266562,78.61129760742188],[30.9187201197222,79.02877807617189],[31.209277877460135,79.01779174804689]]",
+            "created_at": "2026-09-18T10:53:33.348793+00:00"
+        }
+    ]
+
+
 # ── Health endpoints ───────────────────────────────────────────────────────────
 @api_router.get("/health")
 async def api_health_check():

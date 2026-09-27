@@ -7,9 +7,17 @@ from pathlib import Path
 
 import httpx
 
+import os
 from services.osm_tile_loader import osm_tile_loader
 
-CACHE = Path(__file__).resolve().parent.parent / 'cache' / 'water_surfaces'
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    CACHE = Path('/tmp') / 'cache' / 'water_surfaces'
+else:
+    CACHE = Path(__file__).resolve().parent.parent / 'cache' / 'water_surfaces'
+try:
+    CACHE.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 TTL = 86400
 ENDPOINTS = ('https://overpass.private.coffee/api/interpreter',
              'https://overpass-api.de/api/interpreter')

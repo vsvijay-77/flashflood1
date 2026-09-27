@@ -13,21 +13,28 @@ from typing import Any, Awaitable, Callable, Iterable
 import httpx
 
 
-CACHE_ROOT = Path(__file__).parent.parent / "cache" / "osm_tiles"
-CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+import os
+
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    CACHE_ROOT = Path("/tmp") / "cache" / "osm_tiles"
+else:
+    CACHE_ROOT = Path(__file__).parent.parent / "cache" / "osm_tiles"
+try:
+    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+
 CACHE_TTL_SECONDS = 24 * 60 * 60
 MAX_CONCURRENCY = 6
 # Keep a new-area request responsive. Endpoint failover is still used, but a
 # dead Overpass mirror must not hold the Digital Twin risk panel for minutes.
-REQUEST_TIMEOUT_SECONDS = 30.0
+REQUEST_TIMEOUT_SECONDS = 8.0
 MAX_ATTEMPTS = 2
 
 ENDPOINTS = (
-    # Fast, worldwide Overpass mirrors with reliable global coverage
+    # Reliable Overpass mirrors
     "https://overpass-api.de/api/interpreter",
-    "https://z.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.openstreetmap.fr/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 )
 
@@ -66,15 +73,9 @@ class OSMTileLoader:
     @staticmethod
     def tiles_for_bbox(north: float, south: float, east: float, west: float) -> list[Tile]:
         lat_span, lng_span = abs(north - south), abs(east - west)
-        # A normal selected area (up to roughly 6 km across) fits safely in one
-        # bounded query. Splitting it into four requests was slower and made
-        # the viewer wait unnecessarily. Larger AOIs still use small tiles.
-        # Keep ordinary drawn/saved areas to a small number of requests. The
-        # previous 0.20° cutoff split a perfectly valid 15–20 km area into
-        # 88 tiles, making a new-area selection appear stuck in the viewer.
-        target_span = 0.10 if max(lat_span, lng_span) <= 0.50 else 0.025
-        rows = max(1, math.ceil(lat_span / target_span))
-        cols = max(1, math.ceil(lng_span / target_span))
+        target_span = max(0.15, max(lat_span, lng_span) / 2.0)
+        rows = min(2, max(1, math.ceil(lat_span / target_span)))
+        cols = min(2, max(1, math.ceil(lng_span / target_span)))
         lat_step = lat_span / rows
         lng_step = lng_span / cols
         return [
@@ -91,7 +92,12 @@ class OSMTileLoader:
     @staticmethod
     def _cache_path(dataset: str, tile: Tile) -> Path:
         digest = hashlib.sha256(f"v2:{dataset}:{tile.key}".encode()).hexdigest()
-        return CACHE_ROOT / dataset / f"{digest}.json"
+        p = CACHE_ROOT / dataset
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return p / f"{digest}.json"
 
     def _read_cache(self, dataset: str, tile: Tile) -> list[dict[str, Any]] | None:
         path = self._cache_path(dataset, tile)
@@ -215,10 +221,10 @@ class OSMTileLoader:
                     async with self._semaphore:
                         async with httpx.AsyncClient(timeout=httpx.Timeout(70.0 if dataset == "buildings" else REQUEST_TIMEOUT_SECONDS, connect=5.0), headers=headers) as client:
                             response = await client.post(endpoint, data={"data": query})
-                    if response.status_code in (429, 502, 503, 504):
-                        self._unhealthy_until[endpoint] = time.monotonic() + 60
+                    if response.status_code in (403, 406, 429, 500, 502, 503, 504):
+                        self._unhealthy_until[endpoint] = time.monotonic() + 300
                         errors.append(f"{tile.key} {response.status_code} {endpoint}")
-                        raise httpx.HTTPStatusError("Overpass temporarily unavailable", request=response.request, response=response)
+                        raise httpx.HTTPStatusError(f"Overpass returned status {response.status_code}", request=response.request, response=response)
                     response.raise_for_status()
                     payload = response.json()
                     if payload.get("remark"):

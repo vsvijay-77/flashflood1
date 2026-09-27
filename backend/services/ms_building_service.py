@@ -19,15 +19,21 @@ from typing import Dict, Any, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-CACHE_DIR = BACKEND_DIR / "cache" / "ms_buildings"
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    CACHE_DIR = Path("/tmp") / "cache" / "ms_buildings"
+else:
+    CACHE_DIR = BACKEND_DIR / "cache" / "ms_buildings"
 TILES_DIR = CACHE_DIR / "tiles"
 ZONES_DIR = CACHE_DIR / "zones"
 INDEX_PATH = CACHE_DIR / "dataset_links_index.json"
 DATASET_LINKS_URL = "https://bfppub.blob.core.windows.net/%24web/2026-08-13/dataset-links.csv"
 FALLBACK_GEOJSON = BACKEND_DIR / "pollachi_buildings.geojson"
 
-os.makedirs(TILES_DIR, exist_ok=True)
-os.makedirs(ZONES_DIR, exist_ok=True)
+try:
+    os.makedirs(TILES_DIR, exist_ok=True)
+    os.makedirs(ZONES_DIR, exist_ok=True)
+except Exception:
+    pass
 
 # In-memory LRU cache for query results
 _QUERY_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}

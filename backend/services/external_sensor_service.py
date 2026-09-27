@@ -10,6 +10,7 @@ import os
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+from urllib.parse import urlsplit
 try:
     import psycopg
 except ImportError:
@@ -34,12 +35,56 @@ SENSOR_DB_URL = os.environ.get("SENSOR_DB_URL", DEFAULT_SENSOR_DB_URL)
 class SensorDatabaseUnavailable(RuntimeError):
     """The telemetry source could not be read; never substitute live readings."""
 
+    def __init__(self, message: str, code: str = "SENSOR_DB_UNAVAILABLE"):
+        super().__init__(message)
+        self.code = code
+
+
+def sensor_database_error(exc: Exception) -> SensorDatabaseUnavailable:
+    """Classify failures without returning passwords, connection strings, or SQL."""
+    if isinstance(exc, SensorDatabaseUnavailable):
+        return exc
+    state = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+    message = str(exc).lower()
+    if state in {"28P01", "28000"} or "password authentication failed" in message:
+        code, reason = "SENSOR_DB_AUTH_FAILED", "Database authentication failed; check SENSOR_DB_URL credentials."
+    elif state in {"42P01", "42703", "3D000"}:
+        code, reason = "SENSOR_DB_SCHEMA_MISSING", "The configured SENSOR_DB_URL is missing required sensor tables or columns."
+    elif state == "42501":
+        code, reason = "SENSOR_DB_PERMISSION_DENIED", "The SENSOR_DB_URL database user cannot read the sensor tables."
+    elif any(term in message for term in ("translate host", "name or service not known", "nodename nor servname")):
+        code, reason = "SENSOR_DB_DNS_FAILED", "The SENSOR_DB_URL hostname could not be resolved."
+    elif state == "53300":
+        code, reason = "SENSOR_DB_CONNECTION_LIMIT", "The sensor database has reached its connection limit."
+    elif state == "57014" or "timeout" in message or "timed out" in message:
+        code, reason = "SENSOR_DB_TIMEOUT", "The SENSOR_DB_URL connection or query timed out. Check database reachability."
+    else:
+        code, reason = "SENSOR_DB_UNAVAILABLE", "Sensor database is unavailable. Check SENSOR_DB_URL and database connectivity."
+    return SensorDatabaseUnavailable(reason, code)
+
+
+def sensor_database_url() -> str:
+    # Dashboard values are sometimes copied with .env quotes or left blank.
+    # An empty DSN otherwise makes libpq try a local Unix socket on Vercel.
+    url = (os.environ.get("SENSOR_DB_URL") or "").strip()
+    if len(url) >= 2 and url[0] == url[-1] and url[0] in {"'", '"'}:
+        url = url[1:-1].strip()
+    url = url or DEFAULT_SENSOR_DB_URL
+    try:
+        parsed = urlsplit(url)
+        valid = parsed.scheme in {"postgres", "postgresql"} and parsed.hostname and parsed.path.strip("/")
+        _ = parsed.port
+    except ValueError:
+        valid = False
+    if not valid:
+        raise SensorDatabaseUnavailable("SENSOR_DB_URL must be a PostgreSQL connection URI, including hostname and database name.", "SENSOR_DB_CONFIG_INVALID")
+    return url
+
 
 def get_connection():
     if psycopg is None:
-        raise RuntimeError("PostgreSQL driver (psycopg) not installed")
-    url = os.environ.get("SENSOR_DB_URL", DEFAULT_SENSOR_DB_URL)
-    return psycopg.connect(url, connect_timeout=4)
+        raise SensorDatabaseUnavailable("PostgreSQL driver is unavailable. Install psycopg[binary] in the Vercel build.", "SENSOR_DB_DRIVER_MISSING")
+    return psycopg.connect(sensor_database_url(), connect_timeout=8)
 
 
 def get_live_sensor_summary() -> Dict[str, Any]:
@@ -153,11 +198,13 @@ def get_live_sensor_summary() -> Dict[str, Any]:
                     "devices": devices,
                 }
     except Exception as e:
-        logger.warning("sensor_db summary unavailable: %s", type(e).__name__)
+        error = sensor_database_error(e)
+        logger.warning("sensor_db summary unavailable: %s (%s)", error.code, type(e).__name__)
         return {
             "database": "Live Telemetry Ingest", "connected": False,
             "total_readings": 0, "total_packets": 0,
             "active_devices_count": 0, "devices": [],
+            "error": str(error), "error_code": error.code,
         }
 
 
@@ -210,8 +257,9 @@ def get_sensor_history(device_id: Optional[str] = None, limit: int = 150) -> Lis
                     rows.append(item)
                 return rows
     except Exception as e:
-        logger.warning("sensor_db read unavailable: %s", type(e).__name__)
-        raise SensorDatabaseUnavailable("Sensor database is unavailable. Check SENSOR_DB_URL and database connectivity.") from e
+        error = sensor_database_error(e)
+        logger.warning("sensor_db history unavailable: %s (%s)", error.code, type(e).__name__)
+        raise error from e
 
 
 def get_lora_packets(limit: int = 50) -> List[Dict[str, Any]]:
@@ -245,8 +293,9 @@ def get_lora_packets(limit: int = 50) -> List[Dict[str, Any]]:
                     rows.append(item)
                 return rows
     except Exception as e:
-        logger.warning("sensor_db read unavailable: %s", type(e).__name__)
-        raise SensorDatabaseUnavailable("Sensor database is unavailable. Check SENSOR_DB_URL and database connectivity.") from e
+        error = sensor_database_error(e)
+        logger.warning("sensor_db packets unavailable: %s (%s)", error.code, type(e).__name__)
+        raise error from e
 
 
 def get_node_latest_reading(node_id: str = "node1") -> Dict[str, Any]:
@@ -448,5 +497,3 @@ def get_sensor_alerts(limit: int = 50) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error reading disaster_alerts_log from PostgreSQL: {e}")
     return alerts
-
-

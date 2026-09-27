@@ -327,6 +327,28 @@ class SupabaseCollection:
                 return UpdateResult(res.modified_count)
             raise e
 
+    async def update_many(self, filter: Dict[str, Any], update: Dict[str, Any]) -> UpdateResult:
+        """Update every matching row (used by notification read-all)."""
+        if any(key.startswith("$") and key != "$set" for key in update):
+            raise NotImplementedError("Bulk updates support $set only")
+        changes = _serialize_for_supabase(update.get("$set", update))
+        if not changes:
+            return UpdateResult(0)
+
+        def _exec():
+            builder = get_supabase().table(self.table_name).update(changes)
+            for key, value in filter.items():
+                if key == "_id":
+                    raise ValueError("Use the Supabase id column for bulk updates")
+                if isinstance(value, dict):
+                    raise NotImplementedError("Bulk update filters require equality values")
+                builder = builder.is_(key, "null") if value is None else builder.eq(key, value)
+            return builder.execute()
+
+        # Do not hide failed bulk writes or redirect them to another database.
+        res = await asyncio.to_thread(lambda: _run_with_retry(_exec))
+        return UpdateResult(len(res.data or []))
+
     async def delete_one(self, filter: Dict[str, Any]) -> DeleteResult:
         def _exec():
             c = get_supabase()

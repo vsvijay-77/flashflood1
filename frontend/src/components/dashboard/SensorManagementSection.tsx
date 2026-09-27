@@ -1,3 +1,4 @@
+import { sensorPolling, sensorRefetchInterval } from "@/lib/sensorPolling";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -49,25 +50,28 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
   const [searchQuery, setSearchQuery] = useState("");
   const [pageSize, setPageSize] = useState<number>(15);
 
-  // 1. Live Summary query from PostgreSQL sensor_db (polled every 1 sec)
+  // 1. Live Summary query from PostgreSQL sensor_db (with outage backoff)
   const summaryQuery = useQuery({
     queryKey: ["external-sensors-summary"],
     queryFn: () => apiGet<ExternalSensorSummary>("/external-sensors/summary"),
-    refetchInterval: autoRefresh ? 1000 : false,
+    ...sensorPolling,
+    refetchInterval: autoRefresh ? sensorRefetchInterval : false,
   });
 
-  // 2. Telemetry History query from PostgreSQL sensor_data table (last 1000 records, polled every 1 sec)
+  // 2. Telemetry History query from PostgreSQL sensor_data table (last 1000 records, with outage backoff)
   const historyQuery = useQuery({
-    queryKey: ["external-sensors-history"],
+    queryKey: ["external-sensors-history", 1000],
     queryFn: () => apiGet<ExternalSensorHistoryItem[]>("/external-sensors/history?limit=1000"),
-    refetchInterval: autoRefresh ? 1000 : false,
+    ...sensorPolling,
+    refetchInterval: autoRefresh ? sensorRefetchInterval : false,
   });
 
-  // 3. Raw LoRa packets query from PostgreSQL lora_packets table (polled every 1 sec)
+  // 3. Raw LoRa packets query from PostgreSQL lora_packets table (with outage backoff)
   const packetsQuery = useQuery({
-    queryKey: ["external-sensors-packets"],
+    queryKey: ["external-sensors-packets", 100],
     queryFn: () => apiGet<ExternalLoraPacket[]>("/external-sensors/packets?limit=100"),
-    refetchInterval: autoRefresh ? 1000 : false,
+    ...sensorPolling,
+    refetchInterval: autoRefresh ? sensorRefetchInterval : false,
   });
 
   // 4. Node Fleet queries from MongoDB
@@ -159,6 +163,11 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
       data-testid="sensor-management-page"
       className="space-y-6 pt-2"
     >
+      {(summary?.connected === false || historyQuery.isError || packetsQuery.isError) && (
+        <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Sensor database unavailable. Retrying every 30 seconds. Previously loaded readings may be out of date.
+        </p>
+      )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -433,13 +442,13 @@ export function SensorManagementSection({ showDeviceOverview = false }: SensorMa
           {/* Telemetry Stream Views */}
           <SectionCard
             testId="sensor-telemetry-card"
-            title="Real-time LoRaWAN Stream (1s Live DB Polling)"
+            title="Real-time LoRaWAN Stream"
             description="Live historical sensor readings and raw packet frames directly from IoT sensor stream"
             actions={
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                   <span className="size-2 rounded-full bg-emerald-500 animate-ping" />
-                  Live 1s Polling from DB
+                  Auto-refresh every 5s
                 </span>
                 <span className="text-xs text-slate-500 font-medium">
                   {history.length} / 1000 Records

@@ -1,3 +1,4 @@
+import { sensorPolling } from "@/lib/sensorPolling";
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, Bar, BarChart, Line, LineChart, ResponsiveContainer, Tooltip } from "recharts";
@@ -10,13 +11,13 @@ export function LiveSensorMonitoring() {
   const summaryQuery = useQuery({
     queryKey: ["external-sensors-summary"],
     queryFn: () => apiGet<ExternalSensorSummary>("/external-sensors/summary"),
-    refetchInterval: 1000,
+    ...sensorPolling,
   });
 
   const historyQuery = useQuery({
-    queryKey: ["external-sensors-history"],
+    queryKey: ["external-sensors-history", 25],
     queryFn: () => apiGet<ExternalSensorHistoryItem[]>("/external-sensors/history?limit=25"),
-    refetchInterval: 1000,
+    ...sensorPolling,
   });
 
   const sensorsQuery = useQuery({
@@ -93,7 +94,7 @@ export function LiveSensorMonitoring() {
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-xs font-semibold text-emerald-700">
           <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
-          Real DB Ingest
+          {summaryQuery.data?.connected ? "DB connected" : "DB unavailable"}
         </span>
       </div>
 

@@ -63,7 +63,7 @@ def get_history(
     try:
         return get_sensor_history(device_id=device_id, limit=limit)
     except SensorDatabaseUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=str(exc), headers={"X-Sensor-Error": exc.code}) from exc
 
 
 @router.get("/packets")
@@ -77,7 +77,7 @@ def get_packets(
     try:
         return get_lora_packets(limit=limit)
     except SensorDatabaseUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=str(exc), headers={"X-Sensor-Error": exc.code}) from exc
 
 
 @router.post("/alerts")
@@ -107,4 +107,3 @@ async def list_sensor_alerts(
     Retrieve all disaster alerts logged in PostgreSQL database.
     """
     return get_sensor_alerts(limit=limit)
-

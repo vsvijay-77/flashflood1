@@ -11,36 +11,18 @@ Tables written:
 
 import json
 import logging
-import os
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-try:
-    import psycopg
-except ImportError:
-    try:
-        import psycopg2 as psycopg
-    except ImportError:
-        psycopg = None
-
-from dotenv import load_dotenv
-
-ROOT_DIR = Path(__file__).parent.parent
-load_dotenv(ROOT_DIR / ".env")
-load_dotenv()
+from services.external_sensor_service import get_connection
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SENSOR_DB_URL = "postgresql://sensor_user:nexgi@db.nishanth.qzz.io:5432/sensor_db"
-SENSOR_DB_URL = os.environ.get("SENSOR_DB_URL", DEFAULT_SENSOR_DB_URL)
-
 
 def _conn():
-    if psycopg is None:
-        raise RuntimeError("PostgreSQL driver (psycopg) not installed")
-    return psycopg.connect(SENSOR_DB_URL, connect_timeout=4)
+    # Share URL normalization with telemetry, including empty Vercel env values.
+    return get_connection()
 
 
 def ensure_tables() -> None:

@@ -1,3 +1,4 @@
+import { sensorPolling } from "@/lib/sensorPolling";
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Battery, Wifi, Cpu } from "lucide-react";
@@ -16,7 +17,7 @@ export function NetworkOverviewKPIs() {
   const summaryQuery = useQuery({
     queryKey: ["external-sensors-summary"],
     queryFn: () => apiGet<ExternalSensorSummary>("/external-sensors/summary"),
-    refetchInterval: 1000,
+    ...sensorPolling,
   });
 
   const sensorsQuery = useQuery({

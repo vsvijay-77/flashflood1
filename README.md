@@ -138,6 +138,15 @@ then open a saved digital twin area. Map requests allow up to 180 seconds to fet
 OSM data within the configured 300-second function limit, and reuse saved Supabase
 layers. A sensor outage returns 503 for history/packets and an offline summary.
 
+For sensor 503s, check `/api/external-sensors/summary`: `error_code` distinguishes
+configuration, driver, authentication, DNS, schema, and timeout failures without
+exposing credentials. History/packet responses also include `X-Sensor-Error`.
+An error referring to `/var/run/postgresql/.s.PGSQL.5432` means libpq was given an
+empty connection string and tried a local Unix socket. Blank or quoted-empty
+`SENSOR_DB_URL` values now use the existing configured default instead; set an
+explicit PostgreSQL URI in Vercel to select your deployment's database.
+Telemetry polls every five seconds and backs off to thirty seconds during outages.
+
 ---
 
 ## Demo Access

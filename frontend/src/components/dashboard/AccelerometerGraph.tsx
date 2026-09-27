@@ -1,3 +1,4 @@
+import { sensorPolling } from "@/lib/sensorPolling";
 import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CartesianGrid, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine } from "recharts";
@@ -40,7 +41,7 @@ export function AccelerometerGraph() {
   const { data: history = [] } = useQuery<ExternalSensorHistoryItem[]>({
     queryKey: ["external-sensors-history", limit],
     queryFn: () => apiGet<ExternalSensorHistoryItem[]>(`/external-sensors/history?limit=${limit}`),
-    refetchInterval: 3000,
+    ...sensorPolling,
   });
 
   // Map real database records from sensor_data to steady chart points

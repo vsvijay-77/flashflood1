@@ -132,3 +132,18 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ── Health endpoint ────────────────────────────────────────────────────────────
+@api_router.get("/health")
+async def health_check():
+    """Lightweight liveness probe — used by Vercel and load-balancers."""
+    return {"status": "online", "system": "NEXGI"}
+
+
+# ── Local development server ───────────────────────────────────────────────────
+# This block is intentionally excluded from Vercel serverless execution.
+# Vercel imports `app` directly via api/index.py and manages the server lifecycle.
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=8001, reload=True)

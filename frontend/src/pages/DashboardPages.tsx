@@ -119,19 +119,16 @@ export function DashboardPage() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-8 bg-slate-50 min-h-screen pb-12" data-testid="dashboard-page">
+    <div className="flex flex-col gap-6 bg-gradient-to-b from-slate-100/80 via-slate-50 to-slate-100/60 min-h-screen pb-16" data-testid="dashboard-page">
       <SystemStatusHeader />
       
-      <div className="px-4 sm:px-6 space-y-8 max-w-[1600px] mx-auto w-full">
+      <div className="px-3 sm:px-6 lg:px-8 space-y-6 max-w-[1680px] mx-auto w-full">
         <NetworkOverviewKPIs />
         
-        <hr className="border-slate-200" />
         <LiveLoRaTelemetrySection />
 
-        <hr className="border-slate-200" />
         <AccelerometerGraph />
         
-        <hr className="border-slate-200" />
         <BatteryAndAlerts />
       </div>
     </div>

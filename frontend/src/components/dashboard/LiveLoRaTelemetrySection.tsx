@@ -367,11 +367,13 @@ export function LiveLoRaTelemetrySection() {
       {/* 12 Key Sensor Readings Cards Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
         {/* 1. Rain Sensor */}
-        <Card className="border-slate-200 shadow-xs hover:border-blue-300 transition-colors">
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-blue-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
           <CardContent className="p-3.5 space-y-1.5">
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-medium">Rain Intensity</span>
-              <CloudRain className="size-4 text-blue-500" />
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Rainfall</span>
+              <div className="size-6 rounded-md bg-blue-50 text-blue-600 flex items-center justify-center">
+                <CloudRain className="size-3.5" />
+              </div>
             </div>
             <div className="flex items-baseline justify-between gap-1">
               <div className={`text-2xl font-bold font-mono ${rainCal.color}`}>
@@ -393,11 +395,13 @@ export function LiveLoRaTelemetrySection() {
         </Card>
 
         {/* 2. Water Level */}
-        <Card className="border-slate-200 shadow-xs hover:border-cyan-300 transition-colors">
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-cyan-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
           <CardContent className="p-3.5 space-y-1.5">
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-medium">Water Stage Level</span>
-              <Waves className="size-4 text-cyan-600" />
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Water Stage</span>
+              <div className="size-6 rounded-md bg-cyan-50 text-cyan-600 flex items-center justify-center">
+                <Waves className="size-3.5" />
+              </div>
             </div>
             <div className="flex items-baseline justify-between gap-1">
               <div className={`text-2xl font-bold font-mono ${waterCal.color}`}>
@@ -419,143 +423,284 @@ export function LiveLoRaTelemetrySection() {
         </Card>
 
         {/* 3. Soil Moisture */}
-        <Card className="border-slate-200 shadow-xs hover:border-emerald-300 transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Soil Moisture</span>
-              <Droplets className="size-4 text-emerald-600" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-emerald-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Soil Moisture</span>
+              <div className="size-6 rounded-md bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <Droplets className="size-3.5" />
+              </div>
             </div>
-            <div className="text-xl font-bold font-mono text-emerald-700">
-              {latest?.soil_moisture ?? "94"}%
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-2xl font-bold font-mono text-emerald-700">
+                {latest?.soil_moisture ?? "94"}%
+              </div>
+              <span className="text-[10px] font-semibold text-emerald-600">Saturation</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Saturation Level</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(0, latest?.soil_moisture ?? 94))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Probe Ingest</span>
+              <span>Subsurface</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 4. Temperature */}
-        <Card className="border-slate-200 shadow-xs hover:border-amber-300 transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Temperature</span>
-              <Thermometer className="size-4 text-amber-500" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-amber-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Temperature</span>
+              <div className="size-6 rounded-md bg-amber-50 text-amber-600 flex items-center justify-center">
+                <Thermometer className="size-3.5" />
+              </div>
             </div>
-            <div className="text-xl font-bold font-mono text-amber-600">
-              {latest?.temperature != null ? `${latest.temperature.toFixed(1)}°C` : "27.8°C"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-2xl font-bold font-mono text-amber-600">
+                {latest?.temperature != null ? `${latest.temperature.toFixed(1)}°C` : "27.8°C"}
+              </div>
+              <span className="text-[10px] font-semibold text-amber-700">Ambient Air</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Ambient Ambient</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-amber-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(0, ((latest?.temperature ?? 27.8) / 45) * 100))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Basin Sensor</span>
+              <span>Air Temp</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 5. Humidity */}
-        <Card className="border-slate-200 shadow-xs hover:border-sky-300 transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Humidity</span>
-              <Droplets className="size-4 text-sky-500" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-sky-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Humidity</span>
+              <div className="size-6 rounded-md bg-sky-50 text-sky-600 flex items-center justify-center">
+                <Droplets className="size-3.5" />
+              </div>
             </div>
-            <div className="text-xl font-bold font-mono text-sky-700">
-              {latest?.humidity != null ? `${latest.humidity.toFixed(1)}%` : "56.1%"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-2xl font-bold font-mono text-sky-700">
+                {latest?.humidity != null ? `${latest.humidity.toFixed(1)}%` : "56.1%"}
+              </div>
+              <span className="text-[10px] font-semibold text-sky-700">RH Vapor</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Relative Humidity</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-sky-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(0, latest?.humidity ?? 56))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Atmosphere</span>
+              <span>Relative</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 6. Flood Status */}
-        <Card className={`border shadow-xs ${isFloodNormal ? "bg-emerald-50/50 border-emerald-200" : "bg-rose-50/50 border-rose-300"}`}>
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Flood Status</span>
-              {isFloodNormal ? <ShieldCheck className="size-4 text-emerald-600" /> : <ShieldAlert className="size-4 text-rose-600" />}
+        <Card className={`relative overflow-hidden border shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 border-t-2 ${isFloodNormal ? "border-slate-200/90 border-t-emerald-500 bg-emerald-50/30" : "border-rose-300 border-t-rose-600 bg-rose-50/60"}`}>
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Flood Status</span>
+              <div className={`size-6 rounded-md flex items-center justify-center ${isFloodNormal ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                {isFloodNormal ? <ShieldCheck className="size-3.5" /> : <ShieldAlert className="size-3.5 animate-pulse" />}
+              </div>
             </div>
-            <div className={`text-base font-bold font-mono ${isFloodNormal ? "text-emerald-700" : "text-rose-700 font-extrabold"}`}>
-              {latest?.flood_status ?? "NORMAL"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className={`text-xl font-extrabold font-mono tracking-tight ${isFloodNormal ? "text-emerald-700" : "text-rose-700 animate-pulse"}`}>
+                {latest?.flood_status ?? "NORMAL"}
+              </div>
+              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${isFloodNormal ? "bg-emerald-100 text-emerald-800" : "bg-rose-600 text-white"}`}>
+                {isFloodNormal ? "STABLE" : "ALERT"}
+              </span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Hazard Risk State</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 ${isFloodNormal ? "bg-emerald-500" : "bg-rose-600"}`}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Risk State</span>
+              <span>Early Warning</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 7. Acceleration X */}
-        <Card className="border-slate-200 shadow-xs">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Acceleration X</span>
-              <Activity className="size-4 text-indigo-500" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-indigo-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Accel X</span>
+              <div className="size-6 rounded-md bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <Activity className="size-3.5" />
+              </div>
             </div>
-            <div className="text-lg font-bold font-mono text-indigo-900">
-              {latest?.accel_x != null ? `${latest.accel_x.toFixed(2)}` : "9.81"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-xl font-bold font-mono text-indigo-950">
+                {latest?.accel_x != null ? `${latest.accel_x.toFixed(2)}` : "9.81"}
+              </div>
+              <span className="text-[10px] font-semibold text-slate-500">m/s²</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">m/s² (X-axis)</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-indigo-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(5, ((Math.abs(latest?.accel_x ?? 9.8) / 15) * 100)))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Primary Axis</span>
+              <span>X-Vector</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 8. Acceleration Y */}
-        <Card className="border-slate-200 shadow-xs">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Acceleration Y</span>
-              <Activity className="size-4 text-indigo-500" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-indigo-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Accel Y</span>
+              <div className="size-6 rounded-md bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <Activity className="size-3.5" />
+              </div>
             </div>
-            <div className="text-lg font-bold font-mono text-indigo-900">
-              {latest?.accel_y != null ? `${latest.accel_y.toFixed(2)}` : "0.90"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-xl font-bold font-mono text-indigo-950">
+                {latest?.accel_y != null ? `${latest.accel_y.toFixed(2)}` : "0.90"}
+              </div>
+              <span className="text-[10px] font-semibold text-slate-500">m/s²</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">m/s² (Y-axis)</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-indigo-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(5, ((Math.abs(latest?.accel_y ?? 0.9) / 15) * 100)))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Lateral Axis</span>
+              <span>Y-Vector</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 9. Acceleration Z */}
-        <Card className="border-slate-200 shadow-xs">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Acceleration Z</span>
-              <Activity className="size-4 text-indigo-500" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-indigo-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Accel Z</span>
+              <div className="size-6 rounded-md bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <Activity className="size-3.5" />
+              </div>
             </div>
-            <div className="text-lg font-bold font-mono text-indigo-900">
-              {latest?.accel_z != null ? `${latest.accel_z.toFixed(2)}` : "0.66"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-xl font-bold font-mono text-indigo-950">
+                {latest?.accel_z != null ? `${latest.accel_z.toFixed(2)}` : "0.66"}
+              </div>
+              <span className="text-[10px] font-semibold text-slate-500">m/s²</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">m/s² (Z-axis)</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-indigo-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(5, ((Math.abs(latest?.accel_z ?? 0.6) / 15) * 100)))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Vertical Axis</span>
+              <span>Z-Vector</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 10. Tilt X */}
-        <Card className="border-slate-200 shadow-xs">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Tilt X</span>
-              <Compass className="size-4 text-purple-500" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-purple-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Tilt X (Roll)</span>
+              <div className="size-6 rounded-md bg-purple-50 text-purple-600 flex items-center justify-center">
+                <Compass className="size-3.5" />
+              </div>
             </div>
-            <div className="text-lg font-bold font-mono text-purple-900">
-              {latest?.tilt_x != null ? `${latest.tilt_x.toFixed(2)}°` : "5.23°"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-xl font-bold font-mono text-purple-950">
+                {latest?.tilt_x != null ? `${latest.tilt_x.toFixed(2)}°` : "5.23°"}
+              </div>
+              <span className="text-[10px] font-semibold text-purple-700">Inclination</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Roll Inclination</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-purple-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(5, ((Math.abs(latest?.tilt_x ?? 5) / 90) * 100)))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Roll Angle</span>
+              <span>Nominal</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 11. Tilt Y */}
-        <Card className="border-slate-200 shadow-xs">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Tilt Y</span>
-              <Compass className="size-4 text-purple-500" />
+        <Card className="relative overflow-hidden border border-slate-200/90 border-t-2 border-t-purple-500 bg-white shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Tilt Y (Pitch)</span>
+              <div className="size-6 rounded-md bg-purple-50 text-purple-600 flex items-center justify-center">
+                <Compass className="size-3.5" />
+              </div>
             </div>
-            <div className="text-lg font-bold font-mono text-purple-900">
-              {latest?.tilt_y != null ? `${latest.tilt_y.toFixed(2)}°` : "-86.17°"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-xl font-bold font-mono text-purple-950">
+                {latest?.tilt_y != null ? `${latest.tilt_y.toFixed(2)}°` : "-86.17°"}
+              </div>
+              <span className="text-[10px] font-semibold text-purple-700">Inclination</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Pitch Inclination</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-purple-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(5, ((Math.abs(latest?.tilt_y ?? 85) / 90) * 100)))}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Pitch Angle</span>
+              <span>Nominal</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 12. LoRa Status */}
-        <Card className="border-emerald-200 bg-emerald-50/40 shadow-xs">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">LoRa Link</span>
-              <Radio className="size-4 text-emerald-600" />
+        <Card className="relative overflow-hidden border border-emerald-300/80 border-t-2 border-t-emerald-500 bg-emerald-50/40 shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 group">
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">LoRa Link</span>
+              <div className="size-6 rounded-md bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                <Radio className="size-3.5" />
+              </div>
             </div>
-            <div className="text-base font-bold font-mono text-emerald-800 flex items-center gap-1.5">
-              <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
-              {latest?.lora_status ?? "READY"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className="text-lg font-bold font-mono text-emerald-900 flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
+                {latest?.lora_status ?? "READY"}
+              </div>
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-200/80 text-emerald-900">
+                ONLINE
+              </span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">SX1278 433MHz</span>
+            <div className="w-full bg-emerald-200/50 rounded-full h-1.5 overflow-hidden">
+              <div className="h-full bg-emerald-600 transition-all duration-300" style={{ width: "100%" }} />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-emerald-700 font-mono pt-0.5">
+              <span>SX1278 433MHz</span>
+              <span>Mesh OK</span>
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -1,0 +1,98 @@
+import logging
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from lib.db import supabase
+
+logger = logging.getLogger("lora_router")
+router = APIRouter(prefix="/lora", tags=["lora"])
+
+
+class LoRaPacketIn(BaseModel):
+    id: Optional[int] = Field(default=None, description="Packet ID")
+    rain: Optional[float] = Field(default=0.0)
+    water: Optional[float] = Field(default=0.0)
+    soil: Optional[float] = Field(default=0.0)
+    temperature: Optional[float] = Field(default=0.0)
+    humidity: Optional[float] = Field(default=0.0)
+    accel_x: Optional[float] = Field(default=0.0)
+    accel_y: Optional[float] = Field(default=0.0)
+    accel_z: Optional[float] = Field(default=0.0)
+    tilt_x: Optional[float] = Field(default=0.0)
+    tilt_y: Optional[float] = Field(default=0.0)
+    flood: Optional[str] = Field(default="NORMAL")
+    lora: Optional[str] = Field(default="READY")
+
+
+@router.get("/transmissions")
+async def get_lora_transmissions(limit: int = Query(default=30, ge=1, le=200)):
+    """Fetch latest real LoRa field transmission records from Supabase."""
+    try:
+        res = (
+            supabase.table("lora_transmissions")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        data = res.data or []
+        return {
+            "status": "ok",
+            "count": len(data),
+            "latest": data[0] if data else None,
+            "transmissions": data,
+        }
+    except Exception as exc:
+        logger.error(f"Error fetching lora_transmissions from Supabase: {exc}")
+        return {"status": "error", "error": str(exc), "count": 0, "latest": None, "transmissions": []}
+
+
+@router.get("/latest")
+async def get_latest_lora_packet():
+    """Fetch the single latest received LoRa transmission packet."""
+    try:
+        res = (
+            supabase.table("lora_transmissions")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        data = res.data or []
+        if not data:
+            return {"status": "empty", "packet": None}
+        return {"status": "ok", "packet": data[0]}
+    except Exception as exc:
+        logger.error(f"Error fetching latest packet: {exc}")
+        return {"status": "error", "error": str(exc), "packet": None}
+
+
+@router.post("/transmissions")
+async def ingest_lora_packet(payload: LoRaPacketIn):
+    """Ingest a LoRa transmission packet from Raspberry Pi or field gateway."""
+    try:
+        record = {
+            "packet_id": payload.id or int(datetime.now(timezone.utc).timestamp()),
+            "device_id": f"LORA_NODE_{payload.id or 'FIELD'}",
+            "rain_sensor": float(payload.rain or 0.0),
+            "water_level": float(payload.water or 0.0),
+            "soil_moisture": float(payload.soil or 0.0),
+            "temperature": float(payload.temperature or 0.0),
+            "humidity": float(payload.humidity or 0.0),
+            "accel_x": float(payload.accel_x or 0.0),
+            "accel_y": float(payload.accel_y or 0.0),
+            "accel_z": float(payload.accel_z or 0.0),
+            "tilt_x": float(payload.tilt_x or 0.0),
+            "tilt_y": float(payload.tilt_y or 0.0),
+            "flood_status": str(payload.flood or "NORMAL"),
+            "lora_status": str(payload.lora or "READY"),
+            "raw_payload": payload.model_dump(),
+        }
+        res = supabase.table("lora_transmissions").insert(record).execute()
+        return {"status": "created", "record": res.data}
+    except Exception as exc:
+        logger.error(f"Error saving lora packet: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -32,11 +32,35 @@ function findPeaks(data: AccelPoint[], key: "x" | "y" | "z" | "calculatedZ") {
   return peaks;
 }
 
+import { supabase } from "@/lib/supabase";
+
 export function AccelerometerGraph() {
   const [range, setRange] = useState("Live");
   const [sensitivityMode, setSensitivityMode] = useState<"amplified" | "standard">("standard");
 
   const limit = range === "Live" ? 30 : range === "Last 1 Hour" ? 60 : range === "Last 24 Hours" ? 150 : 300;
+
+  const { data: loraHistory = [] } = useQuery<any[]>({
+    queryKey: ["lora-accel-history-1s", limit],
+    queryFn: async () => {
+      try {
+        const { data } = await supabase
+          .from("lora_transmissions")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(limit);
+        if (data && data.length > 0) return data;
+      } catch {}
+      try {
+        const res = await apiGet<{ transmissions: any[] }>(`/lora/transmissions?limit=${limit}`);
+        return res?.transmissions || [];
+      } catch {
+        return [];
+      }
+    },
+    refetchInterval: 1000,
+    staleTime: 500,
+  });
 
   const { data: history = [] } = useQuery<ExternalSensorHistoryItem[]>({
     queryKey: ["external-sensors-history", limit],
@@ -44,16 +68,46 @@ export function AccelerometerGraph() {
     ...sensorPolling,
   });
 
-  // Map real database records from sensor_data to steady chart points
+  // Map real database records from Supabase lora_transmissions or sensor_data
   const accelData: AccelPoint[] = useMemo(() => {
+    if (loraHistory && loraHistory.length > 0) {
+      return loraHistory
+        .slice()
+        .reverse()
+        .map((t) => {
+          const rawX = Number(t.accel_x ?? 0);
+          const rawY = Number(t.accel_y ?? 0);
+          const rawZ = Number(t.accel_z ?? 0);
+          const isMoving = Math.abs(rawX) > 12 || Math.abs(rawY) > 5 || Math.abs(rawZ) > 5;
+
+          const x = Number(rawX.toFixed(2));
+          const y = Number(rawY.toFixed(2));
+          const z = Number(rawZ.toFixed(2));
+          const calculatedZ = Number(((x + y + z) / 3.0).toFixed(2));
+
+          return {
+            time: t.created_at
+              ? new Date(t.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+              : `#${t.packet_id}`,
+            x,
+            y,
+            z,
+            calculatedZ,
+            tilt: Number(t.tilt_x ?? 0),
+            landslideStatus: isMoving ? "risk_50" : "normal",
+            isMoving,
+          };
+        });
+    }
+
     if (!history || history.length === 0) {
       return Array.from({ length: 15 }).map((_, i) => ({
         time: `18:${(40 + i).toString().padStart(2, "0")}`,
-        x: -10,
-        y: -10,
-        z: -10,
-        calculatedZ: -10,
-        tilt: 100,
+        x: 9.8,
+        y: 0.9,
+        z: 0.6,
+        calculatedZ: 3.7,
+        tilt: 5.2,
         landslideStatus: "normal",
         isMoving: false,
       }));

@@ -102,6 +102,7 @@ from routers.external_sensors import router as external_sensors_router  # noqa: 
 from routers.simulation_pg import router as simulation_pg_router  # noqa: E402
 from routers.weather import router as weather_router  # noqa: E402
 from routers.telephony import router as telephony_router  # noqa: E402
+from routers.lora import router as lora_router  # noqa: E402
 
 api_router.include_router(auth_router)
 api_router.include_router(network_router)
@@ -118,6 +119,7 @@ api_router.include_router(external_sensors_router)
 api_router.include_router(simulation_pg_router)
 api_router.include_router(weather_router)
 api_router.include_router(telephony_router)
+api_router.include_router(lora_router)
 
 
 
@@ -141,6 +143,7 @@ app.include_router(external_sensors_router)
 app.include_router(simulation_pg_router)
 app.include_router(weather_router)
 app.include_router(telephony_router)
+app.include_router(lora_router)
 
 app.add_middleware(
     CORSMiddleware,

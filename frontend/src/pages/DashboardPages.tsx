@@ -24,6 +24,7 @@ import { NetworkOverviewKPIs } from "@/components/dashboard/NetworkOverviewKPIs"
 
 import { LiveSensorMonitoring } from "@/components/dashboard/LiveSensorMonitoring";
 import { AccelerometerGraph } from "@/components/dashboard/AccelerometerGraph";
+import { LiveLoRaTelemetrySection } from "@/components/dashboard/LiveLoRaTelemetrySection";
 
 
 import { BatteryAndAlerts } from "@/components/dashboard/BatteryAndAlerts";
@@ -129,6 +130,9 @@ export function DashboardPage() {
       <div className="px-4 sm:px-6 space-y-8 max-w-[1600px] mx-auto w-full">
         <NetworkOverviewKPIs />
         
+        <hr className="border-slate-200" />
+        <LiveLoRaTelemetrySection />
+
         <hr className="border-slate-200" />
         <LiveSensorMonitoring />
         

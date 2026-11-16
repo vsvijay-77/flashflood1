@@ -1185,7 +1185,21 @@ export function UserManagementPage() {
   const callMembersMutation = useMutation({
     mutationFn: () => apiPost("/telephony/call-members", { send_sms: true }),
     onSuccess: (res: any) => {
-      toast.success(res?.message || "Emergency voice call in Malayalam initiated to Navaneeth & Kavin! 📞");
+      const results = res?.results || [];
+      const failed = results.filter((r: any) => r.call && !r.call.success);
+      const successful = results.filter((r: any) => r.call && r.call.success);
+
+      if (failed.length > 0 && successful.length === 0) {
+        const firstErr = failed[0]?.call?.error || "Twilio authentication or dispatch failed";
+        const shortErr = firstErr.includes("20003")
+          ? "Twilio Error 20003: Auth Token is not valid for Account SID"
+          : firstErr.slice(0, 100);
+        toast.error(`Call failed for all recipients: ${shortErr}`);
+      } else if (failed.length > 0) {
+        toast.warning(`Partially sent: ${successful.length} succeeded, ${failed.length} failed`);
+      } else {
+        toast.success(res?.message || "Emergency voice call in Malayalam initiated to Navaneeth & Kavin! 📞");
+      }
       qc.invalidateQueries({ queryKey: ["telephony-status"] });
     },
     onError: (err) => toast.error(apiErrorMessage(err, "Telephony call failed")),

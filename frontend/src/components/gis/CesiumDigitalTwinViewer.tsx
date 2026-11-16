@@ -3197,12 +3197,56 @@ export function CesiumDigitalTwinViewer({
 
     const fetchSlaveData = async () => {
       try {
-        const res = await fetch(`/api/external-sensors/node/${encodeURIComponent(targetSensorId)}`);
-        if (!res.ok) {
+        let data: any = null;
+
+        // 1. Check live LoRa packet stream (/api/lora/latest)
+        try {
+          const loraRes = await fetch("/api/lora/latest");
+          if (loraRes.ok) {
+            const loraJson = await loraRes.json();
+            if (loraJson?.status === "ok" && loraJson?.packet) {
+              const p = loraJson.packet;
+              const rainVal = Number(p.rain_percentage != null ? p.rain_percentage : p.rain_sensor ?? 0);
+              const waterVal = Number(p.water_percentage != null ? p.water_percentage : p.water_level ?? 0);
+              data = {
+                device_id: p.device_id || "LORA_NODE_1",
+                has_data: true,
+                status: "online",
+                soil_moisture: Number(p.soil_moisture ?? 0),
+                water_level: waterVal,
+                water_level_mm: waterVal,
+                water_level_m: waterVal / 100.0,
+                rainfall: rainVal,
+                rainfall_mm: rainVal,
+                rainfall_pct: rainVal,
+                tilt: Number(p.tilt_x != null ? (p.tilt_x <= 10 ? 100 - p.tilt_x : p.tilt_x) : 100),
+                raw_tilt: Number(p.tilt_x ?? 0),
+                imu_x: Number(p.accel_x ?? 0),
+                imu_y: Number(p.accel_y ?? 0),
+                imu_z: Number(p.accel_z ?? 0),
+                imu_mag: 9.8,
+                rssi: -72.0,
+                snr: 8.0,
+                battery: 98,
+                txt: `LIVE LORA #${p.packet_id}`,
+                created_at: p.created_at,
+              };
+            }
+          }
+        } catch (e) {}
+
+        // 2. Fallback to external-sensors node endpoint
+        if (!data) {
+          const res = await fetch(`/api/external-sensors/node/${encodeURIComponent(targetSensorId)}`);
+          if (res.ok) {
+            data = await res.json();
+          }
+        }
+
+        if (!data) {
           if (isMounted) setSlaveLiveTelemetry(defaultLiveTelemetry);
           return;
         }
-        const data = await res.json();
         if (!isMounted) return;
 
         if (data && data.has_data) {
@@ -3362,84 +3406,83 @@ export function CesiumDigitalTwinViewer({
             } catch (e) {}
           }
 
-          // ─── 1. ATMOSPHERIC RAIN (Strictly sensor rainfall > 40%, no simulation) ───
-          // User requirement: "while opening digital twin check for rain if >40 start rain" & "if rain sesnor value drops no rain"
+          // ─── 1. ATMOSPHERIC RAIN & SIMULATION TRIGGER RULES ───
+          // User requirement: "if rain senor reaches greater than 50 % make in digital twin start simulation water level increse 50 start water simultion"
+          // User requirement: "make rain fullly during simulation"
           const currentRainfall = telemetry.hasData ? Math.max(telemetry.rainfall, telemetry.rainfallPct, telemetry.rainfallMm) : 0;
+          const currentWaterLevel = telemetry.hasData ? Math.max(telemetry.waterLevelMm, telemetry.waterLevelM * 100) : 0;
+          const currentSoilMoisture = telemetry.hasData ? telemetry.soilMoisture : 0;
           const prevRainfall = prevRainfallRef.current;
-          const isRainDropping = prevRainfall !== null && currentRainfall < prevRainfall;
-          const isRainOver40 = telemetry.hasData && currentRainfall > 40 && !isRainDropping;
+          const prevWaterLevel = prevWaterLevelRef.current;
 
-          if (isRainDropping || !isRainOver40 || currentRainfall <= 0) {
-            // User requirement: "if rain sesnor value drops no rain"
-            lastAutoStartedRainRef.current = false;
-            autoStartedRainBySensorRef.current = false;
-            setInternalRain(false);
-            setShowVisibleRain(false);
-            onToggleRain?.(false);
-            setSimRainIntensity(0);
-          } else if (isRainOver40) {
+          const isRainOver50 = telemetry.hasData && currentRainfall > 50;
+          const isWaterLevelOver50 = telemetry.hasData && currentWaterLevel > 50;
+          const isWaterLevelIncreasing = prevWaterLevel !== null && currentWaterLevel > prevWaterLevel;
+
+          // Rule: "make rain fullly during simulation"
+          if (waterSimActive || isFloodRunning) {
             autoStartedRainBySensorRef.current = true;
-            if (!rainActive) {
-              setInternalRain(true);
-              setShowVisibleRain(true);
-              onToggleRain?.(true);
-            }
-            setSimRainIntensity(currentRainfall);
-            if (!lastAutoStartedRainRef.current) {
-              lastAutoStartedRainRef.current = true;
-              if (allowFlood) {
-                toast.success(`🌧️ Sensor rainfall detected (${currentRainfall.toFixed(1)} mm/h > 40)! Atmospheric rain active.`);
-              }
+            setShowVisibleRain(true);
+            setInternalRain(true);
+            onToggleRain?.(true);
+            setSimRainIntensity(100); // 100% full intensity throughout simulation
+          } else if (isRainOver50) {
+            autoStartedRainBySensorRef.current = true;
+            setShowVisibleRain(true);
+            setInternalRain(true);
+            onToggleRain?.(true);
+            setSimRainIntensity(100); // Full rain
+          } else {
+            // When simulation is not active and rain is <= 50, clear atmospheric rain
+            if (!waterSimActive && !isFloodRunning) {
+              lastAutoStartedRainRef.current = false;
+              autoStartedRainBySensorRef.current = false;
+              setInternalRain(false);
+              setShowVisibleRain(false);
+              onToggleRain?.(false);
+              setSimRainIntensity(0);
             }
           }
           prevRainfallRef.current = currentRainfall;
 
-          // ─── 2. SENSOR-DRIVEN FLOOD SIMULATION ───
-          // User requirement: "make the flood on only rise in water level rain cant st the flood"
-          // ONLY a rise in water level turns on the flood simulation. Rain or soil moisture CANNOT start the flood!
-          const currentWaterLevel = telemetry.hasData ? Math.max(telemetry.waterLevelMm, telemetry.waterLevelM * 100) : 0;
-          const currentSoilMoisture = telemetry.hasData ? telemetry.soilMoisture : 0;
-          const prevWaterLevel = prevWaterLevelRef.current;
-          const prevSoilMoisture = prevSoilMoistureRef.current;
+          // ─── 2. SENSOR-DRIVEN SIMULATION TRIGGERS ───
+          // Rule: "if rain senor reaches greater than 50 % make in digital twin start simulation water level increse 50 start water simultion"
+          const shouldTriggerSimulation = isRainOver50 || isWaterLevelOver50;
 
-          // STRICT: Flood is triggered ONLY by a rise in water level > 50!
-          // User requirement: "threshhold for flood is water level is >50"
-          const isWaterLevelIncreasing = prevWaterLevel !== null && currentWaterLevel > prevWaterLevel;
-          const isFirstFloodReading = prevWaterLevel === null && currentWaterLevel > 50;
-
-          // User requirement: "until the user clicks end not stop the flood simulation"
-          // Keep active flood simulation running continuously; do not terminate or reset it here!
-          if (!telemetry.hasData || currentWaterLevel <= 50) {
+          if (!telemetry.hasData || (!isRainOver50 && currentWaterLevel <= 50)) {
             manuallyStoppedFloodRef.current = false;
-          } else {
-            // currentWaterLevel > 50
-            // Rule: "speed based on the values if more than 90 10x speed"
+          } else if (shouldTriggerSimulation) {
+            // Dynamic simulation speed scaled to intensity (up to 10x)
+            const dominantMetric = Math.max(currentWaterLevel, currentRainfall);
             let targetSpeed = 1.0;
-            if (currentWaterLevel >= 90) {
+            if (dominantMetric >= 90) {
               targetSpeed = 10.0;
             } else {
-              // Continuous scaling from 1.0x at 50 to 10.0x at 90 based strictly on water level
-              targetSpeed = Math.min(10.0, Math.max(1.0, Number((1.0 + ((currentWaterLevel - 50) / 40) * 9.0).toFixed(1))));
+              targetSpeed = Math.min(10.0, Math.max(1.0, Number((1.0 + ((dominantMetric - 50) / 40) * 9.0).toFixed(1))));
             }
 
             const calculatedSimWaterLevel = telemetry.waterLevelM >= 0.1
               ? Number(telemetry.waterLevelM.toFixed(2))
               : currentWaterLevel > 0
-              ? Number(Math.max(0.4, currentWaterLevel >= 10 ? currentWaterLevel / 100.0 : currentWaterLevel).toFixed(2))
+              ? Number(Math.max(0.6, currentWaterLevel >= 10 ? currentWaterLevel / 100.0 : currentWaterLevel).toFixed(2))
               : 0.8;
 
             setSensorSimWaterLevel(calculatedSimWaterLevel);
             setSensorSimSpeed(targetSpeed);
 
-            // Rule: "make the flood on only rise in water level rain cant st the flood"
-            const waterLevelRose = isWaterLevelIncreasing || isFirstFloodReading;
-
             if (!waterSimActive) {
-              // ONLY start flood simulation if WATER LEVEL RISES! Rain or soil moisture alone CANNOT start flood!
-              if (waterLevelRose && !manuallyStoppedFloodRef.current) {
+              // Trigger simulation if not manually stopped
+              if (!manuallyStoppedFloodRef.current) {
                 setSensorAutoFlood(true);
                 autoStartedBySensorRef.current = true;
                 setWaterSimActive(true);
+
+                // Make rain full during simulation!
+                setShowVisibleRain(true);
+                setInternalRain(true);
+                onToggleRain?.(true);
+                setSimRainIntensity(100);
+
                 flashFloodRef.current?.setSpeed(targetSpeed);
                 flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
                 flashFloodRef.current?.closeControls?.();
@@ -3447,13 +3490,21 @@ export function CesiumDigitalTwinViewer({
 
                 if (!lastAutoStartedFloodRef.current) {
                   lastAutoStartedFloodRef.current = true;
-                  if (allowFlood) {
-                    toast.success(`🌊 Water level rise detected (${currentWaterLevel.toFixed(0)} mm > 50): Flood simulation started at ${targetSpeed.toFixed(1)}x speed!`);
-                  }
+                  const triggerDetail = isRainOver50 && isWaterLevelOver50
+                    ? `Rain (${currentRainfall.toFixed(0)}% > 50) & Water Level (${currentWaterLevel.toFixed(0)} > 50)`
+                    : isRainOver50
+                    ? `Rain sensor (${currentRainfall.toFixed(0)}% > 50)`
+                    : `Water level rise (${currentWaterLevel.toFixed(0)} > 50)`;
+                  toast.success(`🌊 Simulation started (${triggerDetail}): Digital twin running with full rain!`);
                 }
               }
             } else {
-              // Simulation is already active: dynamically update speed & source rise based on water level
+              // Active simulation: keep rain full and update speed/water level
+              setShowVisibleRain(true);
+              setInternalRain(true);
+              onToggleRain?.(true);
+              setSimRainIntensity(100);
+
               flashFloodRef.current?.setSpeed(targetSpeed);
               flashFloodRef.current?.setSourceRise(calculatedSimWaterLevel);
             }

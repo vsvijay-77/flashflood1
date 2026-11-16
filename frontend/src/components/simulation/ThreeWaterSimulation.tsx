@@ -1592,12 +1592,12 @@ export const ThreeWaterSimulation = forwardRef<ThreeWaterSimulationHandle, Three
           style={{ width: "100%", height: "100%" }}
         />
 
-        {/* 🌧️ Atmospheric Rain Overlay during Simulation */}
+        {/* 🌧️ Atmospheric Rain Overlay during Simulation (Rule: make rain fully during simulation) */}
         <CesiumSelectedAreaRainOverlay
           viewer={cesiumViewer}
           polygonCoords={stablePolygon}
-          active={Boolean(isRainVisible)}
-          intensityMm={Math.max(60, rainfall || 150)}
+          active={Boolean(isRainVisible || isRunning || active)}
+          intensityMm={Math.max(180, rainfall || 180)}
           windSpeedKmh={parameters.windSpeedKmh}
           groundHeight={baseElevation}
           isFlatView={isFlatView}

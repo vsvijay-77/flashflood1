@@ -10,11 +10,13 @@ export function shouldTriggerWaterSimulation(telemetry: {
   waterLevelMm: number;
   waterLevelM: number;
   soilMoisture: number;
+  rainfall?: number;
+  rainfallPct?: number;
 }): boolean {
   if (!telemetry.hasData) return false;
-  const isWaterLevelOver40 = telemetry.waterLevelMm >= 40 || (telemetry.waterLevelM * 100) >= 40;
-  const isSoilMoistureOver40 = telemetry.soilMoisture >= 40;
-  return isWaterLevelOver40 || isSoilMoistureOver40;
+  const isWaterLevelOver50 = telemetry.waterLevelMm > 50 || (telemetry.waterLevelM * 100) > 50;
+  const isRainOver50 = (telemetry.rainfall ?? 0) > 50 || (telemetry.rainfallPct ?? 0) > 50;
+  return isWaterLevelOver50 || isRainOver50;
 }
 
 export function computeSimulationRunningState(
@@ -24,6 +26,8 @@ export function computeSimulationRunningState(
     waterLevelMm: number;
     waterLevelM: number;
     soilMoisture: number;
+    rainfall?: number;
+    rainfallPct?: number;
   },
   manuallyStoppedByUser: boolean
 ): { isRunning: boolean; triggeredBySensor: boolean } {
@@ -37,9 +41,7 @@ export function computeSimulationRunningState(
     return { isRunning: true, triggeredBySensor: true };
   }
 
-  // CRITICAL USER REQUIREMENT:
-  // "when flood triggered by sensor not stop it evn values 0 user should manually stop it"
-  // If it was already running (triggered by sensor), dropping values to 0 does NOT stop it!
+  // If it was already running (triggered by sensor), dropping values does NOT stop it!
   if (currentState.isRunning && currentState.triggeredBySensor) {
     return { isRunning: true, triggeredBySensor: true };
   }
@@ -67,29 +69,25 @@ describe("Sensor Simulation Triggers", () => {
     });
   });
 
-  describe("Water Simulation Trigger (water level or soil moisture >= 40%, otherwise NO)", () => {
-    it("does NOT trigger water simulation when both water level and soil moisture are below 40%", () => {
-      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 0 })).toBe(false);
-      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 20, waterLevelM: 0.2, soilMoisture: 35 })).toBe(false);
-      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 39, waterLevelM: 0.39, soilMoisture: 39 })).toBe(false);
+  describe("Water Simulation Trigger (water level > 50 or rain > 50)", () => {
+    it("does NOT trigger water simulation when both water level and rain are at or below 50", () => {
+      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 0, rainfall: 0 })).toBe(false);
+      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 20, waterLevelM: 0.2, soilMoisture: 35, rainfall: 40 })).toBe(false);
+      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 50, waterLevelM: 0.5, soilMoisture: 39, rainfall: 50 })).toBe(false);
     });
 
-    it("triggers water simulation when water level is 40% or higher", () => {
-      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 40, waterLevelM: 0.4, soilMoisture: 10 })).toBe(true);
+    it("triggers water simulation when water level is greater than 50", () => {
+      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 51, waterLevelM: 0.51, soilMoisture: 10 })).toBe(true);
       expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 60, waterLevelM: 0.6, soilMoisture: 0 })).toBe(true);
     });
 
-    it("triggers water simulation when soil moisture is 40% or higher", () => {
-      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 40 })).toBe(true);
-      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 15, waterLevelM: 0.15, soilMoisture: 65 })).toBe(true);
+    it("triggers water simulation when rain sensor exceeds 50%", () => {
+      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 10, waterLevelM: 0.1, soilMoisture: 20, rainfallPct: 55 })).toBe(true);
+      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 0, waterLevelM: 0, soilMoisture: 0, rainfall: 75 })).toBe(true);
     });
 
-    it("triggers water simulation when both water level and soil moisture reach 40% or higher", () => {
-      expect(shouldTriggerWaterSimulation({ hasData: true, waterLevelMm: 45, waterLevelM: 0.45, soilMoisture: 55 })).toBe(true);
-    });
-
-    it("does NOT trigger water simulation when telemetry has no data ('otherwise no')", () => {
-      expect(shouldTriggerWaterSimulation({ hasData: false, waterLevelMm: 80, waterLevelM: 0.8, soilMoisture: 90 })).toBe(false);
+    it("does NOT trigger water simulation when telemetry has no data", () => {
+      expect(shouldTriggerWaterSimulation({ hasData: false, waterLevelMm: 80, waterLevelM: 0.8, soilMoisture: 90, rainfall: 90 })).toBe(false);
     });
   });
 

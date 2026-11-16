@@ -41,8 +41,70 @@ export interface LoRaTransmissionRecord {
   tilt_y: number;
   flood_status: string;
   lora_status: string;
+  rain_percentage?: number;
+  water_percentage?: number;
   raw_payload?: Record<string, any>;
   created_at: string;
+}
+
+/**
+ * Rain Sensor Calibration:
+ * - Base dry value: 685 -> 0%
+ * - Torrential rain / flood: <= 150 -> 100%
+ * - Linear interpolation between 685 and 150
+ */
+export function calibrateRain(rawRain: number | undefined | null) {
+  const raw = Number(rawRain ?? 685);
+  if (raw >= 685) {
+    return { pct: 0, label: "Dry (0%)", color: "text-slate-600", barColor: "bg-slate-300", raw };
+  }
+  if (raw <= 150) {
+    return { pct: 100, label: "Torrential (100%)", color: "text-rose-600 font-bold", barColor: "bg-rose-600", raw };
+  }
+  const pct = Math.min(100, Math.max(0, Math.round(((685 - raw) / (685 - 150)) * 100)));
+  const label = pct < 25 ? "Light Rain" : pct < 65 ? "Moderate Rain" : "Heavy Rain";
+  const color = pct > 75 ? "text-rose-600 font-bold" : pct > 35 ? "text-amber-600 font-bold" : "text-blue-600 font-semibold";
+  const barColor = pct > 75 ? "bg-rose-500" : pct > 35 ? "bg-amber-500" : "bg-blue-500";
+  return { pct, label, color, barColor, raw };
+}
+
+/**
+ * Water Level Sensor Calibration:
+ * - 270 = no water (0%)
+ * - 175 = full (100%)
+ * - If raw <= 175 (e.g. 99): 100% (Full / Overflow / Critical Stage)
+ * - If raw >= 270: 0% (Dry)
+ * - Also supports analog submersion probe scale up to 487 (100% full)
+ */
+export function calibrateWaterLevel(rawWater: number | undefined | null) {
+  const raw = Number(rawWater ?? 270);
+  if (raw <= 270 && raw >= 0) {
+    if (raw >= 270) {
+      return { pct: 0, label: "No Water (0%)", color: "text-slate-600", barColor: "bg-slate-300", raw };
+    }
+    if (raw <= 175) {
+      const isOverflow = raw < 160;
+      return {
+        pct: 100,
+        label: isOverflow ? "Overflow (100%)" : "Full Stage (100%)",
+        color: "text-rose-600 font-bold",
+        barColor: "bg-rose-600",
+        raw,
+      };
+    }
+    const pct = Math.min(100, Math.max(0, Math.round(((270 - raw) / (270 - 175)) * 100)));
+    const label = pct < 30 ? "Low Stage" : pct < 70 ? "Moderate Stage" : "High Stage";
+    const color = pct > 75 ? "text-rose-600 font-bold" : pct > 40 ? "text-cyan-700 font-bold" : "text-cyan-600 font-semibold";
+    const barColor = pct > 75 ? "bg-rose-500" : "bg-cyan-500";
+    return { pct, label, color, barColor, raw };
+  }
+
+  // Probe scale (487 = 100%)
+  const pct = Math.min(100, Math.max(0, Math.round((raw / 487) * 100)));
+  const label = pct >= 95 ? "Full Stage (100%)" : pct < 30 ? "Low Stage" : "Moderate Stage";
+  const color = pct > 75 ? "text-rose-600 font-bold" : "text-cyan-700 font-bold";
+  const barColor = pct > 75 ? "bg-rose-500" : "bg-cyan-500";
+  return { pct, label, color, barColor, raw };
 }
 
 export function LiveLoRaTelemetrySection() {
@@ -121,6 +183,9 @@ export function LiveLoRaTelemetrySection() {
 
   const latest = transmissions[0];
   const isFloodNormal = (latest?.flood_status || "NORMAL").toUpperCase() === "NORMAL";
+
+  const rainCal = calibrateRain(latest?.rain_sensor);
+  const waterCal = calibrateWaterLevel(latest?.water_level);
 
   const timeFormatted = latest?.created_at
     ? new Date(latest.created_at).toLocaleTimeString()
@@ -303,29 +368,53 @@ export function LiveLoRaTelemetrySection() {
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
         {/* 1. Rain Sensor */}
         <Card className="border-slate-200 shadow-xs hover:border-blue-300 transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Rain Sensor</span>
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-medium">Rain Intensity</span>
               <CloudRain className="size-4 text-blue-500" />
             </div>
-            <div className="text-xl font-bold font-mono text-slate-900">
-              {latest?.rain_sensor ?? "685"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className={`text-2xl font-bold font-mono ${rainCal.color}`}>
+                {rainCal.pct}%
+              </div>
+              <span className="text-[10px] font-semibold text-slate-600 truncate">{rainCal.label}</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Raw Sensor Value</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 ${rainCal.barColor}`}
+                style={{ width: `${rainCal.pct}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Raw: {rainCal.raw}</span>
+              <span title="Dry base: 685 (0%), Torrential: <=150 (100%)">Base 685 | ≤150</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* 2. Water Level */}
         <Card className="border-slate-200 shadow-xs hover:border-cyan-300 transition-colors">
-          <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium">Water Level</span>
+          <CardContent className="p-3.5 space-y-1.5">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="text-[11px] font-medium">Water Stage Level</span>
               <Waves className="size-4 text-cyan-600" />
             </div>
-            <div className="text-xl font-bold font-mono text-cyan-700">
-              {latest?.water_level ?? "1"}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className={`text-2xl font-bold font-mono ${waterCal.color}`}>
+                {waterCal.pct}%
+              </div>
+              <span className="text-[10px] font-semibold text-slate-600 truncate">{waterCal.label}</span>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">Stage Level Marker</span>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 ${waterCal.barColor}`}
+                style={{ width: `${waterCal.pct}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono pt-0.5">
+              <span>Raw: {waterCal.raw}</span>
+              <span title="175: Full (100%), 270: No water (0%)">175=Full | 270=Dry</span>
+            </div>
           </CardContent>
         </Card>
 
@@ -509,8 +598,8 @@ export function LiveLoRaTelemetrySection() {
               <TableRow className="bg-slate-100/70 text-[11px]">
                 <TableHead className="font-bold">Packet ID</TableHead>
                 <TableHead className="font-bold">Timestamp</TableHead>
-                <TableHead className="font-bold">Rain Sensor</TableHead>
-                <TableHead className="font-bold">Water Level</TableHead>
+                <TableHead className="font-bold">Rainfall (% / Raw)</TableHead>
+                <TableHead className="font-bold">Water Stage (% / Raw)</TableHead>
                 <TableHead className="font-bold">Soil Moisture</TableHead>
                 <TableHead className="font-bold">Temp (°C)</TableHead>
                 <TableHead className="font-bold">Humidity (%)</TableHead>
@@ -530,6 +619,8 @@ export function LiveLoRaTelemetrySection() {
               ) : (
                 transmissions.map((t, idx) => {
                   const isNormal = (t.flood_status || "NORMAL").toUpperCase() === "NORMAL";
+                  const rowRain = calibrateRain(t.rain_sensor);
+                  const rowWater = calibrateWaterLevel(t.water_level);
                   return (
                     <TableRow
                       key={t.id || idx}
@@ -546,11 +637,13 @@ export function LiveLoRaTelemetrySection() {
                       <TableCell className="text-xs text-slate-600 font-mono whitespace-nowrap">
                         {t.created_at ? new Date(t.created_at).toLocaleTimeString() : "—"}
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-blue-700 font-semibold">
-                        {t.rain_sensor}
+                      <TableCell className="font-mono text-xs whitespace-nowrap">
+                        <span className={`font-bold ${rowRain.color}`}>{rowRain.pct}%</span>
+                        <span className="block text-[10px] text-slate-500 font-normal">Raw: {t.rain_sensor}</span>
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-cyan-800 font-semibold">
-                        {t.water_level}
+                      <TableCell className="font-mono text-xs whitespace-nowrap">
+                        <span className={`font-bold ${rowWater.color}`}>{rowWater.pct}%</span>
+                        <span className="block text-[10px] text-slate-500 font-normal">Raw: {t.water_level}</span>
                       </TableCell>
                       <TableCell className="font-mono text-xs text-emerald-700 font-semibold">
                         {t.soil_moisture}%

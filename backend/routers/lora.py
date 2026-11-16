@@ -27,6 +27,47 @@ class LoRaPacketIn(BaseModel):
     lora: Optional[str] = Field(default="READY")
 
 
+def calibrate_rain_pct(raw: Optional[float]) -> int:
+    """
+    Rain sensor calibration:
+    - Base dry value: 685 -> 0%
+    - Torrential rain / flood: <= 150 -> 100%
+    """
+    val = float(raw if raw is not None else 685.0)
+    if val >= 685.0:
+        return 0
+    if val <= 150.0:
+        return 100
+    return max(0, min(100, round(((685.0 - val) / (685.0 - 150.0)) * 100.0)))
+
+
+def calibrate_water_pct(raw: Optional[float]) -> int:
+    """
+    Water level calibration:
+    - 270 = no water (0%)
+    - 175 = full (100%)
+    - If raw <= 175 (e.g. 99): 100% full / overflow
+    - If raw > 270: analog probe scale where 487 = 100%
+    """
+    val = float(raw if raw is not None else 270.0)
+    if val <= 270.0:
+        if val >= 270.0:
+            return 0
+        if val <= 175.0:
+            return 100
+        return max(0, min(100, round(((270.0 - val) / (270.0 - 175.0)) * 100.0)))
+    return max(0, min(100, round((val / 487.0) * 100.0)))
+
+
+def enrich_record(r: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(r, dict):
+        return r
+    res = dict(r)
+    res["rain_percentage"] = calibrate_rain_pct(res.get("rain_sensor"))
+    res["water_percentage"] = calibrate_water_pct(res.get("water_level"))
+    return res
+
+
 @router.get("/transmissions")
 async def get_lora_transmissions(limit: int = Query(default=30, ge=1, le=200)):
     """Fetch latest real LoRa field transmission records from Supabase."""
@@ -38,7 +79,7 @@ async def get_lora_transmissions(limit: int = Query(default=30, ge=1, le=200)):
             .limit(limit)
             .execute()
         )
-        data = res.data or []
+        data = [enrich_record(item) for item in (res.data or [])]
         return {
             "status": "ok",
             "count": len(data),
@@ -64,7 +105,7 @@ async def get_latest_lora_packet():
         data = res.data or []
         if not data:
             return {"status": "empty", "packet": None}
-        return {"status": "ok", "packet": data[0]}
+        return {"status": "ok", "packet": enrich_record(data[0])}
     except Exception as exc:
         logger.error(f"Error fetching latest packet: {exc}")
         return {"status": "error", "error": str(exc), "packet": None}

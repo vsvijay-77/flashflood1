@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseUrl } from "@/lib/supabase";
 import { useSession } from "@/lib/session";
 import { toast } from "sonner";
 
@@ -398,7 +398,7 @@ export default function OAuthConsentPage() {
             <p className="font-mono text-[11px] text-slate-400">
               OIDC Discovery:{" "}
               <a
-                href="https://pffdafhrhtevdboxqztn.supabase.co/auth/v1/.well-known/openid-configuration"
+                href={`${supabaseUrl}/auth/v1/.well-known/openid-configuration`}
                 target="_blank"
                 rel="noreferrer"
                 className="underline hover:text-slate-600"

@@ -18,8 +18,8 @@ ROOT_DIR = Path(__file__).parent.parent
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv()
 
-DEFAULT_SUPABASE_URL = "https://pffdafhrhtevdboxqztn.supabase.co"
-DEFAULT_SUPABASE_KEY = "sb_publishable_YP29CER2yLiNVIz7fmuw-g_0R6R9wEJ"
+DEFAULT_SUPABASE_URL = "https://xmtuwcywlfdoarwzkmod.supabase.co"
+DEFAULT_SUPABASE_KEY = "sb_publishable_S-TCSEUmcrwHDU1PtUDjhw_na5bgd3K"
 
 TABLE_ALIASES = {
     "areas": "custom_areas",

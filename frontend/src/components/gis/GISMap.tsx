@@ -44,8 +44,8 @@ const RISK_COLORS: Record<string, { stroke: string; fill: string }> = {
   low: { stroke: "#059669", fill: "#10B981" },
 };
 
-export const INDIA_CENTER: [number, number] = [22.5937, 78.9629];
-export const INDIA_DEFAULT_ZOOM = 5;
+export const INDIA_CENTER: [number, number] = [31.039, 78.8938]; // Dharali, Uttarkashi
+export const INDIA_DEFAULT_ZOOM = 11;
 export const INDIA_MIN_ZOOM = 4;
 export const INDIA_BOUNDS: L.LatLngBoundsLiteral = [
   [6.0, 68.0], // South-West (Kanyakumari / Lakshadweep / Gujarat)

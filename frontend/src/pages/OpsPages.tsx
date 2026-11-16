@@ -55,6 +55,8 @@ import { supabase } from "@/lib/supabase";
 import { parseCustomAreaPolygon } from "@/lib/gisUtils";
 import DisasterIntelligenceChat from "@/components/gis/DisasterIntelligenceChat";
 import { SensorManagementSection } from "@/components/dashboard/SensorManagementSection";
+import { DHARALI_AREA, DHARALI_ONLY } from "@/lib/dharaliArea";
+
 
 
 const useZones = () => useQuery({ queryKey: ["zones"], queryFn: () => apiGet<Zone[]>("/zones"), retry: false });
@@ -77,151 +79,25 @@ export function DigitalTwinPage() {
   const [isRainActive, setIsRainActive] = useState<boolean>(false);
 
   // 3D Digital Twin State (Cesium 3D Engine)
-  const [loadingAreas, setLoadingAreas] = useState<boolean>(() => {
-    try {
-      return !localStorage.getItem("cached_custom_areas");
-    } catch {
-      return false;
-    }
-  });
-  const [customAreas, setCustomAreas] = useState<CustomArea[]>(() => {
-    try {
-      const cached = localStorage.getItem("cached_custom_areas");
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((d: any) => ({
-            ...d,
-            polygon: d.polygon || parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng)),
-          }));
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to parse cached custom areas", e);
-    }
-    return [];
-  });
-  const [selectedAreaId, setSelectedAreaId] = useState<string>(
-    location.state?.area?.id || customAreas[0]?.id || ""
-  );
+  // ─── Dharali-only: always pre-select Dharali, skip API/Supabase fetch ──────
+  const [loadingAreas, _setLoadingAreas] = useState<boolean>(false);
+  const [customAreas, _setCustomAreas] = useState<CustomArea[]>(DHARALI_ONLY);
+  const [selectedAreaId, setSelectedAreaId] = useState<string>(DHARALI_AREA.id);
   const [activeArea, setActiveArea] = useState<CustomArea | null>(
-    location.state?.area || customAreas[0] || null
+    location.state?.area || DHARALI_AREA
   );
   const [twinViewMode, setTwinViewMode] = useState<"3d" | "gis">("3d");
 
   const [lat, setLat] = useState<number>(
-    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : (customAreas[0]?.lat ? Number(customAreas[0].lat) : 31.039))
+    location.state?.latitude ?? (location.state?.area?.lat ? Number(location.state.area.lat) : DHARALI_AREA.lat)
   );
   const [lng, setLng] = useState<number>(
-    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : (customAreas[0]?.lng ? Number(customAreas[0].lng) : 78.8938))
+    location.state?.longitude ?? (location.state?.area?.lng ? Number(location.state.area.lng) : DHARALI_AREA.lng)
   );
   const [areaTitle, setAreaTitle] = useState<string>(
-    location.state?.area?.name || location.state?.name || customAreas[0]?.name || "Monitored Area 1"
+    location.state?.area?.name || location.state?.name || DHARALI_AREA.name
   );
 
-  // Fetch monitored areas — try API first, fall back gracefully
-  useEffect(() => {
-    // If navigated with area state, use it immediately — no loading needed
-    if (location.state?.area) {
-      setLoadingAreas(false);
-      return;
-    }
-
-    const loadAreas = async () => {
-      try {
-        // Try backend API first
-        const res = await fetch("/api/areas");
-        if (res.ok) {
-          const apiData = await res.json();
-          if (Array.isArray(apiData) && apiData.length > 0) {
-            const loaded: CustomArea[] = apiData.map((d: any) => ({
-              id: d.id,
-              name: d.name,
-              district: d.district,
-              type: d.area_type || "Forest",
-              risk: d.risk_category || "Medium",
-              priority: d.priority || "Normal",
-              description: d.description || "",
-              date: new Date(d.created_at).toLocaleDateString(),
-              lat: Number(d.lat),
-              lng: Number(d.lng),
-              shape: d.shape || "Polygon",
-              polygon: parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng)),
-              areaSqMeters: 0,
-            }));
-            setCustomAreas(loaded);
-            setActiveArea((current) => {
-              const next = loaded.find(area => area.id === current?.id || area.name.toLowerCase().includes("monitored area 1") || area.id === "b3e2c3ce-e6b0-4c37-8f85-5595d23f5d40") || loaded[0] || null;
-              setSelectedAreaId(next?.id || "");
-              setAreaTitle(next?.name || "Monitored Area 1");
-              if (next) { setLat(Number(next.lat)); setLng(Number(next.lng)); }
-              return next;
-            });
-            try {
-              const lightweight = loaded.map(({ id, name, district, type, risk, priority, date, lat, lng, shape, polygon }) => ({
-                id, name, district, type, risk, priority, date, lat, lng, shape, polygon, areaSqMeters: 0,
-              }));
-              localStorage.setItem("cached_custom_areas", JSON.stringify(lightweight));
-            } catch {}
-            setLoadingAreas(false);
-            return;
-          }
-        }
-      } catch {
-        // API unavailable, try Supabase
-      }
-
-      // Fallback: try Supabase
-      try {
-        const { data } = await supabase.from("custom_areas").select("*");
-        setLoadingAreas(false);
-        if (data) {
-          const loaded: CustomArea[] = data.map((d: any) => ({
-            id: d.id,
-            name: d.name,
-            district: d.district,
-            type: d.area_type || "Forest",
-            risk: d.risk_category || "Medium",
-            priority: d.priority || "Normal",
-            description: d.description || "",
-            date: new Date(d.created_at).toLocaleDateString(),
-            lat: Number(d.lat),
-            lng: Number(d.lng),
-            shape: d.shape || "Polygon",
-            polygon: parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng)),
-            areaSqMeters: 0,
-          }));
-          setCustomAreas(loaded);
-          setActiveArea((current) => {
-            const next = loaded.find(area => area.id === current?.id) || loaded[0] || null;
-            setSelectedAreaId(next?.id || "");
-            setAreaTitle(next?.name || "");
-            if (next) { setLat(Number(next.lat)); setLng(Number(next.lng)); }
-            return next;
-          });
-          try {
-            const lightweight = loaded.map(({ id, name, district, type, risk, priority, date, lat, lng, shape, polygon }) => ({
-              id, name, district, type, risk, priority, date, lat, lng, shape, polygon, areaSqMeters: 0,
-            }));
-            localStorage.setItem("cached_custom_areas", JSON.stringify(lightweight));
-          } catch {
-            try {
-              for (let i = localStorage.length - 1; i >= 0; i--) {
-                const k = localStorage.key(i);
-                if (k && (k.startsWith("dt_") || k.startsWith("EIN_") || k.startsWith("cached_"))) {
-                  localStorage.removeItem(k);
-                }
-              }
-            } catch {}
-          }
-        }
-      } catch {
-        setLoadingAreas(false);
-      }
-    };
-
-    loadAreas();
-  }, []);
 
   // Sync state from location navigation
   useEffect(() => {
@@ -431,11 +307,9 @@ export function DigitalTwinPage() {
                     try {
                       await deleteArea(activeArea.id, activeArea.name);
 
-                      const filtered = customAreas.filter((a) => a.id !== activeArea.id);
-                      setCustomAreas(filtered);
-                      setActiveArea(null);
-                      setSelectedAreaId("");
-                      setAreaTitle("");
+                      setActiveArea(DHARALI_AREA);
+                      setSelectedAreaId(DHARALI_AREA.id);
+                      setAreaTitle(DHARALI_AREA.name);
                       toast.success(`Monitored Area "${activeArea.name}" deleted from database.`);
                     } catch (err) {
                       toast.error("Failed to delete area from database");
@@ -488,7 +362,7 @@ export function DigitalTwinPage() {
                   }
                 }}
                 onAreaCreated={(newArea) => {
-                  setCustomAreas((prev) => [newArea, ...prev]);
+                  // Dharali-only mode: ignore newly drawn areas
                   setActiveArea(newArea);
                   setSelectedAreaId(newArea.id);
                   setAreaTitle(newArea.name);
@@ -1307,6 +1181,31 @@ export function UserManagementPage() {
     onError: (err) => toast.error(apiErrorMessage(err, "Telephony dispatch failed")),
   });
 
+  // Emergency Member Call Mutation (Navaneeth & Kavin in Malayalam)
+  const callMembersMutation = useMutation({
+    mutationFn: () => apiPost("/telephony/call-members", { send_sms: true }),
+    onSuccess: (res: any) => {
+      toast.success(res?.message || "Emergency voice call in Malayalam initiated to Navaneeth & Kavin! 📞");
+      qc.invalidateQueries({ queryKey: ["telephony-status"] });
+    },
+    onError: (err) => toast.error(apiErrorMessage(err, "Telephony call failed")),
+  });
+
+  // Individual Citizen Call Mutation in Malayalam
+  const callCitizenMalayalamMutation = useMutation({
+    mutationFn: ({ phone, name }: { phone: string; name: string }) =>
+      apiPost("/telephony/test-call", {
+        phone_number: phone,
+        message: "അടിയന്തര പ്രളയ മുന്നറിയിപ്പ്! നിങ്ങളുടെ പ്രദേശത്ത് മിന്നൽ പ്രളയ സാധ്യതയുണ്ട്. ദയവായി ഉടൻ തന്നെ ഉയർന്ന സുരക്ഷിത സ്ഥാനങ്ങളിലേക്ക് മാറുക. Flash flood warning. Evacuate immediately!",
+        language: "ml",
+      }),
+    onSuccess: (_res: any, vars) => {
+      toast.success(`Malayalam flash flood voice call placed to ${vars.name} (${vars.phone}) 📞`);
+      qc.invalidateQueries({ queryKey: ["telephony-status"] });
+    },
+    onError: (err) => toast.error(apiErrorMessage(err, "Voice call failed")),
+  });
+
   const mobUsersList = mobUsersQuery.data ?? [];
   const mobAlertsList = mobAlertsQuery.data ?? [];
   const officersList = officersQuery.data ?? [];
@@ -1444,18 +1343,31 @@ export function UserManagementPage() {
             title="Mobile Citizens Directory"
             description="Real-time geo-located citizen handsets in the flash flood basin. Send emergency warnings and designated evacuation shelters directly."
             actions={
-              <Button
-                data-testid="open-broadcast-alert-btn"
-                onClick={() => {
-                  setAlertTarget("monitored_zone");
-                  setIsAlertModalOpen(true);
-                }}
-                size="sm"
-                className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md shadow-rose-950/40 cursor-pointer"
-              >
-                <Radio className="size-3.5 mr-1.5" />
-                Send Emergency Alert
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  data-testid="call-navaneeth-kavin-btn"
+                  onClick={() => callMembersMutation.mutate()}
+                  disabled={callMembersMutation.isPending}
+                  size="sm"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-950/40 cursor-pointer flex items-center gap-1.5"
+                  title="Call Navaneeth (+919865013239) & Kavin (+919965485711) with Malayalam Flash Flood Warning"
+                >
+                  <PhoneCall className="size-3.5" />
+                  {callMembersMutation.isPending ? "Calling Members…" : "Call Navaneeth & Kavin (Malayalam)"}
+                </Button>
+                <Button
+                  data-testid="open-broadcast-alert-btn"
+                  onClick={() => {
+                    setAlertTarget("monitored_zone");
+                    setIsAlertModalOpen(true);
+                  }}
+                  size="sm"
+                  className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md shadow-rose-950/40 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Radio className="size-3.5" />
+                  Send Emergency Alert
+                </Button>
+              </div>
             }
           >
             {mobUsersQuery.isLoading ? (
@@ -1615,6 +1527,24 @@ export function UserManagementPage() {
                               >
                                 <AlertTriangle className="size-3 mr-1" />
                                 Send Alert
+                              </Button>
+
+                              <Button
+                                size="xs"
+                                data-testid={`call-user-${user.id}`}
+                                className="w-28 justify-center bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer"
+                                disabled={callCitizenMalayalamMutation.isPending || !user.phone_number}
+                                onClick={() => {
+                                  if (!user.phone_number) {
+                                    toast.error("No phone number registered for this citizen");
+                                    return;
+                                  }
+                                  callCitizenMalayalamMutation.mutate({ phone: user.phone_number, name: user.full_name || "Citizen" });
+                                }}
+                                title={`Place instant emergency voice call in Malayalam to ${user.full_name || "Citizen"} (${user.phone_number})`}
+                              >
+                                <PhoneCall className="size-3 mr-1" />
+                                Call (Malayalam)
                               </Button>
 
                               <Button
@@ -2048,7 +1978,7 @@ export function UserManagementPage() {
                           <span className="font-mono text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded font-semibold text-[11px]">+1 (563) 239-3112</span>
                         </div>
                         <span className="text-[10px] text-emerald-700 block mt-0.5">
-                          Voice IVR calls (Speaking: &quot;Flood in area, evacuate now&quot;) &amp; SMS texts dispatched in real-time.
+                          Voice IVR calls (Speaking in Malayalam: &quot;അടിയന്തര പ്രളയ മുന്നറിയിപ്പ്! ഉടൻ ഉയർന്ന സുരക്ഷിത സ്ഥാനങ്ങളിലേക്ക് മാറുക&quot;) &amp; SMS texts dispatched in real-time to Navaneeth, Kavin &amp; citizens.
                         </span>
                       </div>
                     </div>

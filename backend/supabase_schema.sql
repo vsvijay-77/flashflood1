@@ -1,6 +1,6 @@
 -- ==============================================================================
 -- FLASH FLOOD INTELLIGENCE & DIGITAL TWIN — SUPABASE SCHEMA DDL
--- Project: https://pffdafhrhtevdboxqztn.supabase.co
+-- Project: https://xmtuwcywlfdoarwzkmod.supabase.co
 -- Run this in your Supabase Dashboard: SQL Editor -> New Query -> Run
 -- ==============================================================================
 
@@ -155,6 +155,27 @@ CREATE TABLE IF NOT EXISTS public.status_checks (
     details JSONB DEFAULT '{}'::jsonb
 );
 
+-- 11. LORA SENSOR TELEMETRY (Field Node Uplinks)
+CREATE TABLE IF NOT EXISTS public.lora_transmissions (
+    id SERIAL PRIMARY KEY,
+    packet_id INTEGER NOT NULL,
+    device_id TEXT DEFAULT 'LORA_NODE_12',
+    rain_sensor DOUBLE PRECISION NOT NULL,
+    water_level DOUBLE PRECISION NOT NULL,
+    soil_moisture DOUBLE PRECISION NOT NULL,
+    temperature DOUBLE PRECISION NOT NULL,
+    humidity DOUBLE PRECISION NOT NULL,
+    accel_x DOUBLE PRECISION NOT NULL,
+    accel_y DOUBLE PRECISION NOT NULL,
+    accel_z DOUBLE PRECISION NOT NULL,
+    tilt_x DOUBLE PRECISION NOT NULL,
+    tilt_y DOUBLE PRECISION NOT NULL,
+    flood_status TEXT DEFAULT 'NORMAL',
+    lora_status TEXT DEFAULT 'READY',
+    raw_payload JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
 -- INDEXES
 CREATE INDEX IF NOT EXISTS idx_users_email ON public.users(email);
 CREATE INDEX IF NOT EXISTS idx_sensors_zone_id ON public.sensors(zone_id);
@@ -163,6 +184,8 @@ CREATE INDEX IF NOT EXISTS idx_alerts_status ON public.alerts(status);
 CREATE INDEX IF NOT EXISTS idx_alerts_risk_level ON public.alerts(risk_level);
 CREATE INDEX IF NOT EXISTS idx_simulations_zone_id ON public.simulations(zone_id);
 CREATE INDEX IF NOT EXISTS idx_simulations_run_at ON public.simulations(run_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lora_transmissions_packet_id ON public.lora_transmissions(packet_id);
+CREATE INDEX IF NOT EXISTS idx_lora_transmissions_created_at ON public.lora_transmissions(created_at DESC);
 
 -- ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE public.custom_areas ENABLE ROW LEVEL SECURITY;
@@ -175,6 +198,7 @@ ALTER TABLE public.simulations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.status_checks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.lora_transmissions ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE

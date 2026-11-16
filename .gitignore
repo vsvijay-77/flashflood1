@@ -75,7 +75,7 @@ Thumbs.db
 desktop.ini
 
 # ─── Deployment ───────────────────────────────────────────────────────────────
-.vercel
+.vercel*
 
 # ─── Frontend Specific ────────────────────────────────────────────────────────
 frontend/node_modules.previous/
@@ -112,3 +112,5 @@ chainlit.md
 .ipynb_checkpoints/
 memory/test_credentials.md
 android-sdk/
+.vercel
+.env*

@@ -8,7 +8,7 @@ logger = logging.getLogger("twilio_service")
 
 # Default credentials provided by operator
 DEFAULT_TWILIO_SID = "AC71d22376b5666a6090b3b584c26efb46"
-DEFAULT_TWILIO_AUTH = "9eb8d42c55994e58d735199466afafe0"
+DEFAULT_TWILIO_AUTH = "ee21ad9ae956f4b2b3ef1aa70c21c230"
 DEFAULT_TWILIO_PHONE = "+15632393112"
 
 
@@ -70,14 +70,63 @@ def normalize_phone_number(raw_phone: str, default_country_code: str = "+91") ->
     return cleaned
 
 
-def build_evacuation_voice_twiml(message_text: Optional[str] = None) -> str:
-    """Build TwiML XML speech payload instructing immediate evacuation."""
+MEMBERS_TO_CALL = [
+    {"name": "Navaneeth", "phone": "+919865013239"},
+    {"name": "Kavin", "phone": "+919965485711"},
+]
+
+MALAYALAM_FLASH_FLOOD_SPEECH = (
+    "അടിയന്തര പ്രളയ മുന്നറിയിപ്പ്! നിങ്ങളുടെ പ്രദേശത്ത് അതിശക്തമായ മിന്നൽ പ്രളയ സാധ്യതയുണ്ട്. "
+    "ദയവായി ഉടൻ തന്നെ ഉയർന്ന സുരക്ഷിത സ്ഥാനങ്ങളിലേക്ക് മാറുക. "
+    "നദീതീരങ്ങളിലും താഴ്ന്ന പ്രദേശങ്ങളിലും നിൽക്കരുത്. ഉടൻ സുരക്ഷിത സ്ഥാനത്തേക്ക് മാറുക!"
+)
+
+MALAYALAM_SMS_ALERT = (
+    "🚨 അടിയന്തര മുന്നറിയിപ്പ്: മിന്നൽ പ്രളയ സാധ്യത (Flash Flood Warning). "
+    "ഉടൻ സുരക്ഷിത സ്ഥാനത്തേക്ക് മാറുക! Seek high ground immediately! - NEXGI Alert"
+)
+
+
+def build_evacuation_voice_twiml(
+    message_text: Optional[str] = None,
+    language: str = "ml",
+) -> str:
+    """Build TwiML XML speech payload instructing immediate evacuation in Malayalam (with English backup)."""
+    lang_lower = (language or "ml").lower()
+
+    if lang_lower in ("ml", "ml-in", "malayalam"):
+        # Malayalam voice synthesis using Amazon Polly Sobhana (ml-IN)
+        speech_ml = (
+            message_text.strip()
+            if message_text and any('\u0D00' <= char <= '\u0D7F' for char in message_text)
+            else MALAYALAM_FLASH_FLOOD_SPEECH
+        )
+        speech_clean = (
+            speech_ml.replace("&", "and")
+            .replace("<", "")
+            .replace(">", "")
+            .replace('"', "")
+            .replace("'", "")
+        )
+        english_clean = "Emergency Warning! Flash flood alert in your area. Evacuate immediately and seek high ground."
+
+        return (
+            f'<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<Response>\n'
+            f'  <Say voice="Polly.Sobhana" language="ml-IN">{speech_clean}</Say>\n'
+            f'  <Pause length="1"/>\n'
+            f'  <Say voice="Polly.Sobhana" language="ml-IN">മുന്നറിയിപ്പ് ആവർത്തിക്കുന്നു: {speech_clean}</Say>\n'
+            f'  <Pause length="1"/>\n'
+            f'  <Say voice="alice" language="en-IN">{english_clean}</Say>\n'
+            f'</Response>'
+        )
+
+    # Standard English fallback
     speech = (
         message_text.strip()
         if message_text
         else "Emergency Warning! Flood in area, evacuate now! Flood in area, evacuate now! Seek high ground immediately and avoid low lying bridges and riverbanks."
     )
-    # Sanitize for XML
     speech_clean = (
         speech.replace("&", "and")
         .replace("<", "")
@@ -86,12 +135,12 @@ def build_evacuation_voice_twiml(message_text: Optional[str] = None) -> str:
         .replace("'", "")
     )
     return (
-        f'<?xml version="1.0" encoding="UTF-8"?>'
-        f"<Response>"
-        f'<Say voice="alice" language="en-US">{speech_clean}</Say>'
-        f'<Pause length="1"/>'
-        f'<Say voice="alice" language="en-US">Repeat: {speech_clean}</Say>'
-        f"</Response>"
+        f'<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<Response>\n'
+        f'  <Say voice="alice" language="en-US">{speech_clean}</Say>\n'
+        f'  <Pause length="1"/>\n'
+        f'  <Say voice="alice" language="en-US">Repeat: {speech_clean}</Say>\n'
+        f'</Response>'
     )
 
 
@@ -128,8 +177,12 @@ async def send_sms(to_phone: str, message: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e), "recipient": normalized_to}
 
 
-async def make_voice_call(to_phone: str, speech_text: Optional[str] = None) -> Dict[str, Any]:
-    """Place an outbound emergency voice call via Twilio that speaks the evacuation notice."""
+async def make_voice_call(
+    to_phone: str,
+    speech_text: Optional[str] = None,
+    language: str = "ml",
+) -> Dict[str, Any]:
+    """Place an outbound emergency voice call via Twilio that speaks the evacuation notice in Malayalam."""
     normalized_to = normalize_phone_number(to_phone)
     if not normalized_to:
         return {"success": False, "error": "Invalid or missing recipient phone number"}
@@ -139,7 +192,7 @@ async def make_voice_call(to_phone: str, speech_text: Optional[str] = None) -> D
     if not client:
         return {"success": False, "error": "Twilio client could not be initialized"}
 
-    twiml = build_evacuation_voice_twiml(speech_text)
+    twiml = build_evacuation_voice_twiml(speech_text, language=language)
 
     def _sync_call():
         return client.calls.create(
@@ -150,17 +203,44 @@ async def make_voice_call(to_phone: str, speech_text: Optional[str] = None) -> D
 
     try:
         call = await asyncio.to_thread(_sync_call)
-        logger.info(f"[Twilio Voice Call] Initiated to {normalized_to} - SID: {call.sid} Status: {call.status}")
+        logger.info(f"[Twilio Voice Call] Initiated to {normalized_to} (lang: {language}) - SID: {call.sid} Status: {call.status}")
         return {
             "success": True,
             "sid": call.sid,
             "status": call.status,
             "recipient": normalized_to,
+            "language": language,
             "from": creds["phone_number"],
         }
     except Exception as e:
         logger.error(f"[Twilio Voice Call] Error calling {normalized_to}: {e}")
         return {"success": False, "error": str(e), "recipient": normalized_to}
+
+
+async def call_navaneeth_and_kavin(
+    speech_text: Optional[str] = None,
+    send_sms_backup: bool = True,
+) -> Dict[str, Any]:
+    """Call Navaneeth (9865013239) and Kavin (9965485711) with Malayalam flash flood warning."""
+    results = []
+    for member in MEMBERS_TO_CALL:
+        phone = member["phone"]
+        name = member["name"]
+        call_res = await make_voice_call(phone, speech_text=speech_text, language="ml")
+        sms_res = None
+        if send_sms_backup:
+            sms_res = await send_sms(phone, MALAYALAM_SMS_ALERT)
+        results.append({
+            "name": name,
+            "phone": phone,
+            "call": call_res,
+            "sms": sms_res,
+        })
+    return {
+        "status": "completed",
+        "message": "Malayalam flash flood voice alert dispatched to Navaneeth & Kavin",
+        "results": results,
+    }
 
 
 async def dispatch_telephony_alert(
@@ -169,8 +249,9 @@ async def dispatch_telephony_alert(
     title: str = "Flood in area evacuate now",
     detail: Optional[str] = None,
     hazard_type: str = "Flood",
+    language: str = "ml",
 ) -> Dict[str, Any]:
-    """Dispatch SMS and/or Voice Call according to selected channels."""
+    """Dispatch SMS and/or Voice Call according to selected channels in Malayalam."""
     normalized = normalize_phone_number(phone_number)
     results: Dict[str, Any] = {"phone": normalized, "channels": channels, "actions": {}}
 
@@ -195,7 +276,7 @@ async def dispatch_telephony_alert(
 
     # 2. Voice Call
     if "call" in channels_lower or "voice" in channels_lower or "ivr" in channels_lower:
-        call_res = await make_voice_call(normalized, voice_speech)
+        call_res = await make_voice_call(normalized, voice_speech, language=language)
         results["actions"]["call"] = call_res
 
     return results

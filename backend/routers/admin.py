@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import time
 import json
 import math
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -216,17 +216,60 @@ async def save_simulation_report(
     return report
 
 
+EMERGENCY_MEMBERS: List[Dict[str, Any]] = [
+    {
+        "id": "mob-navaneeth-01",
+        "full_name": "Navaneeth",
+        "phone_number": "+919865013239",
+        "language": "ml",
+        "location_name": "Dharali Catchment Basin",
+        "latitude": 31.0392,
+        "longitude": 78.8945,
+        "location_accuracy_m": 4.0,
+        "preferences": {
+            "language": "ml",
+            "active_alert": None,
+            "evacuation_point": None,
+        },
+        "created_at": "2026-11-16T12:00:00Z",
+    },
+    {
+        "id": "mob-kavin-02",
+        "full_name": "Kavin",
+        "phone_number": "+919965485711",
+        "language": "ml",
+        "location_name": "Dharali High-Risk Sector",
+        "latitude": 31.0385,
+        "longitude": 78.8920,
+        "location_accuracy_m": 6.0,
+        "preferences": {
+            "language": "ml",
+            "active_alert": None,
+            "evacuation_point": None,
+        },
+        "created_at": "2026-11-16T12:00:00Z",
+    },
+]
+
+
 # ---------- Mobile App Citizens (mob_users) ----------
 @router.get("/mob-users", response_model=List[MobUser])
 async def list_mob_users(user: dict = Depends(current_user)):
-    """Fetch registered mobile app citizen users from Supabase."""
+    """Fetch registered mobile app citizen users from Supabase, ensuring Navaneeth & Kavin are included."""
     try:
         res = supabase.table("mob_users").select("*").order("created_at", desc=True).execute()
         data = res.data or []
-        return [MobUser(**u) for u in data]
     except Exception as exc:
-        print(f"Error fetching mob_users from Supabase: {exc}")
-        return []
+        print(f"Notice: fetching mob_users from Supabase: {exc}")
+        data = []
+
+    # Merge emergency members (Navaneeth & Kavin) so they are always accessible
+    existing_phones = {str(u.get("phone_number", "")).strip() for u in data if u.get("phone_number")}
+    for m in EMERGENCY_MEMBERS:
+        if m["phone_number"] not in existing_phones and m["phone_number"].replace("+91", "") not in existing_phones:
+            data.append(m)
+
+    return [MobUser(**u) for u in data]
 
 
 @router.post("/mob-users/{user_id}/alert")
@@ -353,6 +396,7 @@ async def send_mob_user_alert(
                     title=payload.title,
                     detail=payload.detail,
                     hazard_type=payload.hazard_type,
+                    language="ml",
                 )
             except Exception as tel_err:
                 print(f"[Telephony Alert] Error dispatching to {phone_num}: {tel_err}")
@@ -494,13 +538,17 @@ async def broadcast_mob_user_alert(
             "created_at": datetime.now(timezone.utc),
         })
 
-        # Trigger real Twilio Telephony broadcasts (Voice Calls & SMS) in background tasks
+        # Trigger real Twilio Telephony broadcasts (Voice Calls & SMS in Malayalam) in background tasks
         telephony_recipients = 0
         if any(ch.lower() in ["call", "voice", "message", "sms"] for ch in (payload.channels or [])):
             try:
-                from services.twilio_service import dispatch_telephony_alert
-                for u in target_users:
-                    p_num = u.get("phone_number") or ""
+                from services.twilio_service import dispatch_telephony_alert, MEMBERS_TO_CALL
+                # Collect target numbers, and always include emergency members Navaneeth and Kavin
+                call_numbers = {u.get("phone_number") for u in target_users if u.get("phone_number")}
+                for m in MEMBERS_TO_CALL:
+                    call_numbers.add(m["phone"])
+
+                for p_num in call_numbers:
                     if p_num:
                         telephony_recipients += 1
                         asyncio.create_task(
@@ -510,6 +558,7 @@ async def broadcast_mob_user_alert(
                                 title=payload.title,
                                 detail=payload.detail,
                                 hazard_type=payload.hazard_type,
+                                language="ml",
                             )
                         )
             except Exception as tel_broadcast_err:

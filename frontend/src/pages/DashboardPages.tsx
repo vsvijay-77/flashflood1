@@ -28,6 +28,7 @@ import { AccelerometerGraph } from "@/components/dashboard/AccelerometerGraph";
 
 import { BatteryAndAlerts } from "@/components/dashboard/BatteryAndAlerts";
 import { SensorManagementSection } from "@/components/dashboard/SensorManagementSection";
+import { DHARALI_AREA, DHARALI_ONLY } from "@/lib/dharaliArea";
 
 const AXIS = { stroke: "#94A3B8", fontSize: 11 };
 
@@ -483,8 +484,9 @@ export function GISMonitoringPage() {
     localStorage.setItem("gis_layers_state", JSON.stringify(layers));
   }, [layers]);
 
-  const [selectedArea, setSelectedArea] = useState<CustomArea | null>(null);
-  const [focusedArea, setFocusedArea] = useState<CustomArea | null>(null);
+  // ─── Dharali-only: always select Dharali, never load other areas ───────────
+  const [selectedArea, setSelectedArea] = useState<CustomArea | null>(DHARALI_AREA);
+  const [focusedArea, setFocusedArea] = useState<CustomArea | null>(DHARALI_AREA);
   const navigate = useNavigate();
   const [creatingTwin, setCreatingTwin] = useState(false);
 
@@ -538,139 +540,10 @@ export function GISMonitoringPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [currentLatlngs, setCurrentLatlngs] = useState<L.LatLng[]>([]);
   const [currentCalculatedArea, setCurrentCalculatedArea] = useState<number>(0);
-  const [loadingAreas, setLoadingAreas] = useState<boolean>(() => {
-    try {
-      return !localStorage.getItem("cached_custom_areas");
-    } catch {
-      return true;
-    }
-  });
-  const [customAreas, setCustomAreas] = useState<CustomArea[]>(() => {
-    try {
-      const cached = localStorage.getItem("cached_custom_areas");
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          return parsed.map((d: any) => ({
-            ...d,
-            bounds: d.polygon && d.polygon.length >= 3 ? L.latLngBounds(d.polygon) : undefined,
-          }));
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to parse cached custom areas", e);
-    }
-    return [];
-  });
+  // Dharali is always loaded — no async fetch needed
+  const loadingAreas = false;
+  const customAreas: CustomArea[] = DHARALI_ONLY;
 
-  useEffect(() => {
-    if (customAreas.length > 0 && !selectedArea) {
-      setSelectedArea(customAreas[0]);
-    }
-  }, [customAreas, selectedArea]);
-
-  useEffect(() => {
-    const loadAreas = async () => {
-      try {
-        const res = await fetch("/api/areas");
-        if (res.ok) {
-          const apiData = await res.json();
-          if (Array.isArray(apiData) && apiData.length > 0) {
-            const loaded: CustomArea[] = apiData.map((d: any) => {
-              const shapeType = d.shape && d.shape.includes(":") ? d.shape.split(":")[0] : "Polygon";
-              const polygonCoords = parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng));
-              const areaSq = calculatePolygonAreaSqMeters(polygonCoords);
-              const bounds = polygonCoords.length >= 3 ? L.latLngBounds(polygonCoords) : undefined;
-              return {
-                id: d.id,
-                name: d.name,
-                district: d.district,
-                type: d.area_type || "Forest",
-                risk: d.risk_category || "Medium",
-                priority: d.priority || "Normal",
-                description: d.description || "",
-                bounds,
-                date: new Date(d.created_at).toLocaleDateString(),
-                lat: Number(d.lat),
-                lng: Number(d.lng),
-                shape: shapeType,
-                polygon: polygonCoords,
-                areaSqMeters: areaSq,
-                user_id: d.user_id,
-              };
-            });
-            setCustomAreas(loaded);
-            setLoadingAreas(false);
-            try {
-              const lightweight = loaded.map(({ id, name, priority, lat, lng, shape, polygon }) => ({
-                id, name, priority, lat, lng, shape, polygon,
-              }));
-              localStorage.setItem("cached_custom_areas", JSON.stringify(lightweight));
-            } catch {}
-            return;
-          }
-        }
-      } catch {
-        // API unavailable, try Supabase
-      }
-
-      // Fallback: Supabase
-      supabase
-        .from("custom_areas")
-        .select("*")
-        .then(({ data }) => {
-          setLoadingAreas(false);
-          if (data) {
-            const loaded: CustomArea[] = data.map((d: any) => {
-              const shapeType = d.shape && d.shape.includes(":") ? d.shape.split(":")[0] : "Polygon";
-              const polygonCoords = parseCustomAreaPolygon(d.shape, Number(d.lat), Number(d.lng));
-              const areaSq = calculatePolygonAreaSqMeters(polygonCoords);
-              const bounds = polygonCoords.length >= 3 ? L.latLngBounds(polygonCoords) : undefined;
-
-              return {
-                id: d.id,
-                name: d.name,
-                district: d.district,
-                type: d.area_type || "Forest",
-                risk: d.risk_category || "Medium",
-                priority: d.priority || "Normal",
-                description: d.description || "",
-                bounds: bounds,
-                date: new Date(d.created_at).toLocaleDateString(),
-                lat: Number(d.lat),
-                lng: Number(d.lng),
-                shape: shapeType,
-                polygon: polygonCoords,
-                areaSqMeters: areaSq,
-                user_id: d.user_id,
-              };
-            });
-
-            setCustomAreas(loaded);
-            try {
-              const lightweight = loaded.map(({ id, name, priority, lat, lng, shape, polygon }) => ({
-                id, name, priority, lat, lng, shape, polygon,
-              }));
-              localStorage.setItem("cached_custom_areas", JSON.stringify(lightweight));
-            } catch {
-              try {
-                for (let i = localStorage.length - 1; i >= 0; i--) {
-                  const k = localStorage.key(i);
-                  if (k && (k.startsWith("dt_") || k.startsWith("EIN_") || k.startsWith("cached_"))) {
-                    localStorage.removeItem(k);
-                  }
-                }
-              } catch {}
-            }
-          }
-        },
-        () => {
-          setLoadingAreas(false);
-        });
-    };
-
-    loadAreas();
-  }, []);
 
   const handleAreaSelected = (latlngs: L.LatLng[], calculatedAreaSqMeters: number) => {
     setCurrentLatlngs(latlngs);
@@ -776,7 +649,7 @@ export function GISMonitoringPage() {
               onToggleDrawMode={(v) => setDrawMode(v)}
               onAreaSelected={handleAreaSelected}
               onAreaCreated={(newArea) => {
-                setCustomAreas((prev) => [newArea, ...prev]);
+                // Dharali-only mode: ignore newly drawn areas
                 setSelectedArea(newArea);
                 setFocusedArea(newArea);
               }}
@@ -850,10 +723,8 @@ export function GISMonitoringPage() {
                     setDeleteLoading(false);
                     return;
                   }
-                  const filtered = customAreas.filter((a) => a.id !== deleteTarget.id);
-                  setCustomAreas(filtered);
                   if (selectedArea?.id === deleteTarget.id) {
-                    setSelectedArea(filtered[0] || null);
+                    setSelectedArea(DHARALI_AREA);
                     setFocusedArea(null);
                   }
                   setDeleteTarget(null);

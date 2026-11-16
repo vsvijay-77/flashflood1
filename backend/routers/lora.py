@@ -96,3 +96,37 @@ async def ingest_lora_packet(payload: LoRaPacketIn):
     except Exception as exc:
         logger.error(f"Error saving lora packet: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.delete("/transmissions/past-100")
+@router.post("/transmissions/delete-past")
+async def delete_past_lora_transmissions(
+    count: int = Query(default=100, ge=1, le=500, description="Number of past records to delete"),
+    mode: str = Query(default="oldest", description="'oldest' to prune historical buffer, 'latest' for recent"),
+):
+    """Delete past N transmission records from the Supabase database."""
+    try:
+        desc_order = (mode.lower() == "latest")
+        fetch_res = (
+            supabase.table("lora_transmissions")
+            .select("id")
+            .order("created_at", desc=desc_order)
+            .limit(count)
+            .execute()
+        )
+        data = fetch_res.data or []
+        if not data:
+            return {"status": "ok", "deleted_count": 0, "message": "No records found in database to delete."}
+
+        ids_to_delete = [r["id"] for r in data]
+        supabase.table("lora_transmissions").delete().in_("id", ids_to_delete).execute()
+
+        logger.info(f"Deleted {len(ids_to_delete)} past lora_transmissions records (mode: {mode})")
+        return {
+            "status": "ok",
+            "deleted_count": len(ids_to_delete),
+            "message": f"Successfully deleted {len(ids_to_delete)} past transmission records from database.",
+        }
+    except Exception as exc:
+        logger.error(f"Error deleting past transmissions: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))

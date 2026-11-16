@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+import { toast } from "sonner";
 import {
   CloudRain,
   Waves,
@@ -12,14 +13,16 @@ import {
   Activity,
   ShieldCheck,
   ShieldAlert,
-  ArrowUpRight,
   RefreshCw,
   Clock,
   Layers,
-  Zap,
+  Trash2,
+  AlertTriangle,
+  X,
+  Check,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export interface LoRaTransmissionRecord {
@@ -43,10 +46,13 @@ export interface LoRaTransmissionRecord {
 }
 
 export function LiveLoRaTelemetrySection() {
+  const queryClient = useQueryClient();
   const [pulseCount, setPulseCount] = useState(0);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Poll every 1 second (1000ms) from Supabase table `lora_transmissions`
-  const { data: transmissions = [], dataUpdatedAt, isFetching } = useQuery<LoRaTransmissionRecord[]>({
+  const { data: transmissions = [], isFetching } = useQuery<LoRaTransmissionRecord[]>({
     queryKey: ["lora-transmissions-live-1s"],
     queryFn: async () => {
       // 1. Try fetching directly from Supabase
@@ -76,6 +82,21 @@ export function LiveLoRaTelemetrySection() {
     staleTime: 500,
   });
 
+  // Total count in database
+  const { data: totalDbCount = 0 } = useQuery<number>({
+    queryKey: ["lora-total-db-count"],
+    queryFn: async () => {
+      try {
+        const { count, error } = await supabase
+          .from("lora_transmissions")
+          .select("*", { count: "exact", head: true });
+        if (!error && count != null) return count;
+      } catch {}
+      return transmissions.length;
+    },
+    refetchInterval: 3000,
+  });
+
   // Supabase Realtime channel for sub-second push updates
   useEffect(() => {
     try {
@@ -84,7 +105,7 @@ export function LiveLoRaTelemetrySection() {
         .on(
           "postgres_changes",
           { event: "INSERT", schema: "public", table: "lora_transmissions" },
-          (payload) => {
+          () => {
             setPulseCount((c) => c + 1);
           }
         )
@@ -105,9 +126,128 @@ export function LiveLoRaTelemetrySection() {
     ? new Date(latest.created_at).toLocaleTimeString()
     : "Syncing...";
 
+  // Handler to delete past 100 records from Supabase
+  const handleDeletePast100 = async (mode: "oldest" | "latest" = "oldest") => {
+    setIsDeleting(true);
+    try {
+      let deletedCount = 0;
+
+      // 1. Try via backend endpoint
+      try {
+        const res = await apiPost<{ deleted_count?: number }>(
+          `/lora/transmissions/delete-past?count=100&mode=${mode}`,
+          {}
+        );
+        deletedCount = res?.deleted_count ?? 0;
+      } catch {
+        // 2. Fallback direct client Supabase deletion
+        const { data: records, error: fetchErr } = await supabase
+          .from("lora_transmissions")
+          .select("id")
+          .order("created_at", { ascending: mode === "oldest" })
+          .limit(100);
+
+        if (!fetchErr && records && records.length > 0) {
+          const ids = records.map((r: any) => r.id);
+          const { error: delErr } = await supabase
+            .from("lora_transmissions")
+            .delete()
+            .in("id", ids);
+
+          if (!delErr) {
+            deletedCount = ids.length;
+          }
+        }
+      }
+
+      toast.success(
+        deletedCount > 0
+          ? `Deleted past ${deletedCount} records from Supabase database!`
+          : "Database table is clean (no records to delete)."
+      );
+
+      // Instantly refresh all live queries
+      queryClient.invalidateQueries({ queryKey: ["lora-transmissions-live-1s"] });
+      queryClient.invalidateQueries({ queryKey: ["lora-total-db-count"] });
+      queryClient.invalidateQueries({ queryKey: ["lora-live-sensor-data-1s"] });
+      queryClient.invalidateQueries({ queryKey: ["lora-accel-history-1s"] });
+      setShowDeleteModal(false);
+    } catch (err: any) {
+      toast.error(`Failed to delete data: ${err?.message || "Unknown error"}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-5" data-testid="live-lora-telemetry-section">
-      {/* Header with Live 1s Badge */}
+      {/* Confirmation Modal for Deleting Past 100 Data */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="bg-rose-50 border-b border-rose-100 p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-rose-100 text-rose-700 rounded-lg">
+                  <AlertTriangle className="size-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-rose-950">Confirm Database Record Deletion</h4>
+                  <p className="text-[11px] text-rose-700">Database table: public.lora_transmissions</p>
+                </div>
+              </div>
+              <button
+                onClick={() => !isDeleting && setShowDeleteModal(false)}
+                className="text-slate-400 hover:text-slate-700 p-1"
+                disabled={isDeleting}
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <p className="text-xs text-slate-600 leading-relaxed">
+                This will delete up to <strong>100 past records</strong> from your database.
+                Current database count: <strong>{totalDbCount} records</strong>.
+              </p>
+
+              <div className="space-y-2 pt-1">
+                <Button
+                  variant="destructive"
+                  className="w-full text-xs font-bold justify-center h-9 cursor-pointer"
+                  disabled={isDeleting}
+                  onClick={() => handleDeletePast100("oldest")}
+                  data-testid="confirm-delete-oldest-100-btn"
+                >
+                  <Trash2 className="size-3.5 mr-2" />
+                  {isDeleting ? "Deleting..." : "Delete Oldest 100 Records (Recommended)"}
+                </Button>
+
+                <Button
+                  variant="outline"
+                  className="w-full text-xs text-rose-700 border-rose-200 hover:bg-rose-50 justify-center h-9 cursor-pointer"
+                  disabled={isDeleting}
+                  onClick={() => handleDeletePast100("latest")}
+                  data-testid="confirm-delete-latest-100-btn"
+                >
+                  <Trash2 className="size-3.5 mr-2" />
+                  {isDeleting ? "Deleting..." : "Delete Most Recent 100 Records"}
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  className="w-full text-xs text-slate-500 h-8 cursor-pointer"
+                  disabled={isDeleting}
+                  onClick={() => setShowDeleteModal(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header with Live 1s Badge and Delete Past 100 Action */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-slate-900 via-[#0B2545] to-slate-900 border border-slate-800 rounded-xl p-4 text-white shadow-md">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -141,9 +281,21 @@ export function LiveLoRaTelemetrySection() {
           </div>
           <div className="bg-white/10 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-1.5">
             <Layers className="size-3.5 text-sky-300" />
-            <span className="text-slate-300">Records:</span>
-            <strong className="text-sky-300">{transmissions.length}</strong>
+            <span className="text-slate-300">Total in DB:</span>
+            <strong className="text-sky-300">{totalDbCount}</strong>
           </div>
+
+          {/* Delete Past 100 Data Button in Header */}
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => setShowDeleteModal(true)}
+            data-testid="header-delete-past-100-btn"
+            className="h-8 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs cursor-pointer px-3"
+          >
+            <Trash2 className="size-3.5 mr-1" />
+            Delete Past 100 Data
+          </Button>
         </div>
       </div>
 
@@ -319,10 +471,10 @@ export function LiveLoRaTelemetrySection() {
         </Card>
       </div>
 
-      {/* Live LoRa Transmission History Table */}
+      {/* Live LoRa Transmission History Table with Delete Past 100 Action */}
       <Card className="border-slate-200 shadow-sm overflow-hidden" data-testid="lora-transmissions-table-card">
         <CardHeader className="bg-slate-50/80 px-4 py-3 border-b border-slate-200">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Layers className="size-4 text-slate-600" />
@@ -332,10 +484,22 @@ export function LiveLoRaTelemetrySection() {
                 Incoming sensor packets recorded by Raspberry Pi 5 receiver with real-time updates every 1s.
               </p>
             </div>
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1 rounded bg-slate-200 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-700">
                 Auto-refresh: 1s
               </span>
+
+              {/* Delete Past 100 Button */}
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setShowDeleteModal(true)}
+                data-testid="table-delete-past-100-btn"
+                className="h-7 text-xs border-rose-300 text-rose-700 hover:bg-rose-50 cursor-pointer font-semibold"
+              >
+                <Trash2 className="size-3 mr-1 text-rose-600" />
+                Delete Past 100 Data
+              </Button>
             </div>
           </div>
         </CardHeader>

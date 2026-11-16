@@ -21,14 +21,9 @@ import { HAZARD_LABELS, SENSOR_LABELS, type Alert, type NetworkStats, type Senso
 // New Dashboard Components
 import { SystemStatusHeader } from "@/components/dashboard/SystemStatusHeader";
 import { NetworkOverviewKPIs } from "@/components/dashboard/NetworkOverviewKPIs";
-
-import { LiveSensorMonitoring } from "@/components/dashboard/LiveSensorMonitoring";
 import { AccelerometerGraph } from "@/components/dashboard/AccelerometerGraph";
 import { LiveLoRaTelemetrySection } from "@/components/dashboard/LiveLoRaTelemetrySection";
-
-
 import { BatteryAndAlerts } from "@/components/dashboard/BatteryAndAlerts";
-import { SensorManagementSection } from "@/components/dashboard/SensorManagementSection";
 import { DHARALI_AREA, DHARALI_ONLY } from "@/lib/dharaliArea";
 
 const AXIS = { stroke: "#94A3B8", fontSize: 11 };
@@ -134,16 +129,10 @@ export function DashboardPage() {
         <LiveLoRaTelemetrySection />
 
         <hr className="border-slate-200" />
-        <LiveSensorMonitoring />
-        
-        <hr className="border-slate-200" />
         <AccelerometerGraph />
         
         <hr className="border-slate-200" />
         <BatteryAndAlerts />
-
-        <hr className="border-slate-200" />
-        <SensorManagementSection />
       </div>
     </div>
   );

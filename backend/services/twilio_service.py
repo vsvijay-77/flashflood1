@@ -8,7 +8,7 @@ logger = logging.getLogger("twilio_service")
 
 # Default credentials provided by operator
 DEFAULT_TWILIO_SID = "AC71d22376b5666a6090b3b584c26efb46"
-DEFAULT_TWILIO_AUTH = "ee21ad9ae956f4b2b3ef1aa70c21c230"
+DEFAULT_TWILIO_AUTH = "cc9c939cbe782bf56ccb2fc7ddc1fe02"
 DEFAULT_TWILIO_PHONE = "+15632393112"
 
 
@@ -87,37 +87,27 @@ MALAYALAM_SMS_ALERT = (
 )
 
 
+MALAYALAM_ALERT_AUDIO_URL = "https://xmtuwcywlfdoarwzkmod.supabase.co/storage/v1/object/public/alerts/alert_malayalam.mp3"
+
+
 def build_evacuation_voice_twiml(
     message_text: Optional[str] = None,
     language: str = "ml",
 ) -> str:
-    """Build TwiML XML speech payload instructing immediate evacuation in Malayalam (with English backup)."""
+    """Build TwiML XML speech payload instructing immediate evacuation in Malayalam (via high-fidelity audio) and English."""
     lang_lower = (language or "ml").lower()
 
     if lang_lower in ("ml", "ml-in", "malayalam"):
-        # Malayalam voice synthesis using Amazon Polly Sobhana (ml-IN)
-        speech_ml = (
-            message_text.strip()
-            if message_text and any('\u0D00' <= char <= '\u0D7F' for char in message_text)
-            else MALAYALAM_FLASH_FLOOD_SPEECH
-        )
-        speech_clean = (
-            speech_ml.replace("&", "and")
-            .replace("<", "")
-            .replace(">", "")
-            .replace('"', "")
-            .replace("'", "")
-        )
-        english_clean = "Emergency Warning! Flash flood alert in your area. Evacuate immediately and seek high ground."
-
+        # Real native Malayalam audio stream + clear English instructions
+        english_clean = "Emergency Warning! Flash flood alert in your area. Evacuate immediately to high ground."
         return (
             f'<?xml version="1.0" encoding="UTF-8"?>\n'
             f'<Response>\n'
-            f'  <Say voice="Polly.Sobhana" language="ml-IN">{speech_clean}</Say>\n'
-            f'  <Pause length="1"/>\n'
-            f'  <Say voice="Polly.Sobhana" language="ml-IN">മുന്നറിയിപ്പ് ആവർത്തിക്കുന്നു: {speech_clean}</Say>\n'
+            f'  <Play>{MALAYALAM_ALERT_AUDIO_URL}</Play>\n'
             f'  <Pause length="1"/>\n'
             f'  <Say voice="alice" language="en-IN">{english_clean}</Say>\n'
+            f'  <Pause length="1"/>\n'
+            f'  <Play>{MALAYALAM_ALERT_AUDIO_URL}</Play>\n'
             f'</Response>'
         )
 
